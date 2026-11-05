@@ -1,0 +1,86 @@
+{
+  "all_ok": true,
+  "cases": [
+    {
+      "name": "crash_before_commit",
+      "ok": true,
+      "reasons": [],
+      "exit_code": -6,
+      "seconds": 5.56,
+      "db_rev": 98,
+      "integrity": "ok",
+      "snapshots": 9,
+      "last_snapshot_rev": 110,
+      "text_chars": 412,
+      "extra": {},
+      "stderr_tail": [
+        "folia: injected crash at before-commit after 8 save commits"
+      ]
+    },
+    {
+      "name": "crash_after_commit",
+      "ok": true,
+      "reasons": [],
+      "exit_code": -6,
+      "seconds": 4.55,
+      "db_rev": 98,
+      "integrity": "ok",
+      "snapshots": 8,
+      "last_snapshot_rev": 98,
+      "text_chars": 412,
+      "extra": {},
+      "stderr_tail": [
+        "folia: injected crash at after-commit after 8 save commits"
+      ]
+    },
+    {
+      "name": "sigkill_mid_typing",
+      "ok": true,
+      "reasons": [],
+      "exit_code": -9,
+      "seconds": 5.03,
+      "db_rev": 146,
+      "integrity": "ok",
+      "snapshots": 12,
+      "last_snapshot_rev": 146,
+      "text_chars": 460,
+      "extra": {},
+      "stderr_tail": []
+    },
+    {
+      "name": "normal_close_flushes",
+      "ok": true,
+      "reasons": [],
+      "exit_code": 0,
+      "seconds": 5.19,
+      "db_rev": 246,
+      "integrity": "ok",
+      "snapshots": 1,
+      "last_snapshot_rev": 246,
+      "text_chars": 554,
+      "extra": {},
+      "stderr_tail": []
+    },
+    {
+      "name": "disk_full_then_space",
+      "ok": true,
+      "reasons": [],
+      "exit_code": 0,
+      "seconds": 9.73,
+      "db_rev": 170,
+      "integrity": "ok",
+      "snapshots": 15,
+      "last_snapshot_rev": 170,
+      "text_chars": 484,
+      "extra": {
+        "disk_full_status_text": "Disk full — your edits are kept in memory and will be saved when space is available",
+        "disk_full_surfaced": true,
+        "editor_text_kept": true,
+        "final_rev": 170,
+        "injected_failures": 4,
+        "recovered_after_space_freed": true
+      },
+      "stderr_tail": []
+    }
+  ]
+}

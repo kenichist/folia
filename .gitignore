@@ -1,0 +1,6 @@
+# Build outputs
+/build/
+/build-*/
+/dist/
+# macOS
+.DS_Store

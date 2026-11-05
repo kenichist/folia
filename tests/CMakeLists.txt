@@ -1,0 +1,13 @@
+# Integrator-owned. Module owners add tests under tests/<module>/CMakeLists.txt.
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/code/CMakeLists.txt)
+  add_subdirectory(code)
+endif()
+if(FOLIA_WITH_MATH AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/math/CMakeLists.txt)
+  add_subdirectory(math)
+endif()
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/core/CMakeLists.txt)
+  add_subdirectory(core)
+endif()
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/shell/CMakeLists.txt)
+  add_subdirectory(shell)
+endif()

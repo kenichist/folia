@@ -1,0 +1,166 @@
+{
+    "counters": {
+        "block_height_estimates": 268,
+        "blocks_laid_out": 12,
+        "bytes_copied_for_save": 0,
+        "doc_cache_bytes": 162968,
+        "doc_cache_entries": 1,
+        "highlight_lines": 1,
+        "highlight_state_steps": 0,
+        "lua_errors": 0,
+        "lua_invocations": 4,
+        "lua_renders": 2,
+        "paint_events": 10,
+        "preview_cache_bytes": 0,
+        "preview_cache_hits": 0,
+        "preview_cancelled": 0,
+        "preview_outstanding": 0,
+        "preview_renders": 0,
+        "preview_requests": 0,
+        "preview_stale_drops": 0,
+        "save_snapshot_full_walks": 0,
+        "save_snapshots": 0,
+        "widgets_created": 19,
+        "widgets_reused": 19
+    },
+    "editable": true,
+    "env": {
+        "arch": "arm64",
+        "args": {
+            "manifest": "<scratch>/rerun6/fixture/manifest.json",
+            "start_page": "2"
+        },
+        "device_pixel_ratio": 2,
+        "fixture_hash": "fnv1a64:f5ecfb8eecd9058b",
+        "fixture_seed": 42,
+        "folia": "0.1.0",
+        "input_path": "synthetic Qt events via QApplication::sendEvent (bypasses the OS HID/IME path)",
+        "kernel": "25.6.0",
+        "math_renderer": true,
+        "os": "macOS 26.6.2",
+        "os_file_cache": "not purged (warm after first touch); purging needs root",
+        "power_mode": "normal-power-mode",
+        "preset": "Default",
+        "qt": "6.12.0",
+        "thermal_state": "nominal",
+        "time": "2026-11-05T10:43:36",
+        "window_size": "1180x765"
+    },
+    "exec_to_main_ms": 22.975,
+    "metrics": {
+        "editor_paint_us": {
+            "samples": [
+                25,
+                34414,
+                4188,
+                4007,
+                9902,
+                7056,
+                5046,
+                4396,
+                5885,
+                4175,
+                3788
+            ],
+            "unit": "us"
+        },
+        "footprint_after_launch_bytes": {
+            "proxy": "task_vm_info.phys_footprint",
+            "samples": [
+                80465088
+            ],
+            "unit": "bytes"
+        },
+        "launch_main_to_editable_ms": {
+            "proxy": "main() entry to end of the first editor paint of the start page",
+            "samples": [
+                355.776875
+            ],
+            "unit": "ms"
+        },
+        "launch_process_to_editable_ms": {
+            "proxy": "kernel process start (sysctl KERN_PROC p_starttime) to end of the first editor paint of the start page",
+            "samples": [
+                378.72
+            ],
+            "unit": "ms"
+        },
+        "open_to_paint_us": {
+            "samples": [
+                121849
+            ],
+            "unit": "us"
+        },
+        "open_uncached_activate_us": {
+            "samples": [
+                78925
+            ],
+            "unit": "us"
+        },
+        "session_build_us": {
+            "samples": [
+                6624
+            ],
+            "unit": "us"
+        },
+        "shell_load_us": {
+            "samples": [
+                18349
+            ],
+            "unit": "us"
+        },
+        "shell_reconcile_us": {
+            "samples": [
+                17917,
+                2353
+            ],
+            "unit": "us"
+        },
+        "shell_render_us": {
+            "samples": [
+                2422
+            ],
+            "unit": "us"
+        },
+        "tree_expand_main_us": {
+            "samples": [
+                11,
+                54
+            ],
+            "unit": "us"
+        },
+        "tree_expand_request_us": {
+            "samples": [
+                26
+            ],
+            "unit": "us"
+        },
+        "tree_expand_total_us": {
+            "samples": [
+                48855,
+                8381
+            ],
+            "unit": "us"
+        }
+    },
+    "notes": [
+    ],
+    "process": {
+        "doc_cache_bytes_est": 203928,
+        "doc_cache_entries": 1,
+        "footprint_bytes": 80481472,
+        "footprint_counter": "task_vm_info.phys_footprint",
+        "idle_wakeups": 1,
+        "interrupt_wakeups": 66,
+        "laid_out_blocks": 11,
+        "lua_bytes": 59392,
+        "peak_footprint_bytes": 80809152,
+        "preview_cache_bytes": 0,
+        "resident_bytes": 144392192,
+        "system_s": 0.06081808333333333,
+        "user_s": 0.33345479166666664
+    },
+    "scenario": "launch",
+    "start_page": 2,
+    "window_exposed_and_active_ratio": 0
+}

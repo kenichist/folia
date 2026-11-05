@@ -1,0 +1,967 @@
+#include "app/AppController.h"
+
+#include "app/Platform.h"
+#include "core/Instrument.h"
+#include "editor/EditorContext.h"
+#include "editor/EditorPane.h"
+#include "editor/NoteEditor.h"
+#include "editor/PageSession.h"
+#include "editor/PreviewService.h"
+#include "editor/VirtualLayout.h"
+#include "shell/CommandRegistry.h"
+#include "shell/DataContext.h"
+#include "shell/ShellHost.h"
+#include "storage/Store.h"
+
+#include <QAction>
+#include <QApplication>
+#include <QCloseEvent>
+#include <QDesktopServices>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QLineEdit>
+#include <QMainWindow>
+#include <QMenuBar>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QStandardPaths>
+#include <QTextBlock>
+#include <QTextDocument>
+#include <QUrl>
+
+namespace folia {
+
+namespace {
+
+class MainWindow : public QMainWindow {
+public:
+    std::function<bool()> canClose;
+
+protected:
+    void closeEvent(QCloseEvent *e) override
+    {
+        if (canClose && !canClose()) {
+            e->ignore();
+            return;
+        }
+        e->accept();
+    }
+};
+
+ArgSpec arg(const char *name, QMetaType::Type t, bool required = false)
+{
+    return ArgSpec{QString::fromLatin1(name), t, required};
+}
+
+CommandResult okResult()
+{
+    CommandResult r;
+    r.ok = true;
+    return r;
+}
+
+CommandResult fail(const QString &e)
+{
+    CommandResult r;
+    r.error = e;
+    return r;
+}
+
+} // namespace
+
+AppController::AppController(const Options &opt, QObject *parent) : QObject(parent), m_opt(opt) {}
+
+AppController::~AppController()
+{
+    if (!m_shutDown)
+        shutdown(false);
+    delete m_shell; // references widgets owned by the window
+    m_shell = nullptr;
+    delete m_window;
+}
+
+PageId AppController::currentPage() const
+{
+    return m_active ? m_active->pageId() : 0;
+}
+
+QString AppController::userShellDir() const
+{
+    return QDir(m_opt.homeDir).filePath(QStringLiteral("shell"));
+}
+
+QString AppController::builtinPresetPath(const QString &name) const
+{
+    const QString rel = name == QLatin1String("default") ? QStringLiteral("default/shell.lua")
+                        : name == QLatin1String("keyboard") ? QStringLiteral("keyboard/shell.lua")
+                                                            : QStringLiteral("examples/%1/shell.lua").arg(name);
+    const QStringList roots = {
+#ifdef Q_OS_MACOS
+        QCoreApplication::applicationDirPath() + QStringLiteral("/../Resources/presets"),
+#endif
+        QCoreApplication::applicationDirPath() + QStringLiteral("/presets"),
+        QStringLiteral(FOLIA_PRESET_SOURCE_DIR),
+    };
+    for (const QString &r : roots) {
+        const QString p = QDir(r).filePath(rel);
+        if (QFileInfo::exists(p))
+            return QFileInfo(p).canonicalFilePath();
+    }
+    return QString();
+}
+
+QString AppController::presetPath(const QString &name) const
+{
+    return QDir(userShellDir()).filePath(name + QStringLiteral(".lua"));
+}
+
+void AppController::installUserPresets()
+{
+    QDir().mkpath(userShellDir());
+    for (const QString &name : {QStringLiteral("default"), QStringLiteral("keyboard"), QStringLiteral("right-nav")}) {
+        const QString dst = presetPath(name);
+        const QString src = builtinPresetPath(name);
+        if (!QFileInfo::exists(dst) && !src.isEmpty())
+            QFile::copy(src, dst) && QFile(dst).setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                                               | QFileDevice::ReadGroup | QFileDevice::ReadOther);
+    }
+    const QString ref = QDir(userShellDir()).filePath(QStringLiteral("REFERENCE.md"));
+    const QString refSrc = QFileInfo(builtinPresetPath(QStringLiteral("default"))).absolutePath()
+        + QStringLiteral("/../REFERENCE.md");
+    if (!QFileInfo::exists(ref) && QFileInfo::exists(refSrc))
+        QFile::copy(refSrc, ref);
+}
+
+bool AppController::start(QString *error)
+{
+    if (m_opt.homeDir.isEmpty())
+        m_opt.homeDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(m_opt.homeDir);
+    const QString dbPath = m_opt.workspacePath.isEmpty()
+        ? QDir(m_opt.homeDir).filePath(QStringLiteral("workspace.db")) : m_opt.workspacePath;
+
+    m_store = new Store(this);
+    Store::Options so;
+    so.path = dbPath;
+    so.faultInjectable = m_opt.faultVfs;
+    if (!m_store->open(so, error))
+        return false;
+
+    m_ectx = new EditorContext(this);
+#ifdef FOLIA_WITH_MATH
+    if (!m_opt.noMath) {
+        m_previews = new PreviewService(4 << 20, 1, this);
+        m_ectx->previews = m_previews;
+    }
+#endif
+    m_data = new DataContext(m_store, this);
+    m_ectx->titleOf = [this](PageId id) {
+        if (auto it = m_cache.find(id); it != m_cache.end())
+            return (*it)->title();
+        return m_data->titleOf(id);
+    };
+    m_commands = new CommandRegistry(this);
+
+    connect(m_store, &Store::committed, this, [this](PageId page, Revision rev, qint64 micros) {
+        instr::record("commit_us", micros);
+        if (auto it = m_cache.find(page); it != m_cache.end())
+            (*it)->setCommitted(rev);
+        // Every edit in a committed batch was dirty at most this long.
+        auto &q = m_inflight[page];
+        while (!q.isEmpty() && q.first().first <= rev) {
+            instr::record("dirty_to_commit_us", q.first().second.nsecsElapsed() / 1000);
+            q.removeFirst();
+        }
+        m_failing = false;
+        updateStatus();
+        evictCache();
+    });
+    connect(m_store, &Store::commitFailed, this, [this](PageId, Revision, const StorageError &e) {
+        m_failing = true;
+        m_failMessage = e.diskFull ? tr("Disk full — your edits are kept in memory and will be saved when space is available")
+                                   : tr("Save failed (%1) — edits kept in memory, retrying").arg(e.message);
+        updateStatus();
+    });
+    connect(m_store, &Store::writerRecovered, this, [this] {
+        m_failing = false;
+        updateStatus();
+    });
+    connect(m_store, &Store::treeChanged, m_data, &DataContext::notifyTreeChanged);
+
+    m_idleTimer.setSingleShot(true);
+    m_idleTimer.setInterval(m_opt.autosaveIdleMs);
+    m_deadlineTimer.setSingleShot(true);
+    m_deadlineTimer.setInterval(m_opt.autosaveMaxDirtyMs);
+    connect(&m_idleTimer, &QTimer::timeout, this, &AppController::flushSaves);
+    connect(&m_deadlineTimer, &QTimer::timeout, this, &AppController::flushSaves);
+
+    platform::onMemoryPressure([this](bool critical) { reclaimMemory(critical); });
+
+    buildWindow();
+    registerCommands();
+    installUserPresets();
+
+    if (m_opt.seedIfEmpty && m_store->pageCount() == 0)
+        seedWorkspace();
+
+    // Shell: explicit file > safe mode builtin > active preset.
+    QString shellFile;
+    if (m_opt.safeMode) {
+        shellFile = builtinPresetPath(QStringLiteral("default"));
+        m_shell->setSafeModeNotice(tr("Safe mode: using the built-in default layout. Your shell files are untouched; "
+                                      "fix them and choose Shell ▸ Reload Layout."));
+    } else if (!m_opt.shellPath.isEmpty()) {
+        shellFile = m_opt.shellPath;
+    } else {
+        const QString preset = m_opt.preset.isEmpty()
+            ? m_store->setting(QStringLiteral("shell.active"), QStringLiteral("default")) : m_opt.preset;
+        shellFile = presetPath(preset);
+        if (!QFileInfo::exists(shellFile))
+            shellFile = presetPath(QStringLiteral("default"));
+    }
+    m_shell->setWatchFile(m_opt.watchShell && !m_opt.safeMode);
+    QString shellErr;
+    if (!loadShell(shellFile, &shellErr)) {
+        // No valid layout yet: fall back to the built-in default so the editor
+        // is always reachable; keep the error visible.
+        QString e2;
+        const QString builtin = builtinPresetPath(QStringLiteral("default"));
+        if (builtin.isEmpty() || !m_shell->loadFile(builtin, &e2)) {
+            if (error)
+                *error = tr("No usable shell layout: %1 / %2").arg(shellErr, e2);
+            return false;
+        }
+        m_shell->setSafeModeNotice(tr("Your layout %1 failed to load:\n%2\nUsing the built-in default until it is fixed "
+                                      "(saved changes reload automatically).").arg(QFileInfo(shellFile).fileName(), shellErr.left(600)));
+        m_shell->setWatchFile(false);
+    }
+
+    // Open the last page (or the first root page).
+    const PageId last = m_opt.startPage > 0 ? m_opt.startPage
+        : m_opt.restoreLastPage ? m_store->setting(QStringLiteral("app.last_page")).toLongLong() : 0;
+    if (last > 0) {
+        m_store->pageMeta(last, this, [this](PageMeta m, bool found) {
+            if (found)
+                openPage(m.id);
+            else
+                m_store->fetchChildren(0, 0, 1, this, [this](QVector<PageMeta> rows, int) {
+                    if (!rows.isEmpty())
+                        openPage(rows.first().id);
+                });
+        });
+    } else {
+        m_store->fetchChildren(0, 0, 1, this, [this](QVector<PageMeta> rows, int) {
+            if (!rows.isEmpty())
+                openPage(rows.first().id);
+        });
+    }
+    return true;
+}
+
+void AppController::buildWindow()
+{
+    auto *w = new MainWindow;
+    m_window = w;
+    w->setWindowTitle(QStringLiteral("Folia"));
+    w->resize(1180, 780);
+    w->canClose = [this] { return shutdown(true); };
+    m_shellContainer = new QWidget(w);
+    w->setCentralWidget(m_shellContainer);
+    m_pane = new EditorPane(m_ectx, m_shellContainer);
+
+    ShellHost::Deps deps;
+    deps.editor = m_pane;
+    deps.editorCtx = m_ectx;
+    deps.commands = m_commands;
+    deps.data = m_data;
+    deps.window = w;
+    deps.container = m_shellContainer;
+    m_shell = new ShellHost(deps, this);
+    connect(m_shell, &ShellHost::resetRequested, this, &AppController::resetShell);
+    connect(m_pane->editor(), &NoteEditor::openPageRequested, this, [this](PageId id) { openPage(id); });
+    connect(m_ectx, &EditorContext::themeChanged, this, [this] {
+        for (PageSession *s : std::as_const(m_cache))
+            if (s->layout())
+                s->layout()->relayoutAll();
+    });
+    connect(m_pane->editor(), &NoteEditor::painted, this, [this] {
+        if (m_awaitPaint && m_active && m_active->pageId() == m_openTarget) {
+            m_awaitPaint = false;
+            const qint64 us = m_openClock.nsecsElapsed() / 1000;
+            instr::record("open_to_paint_us", us);
+            emit pagePainted(m_openTarget, us);
+        }
+    });
+
+    // Native menus: always available, independent of the Lua layout.
+    // Shortcuts are owned by the Lua layout (so users can rebind them); the
+    // menu only keeps editing keys and the recovery keys reserved by the host.
+    QMenuBar *mb = w->menuBar();
+    auto act = [this](QMenu *menu, const QString &text, const QString &cmd, const QKeySequence &ks = {}) {
+        QAction *a = menu->addAction(text);
+        if (!ks.isEmpty())
+            a->setShortcut(ks);
+        connect(a, &QAction::triggered, this, [this, cmd] {
+            const CommandResult r = m_commands->dispatchCommand(cmd, {});
+            if (!r.ok)
+                qWarning() << r.error;
+        });
+        return a;
+    };
+    QMenu *file = mb->addMenu(tr("&File"));
+    act(file, tr("New Page"), QStringLiteral("page.new"));
+    act(file, tr("New Child Page"), QStringLiteral("page.new_child"));
+    act(file, tr("New Sibling Page"), QStringLiteral("page.new_sibling"));
+    file->addSeparator();
+    act(file, tr("Move Page Up"), QStringLiteral("page.move_up"));
+    act(file, tr("Move Page Down"), QStringLiteral("page.move_down"));
+    act(file, tr("Indent Page"), QStringLiteral("page.indent"));
+    act(file, tr("Outdent Page"), QStringLiteral("page.outdent"));
+    file->addSeparator();
+    act(file, tr("Move Page to Trash"), QStringLiteral("page.delete"));
+    QMenu *edit = mb->addMenu(tr("&Edit"));
+    act(edit, tr("Undo"), QStringLiteral("editor.undo"), QKeySequence::Undo);
+    act(edit, tr("Redo"), QStringLiteral("editor.redo"), QKeySequence::Redo);
+    edit->addSeparator();
+    act(edit, tr("Copy Code Block"), QStringLiteral("code.copy_block"));
+    QMenu *go = mb->addMenu(tr("&Go"));
+    act(go, tr("Back"), QStringLiteral("nav.back"));
+    act(go, tr("Forward"), QStringLiteral("nav.forward"));
+    act(go, tr("Parent Page"), QStringLiteral("nav.parent"));
+    act(go, tr("Focus Title"), QStringLiteral("title.focus"));
+    act(go, tr("Focus Editor"), QStringLiteral("editor.focus"));
+    QMenu *shell = mb->addMenu(tr("&Shell"));
+    act(shell, tr("Reload Layout"), QStringLiteral("shell.reload"), QKeySequence(QStringLiteral("Ctrl+Alt+R")));
+    act(shell, tr("Reset to Default Layout"), QStringLiteral("shell.reset"), QKeySequence(QStringLiteral("Ctrl+Alt+Shift+R")));
+    shell->addSeparator();
+    for (const QString &p : {QStringLiteral("default"), QStringLiteral("keyboard"), QStringLiteral("right-nav")}) {
+        QAction *a = shell->addAction(tr("Use “%1” Layout").arg(p));
+        connect(a, &QAction::triggered, this, [this, p] {
+            QVariantMap args;
+            args.insert(QStringLiteral("name"), p);
+            m_commands->dispatchCommand(QStringLiteral("shell.use"), args);
+        });
+    }
+    shell->addSeparator();
+    act(shell, tr("Edit Layout File"), QStringLiteral("shell.edit"));
+    act(shell, tr("Open Shell Folder"), QStringLiteral("shell.open_folder"));
+}
+
+bool AppController::loadShell(const QString &path, QString *error)
+{
+    QString err;
+    const bool ok = m_shell->loadFile(path, &err);
+    if (error)
+        *error = err;
+    return ok;
+}
+
+void AppController::resetShell()
+{
+    // Restore the user's default preset from the built-in copy (keeping a
+    // backup), then load it. Always reachable from the native Shell menu.
+    const QString builtin = builtinPresetPath(QStringLiteral("default"));
+    const QString user = presetPath(QStringLiteral("default"));
+    if (QFileInfo::exists(user)) {
+        const QString bak = user + QStringLiteral(".bak");
+        QFile::remove(bak);
+        QFile::rename(user, bak);
+    }
+    QFile::copy(builtin, user);
+    QFile(user).setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    m_store->setSetting(QStringLiteral("shell.active"), QStringLiteral("default"));
+    m_shell->setSafeModeNotice(QString());
+    m_shell->setWatchFile(m_opt.watchShell);
+    QString err;
+    if (!m_shell->loadFile(user, &err))
+        m_shell->loadFile(builtin, &err);
+}
+
+// --------------------------------------------------------------- pages ----
+PageSession *AppController::createSession(PageId id)
+{
+    auto *s = new PageSession(id, m_ectx, [this] { return m_store->allocateBlockId(); }, this);
+    connect(s, &PageSession::revisionChanged, this, [this, s] { scheduleSave(s); });
+    connect(s, &PageSession::committedChanged, this, &AppController::updateStatus);
+    connect(s, &PageSession::titleChanged, this, [this, s](const QString &t) {
+        m_data->noteTitle(s->pageId(), t);
+        for (PageSession *o : std::as_const(m_cache))
+            if (o != s)
+                o->refreshLinkTo(s->pageId());
+        if (s == m_active)
+            m_window->setWindowTitle(t.isEmpty() ? tr("Untitled — Folia") : t + QStringLiteral(" — Folia"));
+    });
+    return s;
+}
+
+void AppController::touchCache(PageId id)
+{
+    m_lru.removeAll(id);
+    m_lru.prepend(id);
+}
+
+qint64 AppController::docCacheBytes() const
+{
+    qint64 n = 0;
+    for (PageSession *s : std::as_const(m_cache))
+        n += s->estimatedBytes();
+    return n;
+}
+
+void AppController::evictCache()
+{
+    qint64 bytes = docCacheBytes();
+    for (int i = m_lru.size() - 1; i >= 0 && (bytes > m_opt.docCacheBytes || m_cache.size() > m_opt.docCacheEntries); --i) {
+        const PageId id = m_lru[i];
+        PageSession *s = m_cache.value(id);
+        // Pinned: the active page, and anything not yet durably committed.
+        if (!s || s == m_active || s->isUncommitted() || s->hasUnsnapshotted())
+            continue;
+        bytes -= s->estimatedBytes();
+        m_cache.remove(id);
+        m_lru.removeAt(i);
+        s->deleteLater();
+    }
+    instr::set(instr::DocCacheBytes, bytes);
+    instr::set(instr::DocCacheEntries, m_cache.size());
+}
+
+void AppController::openPage(PageId id, bool focusEditor)
+{
+    if (id <= 0)
+        return;
+    if (m_active && m_active->pageId() == id) {
+        if (focusEditor)
+            m_pane->focusBody();
+        return;
+    }
+    m_openClock.start();
+    m_openTarget = id;
+    m_awaitPaint = true;
+    const qint64 started = m_openClock.nsecsElapsed();
+    if (m_active && !m_navigatingHistory) {
+        m_back.push_back(m_active->pageId());
+        if (m_back.size() > 200)
+            m_back.removeFirst();
+        m_forward.clear();
+    }
+    if (m_active)
+        m_pane->editor()->storeViewState();
+    flushSaves(); // the page being left is snapshotted now, not after the timer
+    if (PageSession *s = m_cache.value(id)) {
+        activate(s, started, true, focusEditor);
+        return;
+    }
+    m_pendingOpen = id;
+    m_store->openPage(id, this, [this, id, focusEditor, started](PageContent pc) {
+        if (m_pendingOpen != id)
+            return; // superseded by a newer navigation
+        m_pendingOpen = 0;
+        if (!pc.found)
+            return;
+        PageSession *s = m_cache.value(id);
+        if (!s) {
+            s = createSession(id);
+            s->load(pc);
+            m_cache.insert(id, s);
+        }
+        activate(s, started, false, focusEditor);
+    });
+}
+
+void AppController::activate(PageSession *s, qint64 startedNs, bool cached, bool focusEditor)
+{
+    m_active = s;
+    touchCache(s->pageId());
+    m_pane->setSession(s);
+    m_data->noteTitle(s->pageId(), s->title());
+    m_window->setWindowTitle((s->title().isEmpty() ? tr("Untitled") : s->title()) + QStringLiteral(" — Folia"));
+    if (focusEditor)
+        m_pane->focusBody();
+    const qint64 us = (m_openClock.nsecsElapsed() - startedNs) / 1000;
+    instr::record(cached ? "open_cached_activate_us" : "open_uncached_activate_us", us);
+    emit pageActivated(s->pageId(), us, cached);
+    m_store->setSetting(QStringLiteral("app.last_page"), QString::number(s->pageId()));
+    const PageId id = s->pageId();
+    m_store->ancestors(id, this, [this, id](QVector<PageMeta> chain) {
+        if (m_active && m_active->pageId() == id) {
+            if (!chain.isEmpty())
+                chain.last().title = m_active->title();
+            m_data->setCurrent(id, chain);
+        }
+    });
+    updateStatus();
+    evictCache();
+}
+
+PageId AppController::newPage(PageId parent, int index, const QString &title, bool focusTitle)
+{
+    instr::Scope scope("page_new_us");
+    QElapsedTimer t;
+    t.start();
+    const bool parentHeld = parent != 0 && m_cache.contains(parent);
+    const PageId id = m_store->createPage(parent, index, title, /*linkInParent=*/parent != 0 && !parentHeld);
+    if (parentHeld) {
+        PageSession *ps = m_cache.value(parent);
+        if (ps == m_active)
+            ps->insertPageLinkAfter(m_pane->editor()->textCursor().position(), id);
+        else
+            ps->appendPageLink(id);
+    }
+    m_data->noteTitle(id, title);
+    if (m_active)
+        m_pane->editor()->storeViewState();
+    flushSaves();
+    PageSession *s = createSession(id);
+    s->initNew(parent, title);
+    m_cache.insert(id, s);
+    if (m_active && !m_navigatingHistory) {
+        m_back.push_back(m_active->pageId());
+        m_forward.clear();
+    }
+    m_openClock.start();
+    m_openTarget = id;
+    m_awaitPaint = true;
+    activate(s, 0, true, !focusTitle);
+    if (focusTitle)
+        m_pane->focusTitle(true);
+    instr::record("page_new_to_editable_title_us", t.nsecsElapsed() / 1000);
+    scheduleSave(s);
+    return id;
+}
+
+// ------------------------------------------------------------ autosave ----
+void AppController::scheduleSave(PageSession *s)
+{
+    if (!m_dirtySince.contains(s->pageId())) {
+        QElapsedTimer t;
+        t.start();
+        m_dirtySince.insert(s->pageId(), t);
+    }
+    if (m_autosave) {
+        m_idleTimer.start(); // coalesce bursts
+        if (!m_deadlineTimer.isActive())
+            m_deadlineTimer.start(); // but never stay dirty longer than ~1 s
+    }
+    updateStatus();
+}
+
+void AppController::flushSaves()
+{
+    m_idleTimer.stop();
+    m_deadlineTimer.stop();
+    if (m_active)
+        m_pane->editor()->storeViewState();
+    for (PageSession *s : std::as_const(m_cache)) {
+        if (!s->hasUnsnapshotted())
+            continue;
+        SaveBatch b = s->takeSaveBatch();
+        if (b.rev == 0)
+            continue;
+        auto d = m_dirtySince.find(s->pageId());
+        if (d != m_dirtySince.end()) {
+            m_inflight[s->pageId()].push_back({b.rev, *d});
+            m_dirtySince.erase(d);
+        }
+        m_store->commit(std::move(b));
+    }
+}
+
+void AppController::updateStatus()
+{
+    QString st;
+    if (m_failing)
+        st = m_failMessage;
+    else if (!m_active)
+        st = QString();
+    else if (m_active->committedRevision() >= m_active->revision() && !m_active->hasUnsnapshotted())
+        st = tr("Saved");
+    else
+        st = tr("Saving…");
+    m_data->notifyStatus(st);
+    if (st == tr("Saved"))
+        emit allSaved();
+}
+
+bool AppController::shutdown(bool interactive)
+{
+    if (m_shutDown)
+        return true;
+    flushSaves();
+    bool ok = m_store->flush(4000);
+    while (!ok && interactive) {
+        QMessageBox box(m_window);
+        box.setIcon(QMessageBox::Warning);
+        box.setText(tr("Some edits could not be saved."));
+        box.setInformativeText(m_failMessage + tr("\n\nFree some disk space and retry, or keep Folia open so "
+                                                  "your text stays recoverable."));
+        QPushButton *retry = box.addButton(tr("Retry"), QMessageBox::AcceptRole);
+        QPushButton *keep = box.addButton(tr("Keep Folia Open"), QMessageBox::RejectRole);
+        box.addButton(tr("Quit and Lose Unsaved Edits"), QMessageBox::DestructiveRole);
+        box.setDefaultButton(retry);
+        box.exec();
+        if (box.clickedButton() == static_cast<QAbstractButton *>(keep))
+            return false;
+        if (box.clickedButton() != static_cast<QAbstractButton *>(retry))
+            break;
+        ok = m_store->flush(4000);
+    }
+    m_shutDown = true;
+    m_store->close();
+    return true;
+}
+
+void AppController::reclaimMemory(bool critical)
+{
+    for (int i = m_lru.size() - 1; i >= 0; --i) {
+        PageSession *s = m_cache.value(m_lru[i]);
+        if (!s || s == m_active || s->isUncommitted() || s->hasUnsnapshotted())
+            continue;
+        m_cache.remove(m_lru[i]);
+        m_lru.removeAt(i);
+        s->deleteLater();
+    }
+    if (m_previews)
+        m_previews->trim(critical ? 0 : (1 << 20));
+    if (m_active && m_active->layout())
+        m_active->layout()->setLayoutCap(critical ? 150 : 300);
+    instr::set(instr::DocCacheEntries, m_cache.size());
+}
+
+QSet<PageId> AppController::heldPages() const
+{
+    QSet<PageId> s;
+    for (auto it = m_cache.cbegin(); it != m_cache.cend(); ++it)
+        s.insert(it.key());
+    return s;
+}
+
+PageId AppController::argId(const QVariantMap &args) const
+{
+    const PageId id = args.value(QStringLiteral("id")).toLongLong();
+    return id > 0 ? id : currentPage();
+}
+
+void AppController::afterMove(PageId id, PageId oldParent, PageId newParent)
+{
+    if (oldParent == newParent)
+        return;
+    if (PageSession *op = m_cache.value(oldParent))
+        op->removePageLinks(id);
+    if (PageSession *np = m_cache.value(newParent))
+        np->appendPageLink(id);
+    if (PageSession *s = m_cache.value(id))
+        s->setParentId(newParent);
+    if (m_active && m_active->pageId() == id)
+        m_store->ancestors(id, this, [this, id](QVector<PageMeta> chain) {
+            if (m_active && m_active->pageId() == id)
+                m_data->setCurrent(id, chain);
+        });
+}
+
+void AppController::moveRelative(PageId id, int delta)
+{
+    if (!id)
+        return;
+    flushSaves();
+    m_store->siblingIndex(id, this, [this, id, delta](PageId parent, int index, int count) {
+        const int target = index + delta;
+        if (index < 0 || target < 0 || target >= count)
+            return;
+        m_store->movePage(id, parent, target, heldPages(), this, [](MoveResult, PageId) {});
+    });
+}
+
+void AppController::indent(PageId id)
+{
+    if (!id)
+        return;
+    flushSaves();
+    m_store->siblingIndex(id, this, [this, id](PageId parent, int index, int) {
+        if (index <= 0)
+            return;
+        m_store->fetchChildren(parent, index - 1, 1, this, [this, id, parent](QVector<PageMeta> rows, int) {
+            if (rows.isEmpty())
+                return;
+            const PageId newParent = rows.first().id;
+            m_store->movePage(id, newParent, -1, heldPages(), this, [this, id, newParent](MoveResult r, PageId old) {
+                if (r == MoveResult::Ok) {
+                    afterMove(id, old, newParent);
+                    QStringList ids = m_store->setting(QStringLiteral("tree.expanded")).split(QLatin1Char(','));
+                    Q_UNUSED(ids);
+                    emit m_data->revealRequested(id);
+                }
+            });
+        });
+        Q_UNUSED(parent);
+    });
+}
+
+void AppController::outdent(PageId id)
+{
+    if (!id)
+        return;
+    flushSaves();
+    m_store->pageMeta(id, this, [this, id](PageMeta m, bool found) {
+        if (!found || m.parent == 0)
+            return;
+        const PageId parent = m.parent;
+        m_store->pageMeta(parent, this, [this, id, parent](PageMeta pm, bool pf) {
+            if (!pf)
+                return;
+            m_store->siblingIndex(parent, this, [this, id, pm](PageId gp, int pidx, int) {
+                m_store->movePage(id, gp, pidx + 1, heldPages(), this, [this, id, gp](MoveResult r, PageId old) {
+                    if (r == MoveResult::Ok) {
+                        afterMove(id, old, gp);
+                        emit m_data->revealRequested(id);
+                    }
+                });
+                Q_UNUSED(pm);
+            });
+        });
+    });
+}
+
+// ------------------------------------------------------------ commands ----
+void AppController::registerCommands()
+{
+    using T = QMetaType;
+    CommandRegistry *c = m_commands;
+    c->add({QStringLiteral("page.open"), tr("Open Page"), {}, {arg("id", T::LongLong, true)}, [this](const QVariantMap &a) {
+                openPage(a.value(QStringLiteral("id")).toLongLong());
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("page.new"), tr("New Page"), {}, {arg("parent", T::LongLong), arg("title", T::QString)},
+            [this](const QVariantMap &a) {
+                newPage(a.value(QStringLiteral("parent")).toLongLong(), -1, a.value(QStringLiteral("title")).toString(), true);
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("page.new_child"), tr("New Child Page"), {}, {arg("title", T::QString)},
+            [this](const QVariantMap &a) {
+                if (!currentPage())
+                    return fail(tr("no page is open"));
+                newPage(currentPage(), -1, a.value(QStringLiteral("title")).toString(), true);
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("page.new_sibling"), tr("New Sibling Page"), {}, {}, [this](const QVariantMap &) {
+                const PageId cur = currentPage();
+                if (!cur)
+                    return fail(tr("no page is open"));
+                m_store->siblingIndex(cur, this, [this](PageId parent, int index, int) {
+                    newPage(parent, index + 1, QString(), true);
+                });
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("page.move_up"), tr("Move Page Up"), {}, {arg("id", T::LongLong)}, [this](const QVariantMap &a) {
+                moveRelative(argId(a), -1);
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("page.move_down"), tr("Move Page Down"), {}, {arg("id", T::LongLong)}, [this](const QVariantMap &a) {
+                moveRelative(argId(a), +1);
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("page.indent"), tr("Indent Page"), {}, {arg("id", T::LongLong)}, [this](const QVariantMap &a) {
+                indent(argId(a));
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("page.outdent"), tr("Outdent Page"), {}, {arg("id", T::LongLong)}, [this](const QVariantMap &a) {
+                outdent(argId(a));
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("page.move"), tr("Move Page"), {},
+            {arg("id", T::LongLong, true), arg("parent", T::LongLong, true), arg("index", T::LongLong)},
+            [this](const QVariantMap &a) {
+                const PageId id = a.value(QStringLiteral("id")).toLongLong();
+                const PageId np = a.value(QStringLiteral("parent")).toLongLong();
+                flushSaves();
+                m_store->movePage(id, np, a.value(QStringLiteral("index"), -1).toInt(), heldPages(), this,
+                                  [this, id, np](MoveResult r, PageId old) {
+                                      if (r == MoveResult::Ok)
+                                          afterMove(id, old, np);
+                                      else if (r == MoveResult::Cycle)
+                                          m_data->notifyStatus(tr("Cannot move a page inside itself"));
+                                  });
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("page.delete"), tr("Move Page to Trash"), {}, {arg("id", T::LongLong)}, [this](const QVariantMap &a) {
+                const PageId id = argId(a);
+                if (!id)
+                    return fail(tr("no page"));
+                flushSaves();
+                const bool wasActive = currentPage() == id;
+                m_store->trashPage(id, heldPages(), this, [this, id, wasActive](bool ok, PageId parent) {
+                    if (!ok)
+                        return;
+                    if (PageSession *ps = m_cache.value(parent))
+                        ps->removePageLinks(id);
+                    if (wasActive) {
+                        if (parent)
+                            openPage(parent);
+                        else
+                            m_store->fetchChildren(0, 0, 1, this, [this](QVector<PageMeta> rows, int) {
+                                if (!rows.isEmpty())
+                                    openPage(rows.first().id);
+                            });
+                    }
+                });
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("page.reveal"), tr("Reveal Page in Tree"), {}, {arg("id", T::LongLong)}, [this](const QVariantMap &a) {
+                emit m_data->revealRequested(argId(a));
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("nav.back"), tr("Back"), {}, {}, [this](const QVariantMap &) {
+                if (m_back.isEmpty())
+                    return fail(tr("nothing to go back to"));
+                const PageId id = m_back.takeLast();
+                if (m_active)
+                    m_forward.push_back(m_active->pageId());
+                m_navigatingHistory = true;
+                openPage(id);
+                m_navigatingHistory = false;
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("nav.forward"), tr("Forward"), {}, {}, [this](const QVariantMap &) {
+                if (m_forward.isEmpty())
+                    return fail(tr("nothing to go forward to"));
+                const PageId id = m_forward.takeLast();
+                if (m_active)
+                    m_back.push_back(m_active->pageId());
+                m_navigatingHistory = true;
+                openPage(id);
+                m_navigatingHistory = false;
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("nav.parent"), tr("Open Parent Page"), {}, {}, [this](const QVariantMap &) {
+                const auto &anc = m_data->ancestors();
+                if (anc.size() < 2)
+                    return fail(tr("this page has no parent"));
+                openPage(anc[anc.size() - 2].id);
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("title.focus"), tr("Focus Title"), {}, {}, [this](const QVariantMap &) {
+                m_pane->focusTitle();
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("editor.focus"), tr("Focus Editor"), {}, {}, [this](const QVariantMap &) {
+                m_pane->focusBody();
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("editor.undo"), tr("Undo"), {}, {}, [this](const QVariantMap &) {
+                if (m_pane->titleField()->hasFocus())
+                    m_pane->titleField()->undo();
+                else
+                    m_pane->editor()->undo();
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("editor.redo"), tr("Redo"), {}, {}, [this](const QVariantMap &) {
+                if (m_pane->titleField()->hasFocus())
+                    m_pane->titleField()->redo();
+                else
+                    m_pane->editor()->redo();
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("code.copy_block"), tr("Copy Code Block"), {}, {}, [this](const QVariantMap &) {
+                return m_pane->editor()->copyCodeBlockAtCursor() ? okResult() : fail(tr("the caret is not in a code block"));
+            }, {}});
+    c->add({QStringLiteral("shell.reload"), tr("Reload Layout"), {}, {}, [this](const QVariantMap &) {
+                // Deferred: may be invoked from a Lua handler of the state it replaces.
+                QTimer::singleShot(0, this, [this] {
+                    const QString p = m_shell->activePath();
+                    if (!p.isEmpty())
+                        loadShell(p);
+                });
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("shell.reset"), tr("Reset to Default Layout"), {}, {}, [this](const QVariantMap &) {
+                QTimer::singleShot(0, this, &AppController::resetShell);
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("shell.use"), tr("Use Layout"), {}, {arg("name", T::QString, true)}, [this](const QVariantMap &a) {
+                const QString name = a.value(QStringLiteral("name")).toString();
+                if (name.contains(QLatin1Char('/')) || name.contains(QLatin1Char('\\')) || name.startsWith(QLatin1Char('.')))
+                    return fail(tr("invalid layout name"));
+                const QString path = presetPath(name);
+                if (!QFileInfo::exists(path))
+                    return fail(tr("no layout named %1 in %2").arg(name, userShellDir()));
+                QTimer::singleShot(0, this, [this, name, path] {
+                    m_shell->setSafeModeNotice(QString());
+                    if (loadShell(path))
+                        m_store->setSetting(QStringLiteral("shell.active"), name);
+                });
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("shell.edit"), tr("Edit Layout File"), {}, {}, [this](const QVariantMap &) {
+                QDesktopServices::openUrl(QUrl::fromLocalFile(m_shell->activePath()));
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("shell.open_folder"), tr("Open Shell Folder"), {}, {}, [this](const QVariantMap &) {
+                QDesktopServices::openUrl(QUrl::fromLocalFile(userShellDir()));
+                return okResult();
+            }, {}});
+}
+
+// --------------------------------------------------------------- seed -----
+void AppController::seedWorkspace()
+{
+    auto block = [this](BlockKind k, const QString &text, const QString &lang = {}, PageId target = 0) {
+        BlockRecord r;
+        r.id = m_store->allocateBlockId();
+        r.kind = k;
+        r.text = text;
+        r.lang = lang;
+        r.target = target;
+        return r;
+    };
+    auto save = [this](PageId page, const QString &title, const QVector<BlockRecord> &blocks) {
+        SaveBatch b;
+        b.page = page;
+        b.rev = 1;
+        b.hasTitle = true;
+        b.title = title;
+        b.upserts = blocks;
+        b.hasOrder = true;
+        for (const BlockRecord &r : blocks)
+            b.order << r.id;
+        m_store->commit(b);
+    };
+    const PageId welcome = m_store->createPage(0, -1, tr("Welcome to Folia"));
+    const PageId mathPage = m_store->createPage(welcome, -1, tr("Math"));
+    const PageId codePage = m_store->createPage(welcome, -1, tr("Code"));
+    const PageId nested = m_store->createPage(mathPage, -1, tr("A nested research note"));
+    save(welcome, tr("Welcome to Folia"), {
+        block(BlockKind::Text, tr("Folia is a small, local notes app: nested pages, LaTeX math and code blocks.")),
+        block(BlockKind::Text, tr("## Basics")),
+        block(BlockKind::Text, tr("- Type anywhere. Everything autosaves locally within a second.")),
+        block(BlockKind::Text, tr("- Inline math like $e^{i\\pi} + 1 = 0$ shows a preview while the caret is inside it.")),
+        block(BlockKind::Text, tr("- Start a line with ``` for code or $$ for a display equation, then press Enter.")),
+        block(BlockKind::Text, tr("- The whole window layout is a Lua file: Shell ▸ Edit Layout File. Save it to see changes.")),
+        block(BlockKind::Text, tr("## Child pages")),
+        block(BlockKind::PageLink, {}, {}, mathPage),
+        block(BlockKind::PageLink, {}, {}, codePage),
+    });
+    save(mathPage, tr("Math"), {
+        block(BlockKind::Text, tr("Display equations render below their source; the source stays editable.")),
+        block(BlockKind::Math, QStringLiteral("\\int_0^\\infty e^{-x^2}\\,dx = \\frac{\\sqrt{\\pi}}{2}")),
+        block(BlockKind::Math, QStringLiteral("\\begin{aligned} f(x) &= (x+1)^2 \\\\ &= x^2 + 2x + 1 \\end{aligned}")),
+        block(BlockKind::Math, QStringLiteral("A = \\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}"), QStringLiteral("single")),
+        block(BlockKind::Text, tr("Inline: the roots are $x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$.")),
+        block(BlockKind::PageLink, {}, {}, nested),
+    });
+    save(codePage, tr("Code"), {
+        block(BlockKind::Text, tr("Code blocks are highlighted lazily. Use the Copy button or Mod+Shift+C.")),
+        block(BlockKind::Code, QStringLiteral("def fib(n: int) -> int:\n    \"\"\"Return the n-th Fibonacci number.\"\"\"\n"
+                                              "    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a"),
+              QStringLiteral("python")),
+        block(BlockKind::Code, QStringLiteral("#include <cstdio>\n\nint main() {\n    std::printf(\"hello\\n\"); // greet\n    return 0;\n}"),
+              QStringLiteral("cpp")),
+    });
+    save(nested, tr("A nested research note"), {
+        block(BlockKind::Text, tr("Breadcrumbs above show where this page lives. Mod+[ goes back.")),
+        block(BlockKind::Text, tr("Energy: $E = mc^2$, and the Gaussian $\\frac{1}{\\sigma\\sqrt{2\\pi}} e^{-\\frac{(x-\\mu)^2}{2\\sigma^2}}$.")),
+    });
+    m_store->flush(3000);
+}
+
+} // namespace folia

@@ -1,0 +1,175 @@
+{
+    "counters": {
+        "block_height_estimates": 300,
+        "blocks_laid_out": 29,
+        "bytes_copied_for_save": 0,
+        "doc_cache_bytes": 235232,
+        "doc_cache_entries": 2,
+        "highlight_lines": 8,
+        "highlight_state_steps": 0,
+        "lua_errors": 0,
+        "lua_invocations": 5,
+        "lua_renders": 3,
+        "paint_events": 18,
+        "preview_cache_bytes": 0,
+        "preview_cache_hits": 0,
+        "preview_cancelled": 0,
+        "preview_outstanding": 0,
+        "preview_renders": 0,
+        "preview_requests": 0,
+        "preview_stale_drops": 0,
+        "save_snapshot_full_walks": 0,
+        "save_snapshots": 0,
+        "widgets_created": 19,
+        "widgets_reused": 38
+    },
+    "editable": true,
+    "env": {
+        "arch": "arm64",
+        "args": {
+            "manifest": "<scratch>/full/fixture/manifest.json"
+        },
+        "device_pixel_ratio": 2,
+        "fixture_hash": "fnv1a64:f5ecfb8eecd9058b",
+        "fixture_seed": 42,
+        "folia": "0.1.0",
+        "input_path": "synthetic Qt events via QApplication::sendEvent (bypasses the OS HID/IME path)",
+        "kernel": "25.6.0",
+        "math_renderer": true,
+        "os": "macOS 26.6.2",
+        "os_file_cache": "not purged (warm after first touch); purging needs root",
+        "power_mode": "normal-power-mode",
+        "preset": "Default",
+        "qt": "6.12.0",
+        "thermal_state": "nominal",
+        "time": "2026-11-04T17:00:08",
+        "window_size": "1180x763"
+    },
+    "exec_to_main_ms": 182.23,
+    "metrics": {
+        "editor_paint_us": {
+            "samples": [
+                32,
+                7477,
+                1514,
+                1300,
+                75,
+                103594,
+                4741,
+                4568,
+                45,
+                2718,
+                2802,
+                2785,
+                2685,
+                2765,
+                2543,
+                2621,
+                49,
+                57,
+                230
+            ],
+            "unit": "us"
+        },
+        "footprint_after_launch_bytes": {
+            "samples": [
+                82660544
+            ],
+            "unit": "bytes"
+        },
+        "launch_main_to_editable_ms": {
+            "samples": [
+                2132.100542
+            ],
+            "unit": "ms"
+        },
+        "launch_process_to_editable_ms": {
+            "proxy": "kernel process start time (sysctl KERN_PROC) to end of first editor paint of the page",
+            "samples": [
+                2314.315
+            ],
+            "unit": "ms"
+        },
+        "open_to_paint_us": {
+            "samples": [
+                338112,
+                137261
+            ],
+            "unit": "us"
+        },
+        "open_uncached_activate_us": {
+            "samples": [
+                312466,
+                17473
+            ],
+            "unit": "us"
+        },
+        "session_build_us": {
+            "samples": [
+                3740,
+                5407
+            ],
+            "unit": "us"
+        },
+        "shell_load_us": {
+            "samples": [
+                72574
+            ],
+            "unit": "us"
+        },
+        "shell_reconcile_us": {
+            "samples": [
+                70045,
+                2270,
+                2612
+            ],
+            "unit": "us"
+        },
+        "shell_render_us": {
+            "samples": [
+                2349,
+                2703
+            ],
+            "unit": "us"
+        },
+        "tree_expand_main_us": {
+            "samples": [
+                11,
+                69
+            ],
+            "unit": "us"
+        },
+        "tree_expand_request_us": {
+            "samples": [
+                240
+            ],
+            "unit": "us"
+        },
+        "tree_expand_total_us": {
+            "samples": [
+                515328,
+                12258
+            ],
+            "unit": "us"
+        }
+    },
+    "notes": [
+    ],
+    "process": {
+        "doc_cache_bytes_est": 276192,
+        "doc_cache_entries": 2,
+        "footprint_bytes": 82660544,
+        "footprint_counter": "task_vm_info.phys_footprint",
+        "idle_wakeups": 1,
+        "interrupt_wakeups": 81,
+        "laid_out_blocks": 11,
+        "lua_bytes": 66078,
+        "peak_footprint_bytes": 97127616,
+        "preview_cache_bytes": 0,
+        "resident_bytes": 142065664,
+        "system_s": 0.324153625,
+        "user_s": 0.37200075
+    },
+    "scenario": "launch",
+    "window_exposed_and_active_ratio": 1
+}
