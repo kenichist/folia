@@ -52,6 +52,26 @@ Data lives in `~/Library/Application Support/Folia/`: `workspace.db`, plus the
 | `--no-math` | do not load the formula renderer |
 | `--home dir` | separate data folder |
 
+## Settings
+
+Folia ▸ **Settings…** (File ▸ Settings… on Linux and Windows; Mod+, or the
+gear at the bottom of the sidebar) has:
+
+- **General**: reopen the last page at startup; where your data lives.
+- **Appearance**: Light / Dark / Match System, accent color, text and code
+  fonts and sizes.
+- **Editor**: text width, line height, paragraph spacing, side margin; math
+  rendering on/off (applies at the next launch).
+- **Layout**: switch layouts, edit or reload the layout file, live reload,
+  the shell language reference, reset to the default layout.
+
+Changes apply immediately and are stored in the workspace, layered over the
+active layout's `theme` — the Lua file is never rewritten. "Use Layout's …"
+buttons remove them. Launch flags (`--no-math`, `--no-watch`) win for that
+run. Cost (M1, `--bench settings`): nothing until first opened; first open
+about 130 ms and +17 MB, reopening about 58 ms with no further growth; a
+change reaches the screen in about 30 ms.
+
 ## Customize the shell
 
 Shell ▸ **Edit Layout File** opens the active layout; saving it reloads it

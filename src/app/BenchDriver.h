@@ -57,6 +57,7 @@ private:
     void scenarioNavigate();
     void scenarioIntegration();
     void scenarioRecovery();
+    void scenarioSettings();
     void finish();
 
     AppController *m_app;

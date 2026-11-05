@@ -1,6 +1,8 @@
 #include "app/AppController.h"
 
 #include "app/Platform.h"
+#include "app/Preferences.h"
+#include "app/SettingsWindow.h"
 #include "core/Instrument.h"
 #include "core/LucideIcons.h"
 #include "editor/EditorContext.h"
@@ -129,6 +131,9 @@ void AppController::installUserPresets()
         "936462a873193beb9070e12f025f36b9feef4a6e6745ccb4fb22dc3b8e210215",
         "d90c1d7fb06d897307ba961c62c89d7b329bbd97f4d2386859bc9f56a010c2fa",
         "26d03f8283819b25826128c1307abb023fa4d613f18cf791d3a99ba59bcee08b",
+        // Before the Settings window: default, REFERENCE.md
+        "a3d1a7fbd23bc77951db4f828bd4093e11096bc02bf2769c83e32a09ed4742e9",
+        "cc40ebbecffb15a668f30e1195f855ca4eb1972f3d19eca859446d8b983539f8",
     };
     auto digest = [](const QString &path) {
         QFile f(path);
@@ -181,7 +186,7 @@ bool AppController::start(QString *error)
 
     m_ectx = new EditorContext(this);
 #ifdef FOLIA_WITH_MATH
-    if (!m_opt.noMath) {
+    if (!m_opt.noMath && prefs::flag(m_store->setting(prefs::kMath))) {
         m_previews = new PreviewService(4 << 20, 1, this);
         m_ectx->previews = m_previews;
     }
@@ -220,6 +225,9 @@ bool AppController::start(QString *error)
     });
     connect(m_store, &Store::treeChanged, m_data, &DataContext::notifyTreeChanged);
 
+    m_prefsTimer.setSingleShot(true);
+    m_prefsTimer.setInterval(300);
+    connect(&m_prefsTimer, &QTimer::timeout, this, &AppController::flushPreferences);
     m_idleTimer.setSingleShot(true);
     m_idleTimer.setInterval(m_opt.autosaveIdleMs);
     m_deadlineTimer.setSingleShot(true);
@@ -251,7 +259,9 @@ bool AppController::start(QString *error)
         if (!QFileInfo::exists(shellFile))
             shellFile = presetPath(QStringLiteral("default"));
     }
-    m_shell->setWatchFile(m_opt.watchShell && !m_opt.safeMode);
+    m_shell->setWatchFile(m_opt.watchShell && !m_opt.safeMode && liveReload());
+    // Settings overrides sit on top of whichever layout loads.
+    m_shell->setThemeOverrides(prefs::parseThemeOverrides(m_store->setting(prefs::kThemeOverrides)));
     QString shellErr;
     if (!loadShell(shellFile, &shellErr)) {
         // No valid layout yet: fall back to the built-in default so the editor
@@ -270,7 +280,8 @@ bool AppController::start(QString *error)
 
     // Open the last page (or the first root page).
     const PageId last = m_opt.startPage > 0 ? m_opt.startPage
-        : m_opt.restoreLastPage ? m_store->setting(QStringLiteral("app.last_page")).toLongLong() : 0;
+        : m_opt.restoreLastPage && prefs::flag(m_store->setting(prefs::kRestoreLastPage))
+            ? m_store->setting(QStringLiteral("app.last_page")).toLongLong() : 0;
     if (last > 0) {
         m_store->pageMeta(last, this, [this](PageMeta m, bool found) {
             if (found)
@@ -359,6 +370,13 @@ void AppController::buildWindow()
     act(file, tr("Outdent Page"), QStringLiteral("page.outdent"));
     file->addSeparator();
     act(file, tr("Delete Page…"), QStringLiteral("page.delete"), {}, {{QStringLiteral("confirm"), true}});
+    file->addSeparator();
+    // macOS moves this to the application menu (Folia ▸ Settings…).
+    QAction *settings = file->addAction(tr("Settings…"));
+    settings->setMenuRole(QAction::PreferencesRole);
+    settings->setShortcut(QKeySequence(QStringLiteral("Ctrl+,"))); // Mod+, (reserved for layouts)
+    settings->setShortcutContext(Qt::ApplicationShortcut);
+    connect(settings, &QAction::triggered, this, &AppController::showSettings);
     QMenu *edit = mb->addMenu(tr("&Edit"));
     act(edit, tr("Undo"), QStringLiteral("editor.undo"), QKeySequence::Undo);
     act(edit, tr("Redo"), QStringLiteral("editor.redo"), QKeySequence::Redo);
@@ -412,10 +430,82 @@ void AppController::resetShell()
     QFile(user).setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
     m_store->setSetting(QStringLiteral("shell.active"), QStringLiteral("default"));
     m_shell->setSafeModeNotice(QString());
-    m_shell->setWatchFile(m_opt.watchShell);
+    m_shell->setWatchFile(m_opt.watchShell && liveReload());
     QString err;
     if (!m_shell->loadFile(user, &err))
         m_shell->loadFile(builtin, &err);
+}
+
+// ------------------------------------------------------------ settings ----
+void AppController::showSettings()
+{
+    if (!m_settings) {
+        QElapsedTimer t;
+        t.start();
+        m_settings = new SettingsWindow(this, m_window);
+        instr::record("settings_create_us", t.nsecsElapsed() / 1000);
+    }
+    m_settings->show();
+    m_settings->raise();
+    m_settings->activateWindow();
+}
+
+SettingsWindow *AppController::settingsWindow() const
+{
+    return m_settings.data();
+}
+
+void AppController::setThemeOverrides(const QVariantMap &overrides)
+{
+    m_shell->setThemeOverrides(overrides);
+    m_themeDirty = true;
+    m_prefsTimer.start(); // one write for a burst of changes
+}
+
+QVariantMap AppController::themeOverrides() const
+{
+    return m_shell->themeOverrides();
+}
+
+void AppController::flushPreferences()
+{
+    m_prefsTimer.stop();
+    if (!m_themeDirty || m_shutDown)
+        return;
+    m_themeDirty = false;
+    m_store->setSetting(prefs::kThemeOverrides, prefs::serializeThemeOverrides(m_shell->themeOverrides()));
+}
+
+bool AppController::liveReload() const
+{
+    return prefs::flag(m_store->setting(prefs::kLiveReload));
+}
+
+void AppController::setLiveReload(bool on)
+{
+    m_store->setSetting(prefs::kLiveReload, prefs::flagValue(on));
+    // Safe mode keeps its built-in layout unwatched until the next launch.
+    if (!m_opt.safeMode)
+        m_shell->setWatchFile(on && m_opt.watchShell);
+}
+
+QStringList AppController::availableLayouts() const
+{
+    QStringList names;
+    const QFileInfoList files = QDir(userShellDir()).entryInfoList({QStringLiteral("*.lua")}, QDir::Files, QDir::Name);
+    for (const QFileInfo &fi : files)
+        names << fi.completeBaseName();
+    if (names.removeAll(QStringLiteral("default")))
+        names.prepend(QStringLiteral("default"));
+    return names;
+}
+
+QString AppController::activeLayout() const
+{
+    const QFileInfo fi(m_shell->activePath());
+    if (fi.fileName().isEmpty() || QDir(fi.absolutePath()) != QDir(userShellDir()))
+        return QString();
+    return fi.completeBaseName();
 }
 
 // --------------------------------------------------------------- pages ----
@@ -628,6 +718,7 @@ bool AppController::shutdown(bool interactive)
 {
     if (m_shutDown)
         return true;
+    flushPreferences();
     flushSaves();
     bool ok = m_store->flush(4000);
     while (!ok && interactive) {
@@ -665,6 +756,8 @@ void AppController::reclaimMemory(bool critical)
     if (m_previews)
         m_previews->trim(critical ? 0 : (1 << 20));
     icons::clearCache();
+    if (critical && m_settings && !m_settings->isVisible())
+        m_settings->deleteLater(); // its widgets and buffers; reopening recreates it
     if (m_active && m_active->layout())
         m_active->layout()->setLayoutCap(critical ? 150 : 300);
     instr::set(instr::DocCacheEntries, m_cache.size());
@@ -974,6 +1067,11 @@ void AppController::registerCommands()
                 });
                 return okResult();
             }, {}});
+    c->add({QStringLiteral("app.settings"), tr("Settings"), {}, {}, [this](const QVariantMap &) {
+                // Deferred: opening a window from inside a Lua handler would move focus mid-call.
+                QTimer::singleShot(0, this, &AppController::showSettings);
+                return okResult();
+            }, {}});
     c->add({QStringLiteral("shell.edit"), tr("Edit Layout File"), {}, {}, [this](const QVariantMap &) {
                 QDesktopServices::openUrl(QUrl::fromLocalFile(m_shell->activePath()));
                 return okResult();
@@ -1020,6 +1118,7 @@ void AppController::seedWorkspace()
         block(BlockKind::Text, tr("- Start a line with ``` for code or $$ for a display equation, then press Enter.")),
         block(BlockKind::Text, tr("- Links: select text and press Mod+K, or paste an address onto it. Click a link for "
                                   "Open, Edit or Remove; Mod-click opens it, like [Lucide icons](https://lucide.dev/icons).")),
+        block(BlockKind::Text, tr("- Settings (Mod+,) change the theme, fonts, text width and layout without editing any file.")),
         block(BlockKind::Text, tr("- The whole window layout is a Lua file: Shell ▸ Edit Layout File. Save it to see changes.")),
         block(BlockKind::Text, tr("## Child pages")),
         block(BlockKind::PageLink, {}, {}, mathPage),

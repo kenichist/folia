@@ -55,6 +55,7 @@ int main(int argc, char **argv)
         o.seedIfEmpty = p.value(bench) == QLatin1String("snapshot");
         o.restoreLastPage = false;
         folia::instr::setSamplingEnabled(true);
+        app.setProperty("folia.bench", true); // extra windows (Settings) float and are click-through too
     }
 
     folia::AppController ctl(o);

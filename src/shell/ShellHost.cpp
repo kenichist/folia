@@ -220,7 +220,7 @@ const QList<QKeySequence> &reservedKeys()
         QKeySequence(QStringLiteral("Ctrl+X")), QKeySequence(QStringLiteral("Ctrl+C")),
         QKeySequence(QStringLiteral("Ctrl+V")), QKeySequence(QStringLiteral("Ctrl+A")),
         QKeySequence(QStringLiteral("Ctrl+Q")), QKeySequence(QStringLiteral("Ctrl+Alt+Shift+R")),
-        QKeySequence(QStringLiteral("Ctrl+Alt+R")),
+        QKeySequence(QStringLiteral("Ctrl+Alt+R")), QKeySequence(QStringLiteral("Ctrl+,")), // Settings
     };
     return r;
 }
@@ -727,8 +727,9 @@ ShellHost::ShellHost(const Deps &deps, QObject *parent) : QObject(parent), m_d(d
         m_systemScheme = scheme;
         if (!m_rt)
             return;
-        if (m_spec.theme.value(QStringLiteral("mode")).toString() == QLatin1String("system"))
-            applyTheme(m_spec.theme);
+        const QVariantMap theme = mergeTheme(m_spec.theme, m_overrides);
+        if (theme.value(QStringLiteral("mode")).toString() == QLatin1String("system"))
+            applyTheme(theme);
         scheduleRender();
     });
 }
@@ -860,7 +861,7 @@ bool ShellHost::loadSource(const QByteArray &code, const QString &name, QString 
     m_shortcuts.clear();
     m_name = spec.name;
     m_lastError.clear();
-    applyTheme(m_spec.theme);
+    applyTheme(mergeTheme(m_spec.theme, m_overrides));
     apply(root);
     m_renderRefs = std::move(refs);
     applyBindings();
@@ -1699,6 +1700,31 @@ void ShellHost::applyFocusOrder(const UiNode &)
             QWidget::setTabOrder(prev, w);
         prev = w;
     }
+}
+
+QVariantMap ShellHost::mergeTheme(const QVariantMap &base, const QVariantMap &overrides)
+{
+    QVariantMap out = base;
+    for (auto it = overrides.cbegin(); it != overrides.cend(); ++it) {
+        const QVariant cur = out.value(it.key());
+        if (it.value().typeId() == QMetaType::QVariantMap && cur.typeId() == QMetaType::QVariantMap)
+            out.insert(it.key(), mergeTheme(cur.toMap(), it.value().toMap()));
+        else
+            out.insert(it.key(), it.value());
+    }
+    return out;
+}
+
+void ShellHost::setThemeOverrides(const QVariantMap &overrides)
+{
+    if (overrides == m_overrides)
+        return;
+    m_overrides = overrides;
+    if (!m_rt)
+        return; // applied when a layout loads
+    instr::Scope scope("theme_apply_us");
+    applyTheme(mergeTheme(m_spec.theme, m_overrides));
+    scheduleRender(); // named style colors ("sidebar", "panel"…) follow the new theme
 }
 
 void ShellHost::applyTheme(const QVariantMap &theme)

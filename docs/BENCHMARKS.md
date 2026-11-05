@@ -140,7 +140,8 @@ Use a fresh copy of the fixture per run for scenarios that write. Scenarios
 (see `BenchDriver::run`): `launch`, `open`, `create`, `expand`, `typing`
 (`doc=ordinary|stress|code`, `ime=true|false`, `bgrender=true`), `scroll`,
 `stress`, `presentation`, `idle` (`seconds=60`, `settle_ms`), `navigate`
-(`batches=5`, `per_batch=100`), `integration`, `snapshot`, `recovery`.
+(`batches=5`, `per_batch=100`), `integration`, `snapshot`, `recovery`,
+`settings` (`reps=10`, `window=0|1`, `apply=0|1`, `close_settle_ms`; see below).
 Bench JSON schema:
 
 ```json
@@ -154,6 +155,39 @@ Bench JSON schema:
 
 Extra top-level keys (e.g. `frames_within_16_7ms_ratio`) are shown by the
 report as "extra" fields.
+
+### `settings`: the Settings window
+
+Each rep opens Settings (`showSettings()` → its next paint), applies two
+text-size and two light/dark changes (main-thread time, and time until the
+editor repaints), restores the overrides and closes the window the way its
+title-bar button does. Footprint is sampled before, 500 ms after each open
+and after each close; at the end the font lists are filled once.
+`window=0` measures theme changes alone, `apply=0` the window alone.
+
+M1, Release, seeded welcome workspace (not the 50k fixture), 2026-11-05,
+30 reps:
+
+| Metric | Result |
+|---|---|
+| First open (creates the window) | 130 ms; `settings_create_us` 9–10 ms |
+| Reopen | p50 58 ms, p95 62 ms |
+| Footprint: before → first open → after close | 70.0 → 87.4 → 84.0 MB; then flat at 88.5 MB closed / 92.1 MB open for 30 reps |
+| Same with theme changes each rep | levels off at 98.6 MB closed (theme changes alone: +6 MB, then flat) |
+| Text-size change | main thread p50 3.0 ms (p95 5.7); to editor paint p50 32 ms (p95 58) |
+| Light/dark change | main thread p50 2.4 ms (p95 4.6); to editor paint p50 29 ms (p95 59) |
+| Font lists, first popup | 6.5 ms, +0.08 MB |
+
+Two findings shaped the window. On macOS 26 with Qt 6.12, a top-level
+window that was activated and then destroyed by Qt (deleted, or closed
+with an accepted close event) keeps its native `QNSWindow` alive; `heap`
+showed one more per cycle, and footprint grew 3.7–3.9 MB per open/close.
+Settings is therefore created once, and its close button, Mod+W and Esc
+hide it. Asking every font family whether it is fixed-pitch cost 300 ms
+and 4 MB, so the code-font list orders families by name instead. Benchmark
+loops run inside nested event loops, where `deleteLater()` is deferred:
+flush with `QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete)`
+before measuring a deletion.
 
 ## 3. External sampling (`folia_procstat`)
 

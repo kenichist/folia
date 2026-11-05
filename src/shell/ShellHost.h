@@ -77,8 +77,18 @@ public:
     bool hasLayout() const { return bool(m_rt); }
     int liveWidgetCount() const { return m_live.size(); }
     QWidget *widgetById(const QString &id) const;
-    QVariantMap theme() const { return m_theme; }
+    QVariantMap theme() const { return m_theme; } // effective: layout theme + overrides
     size_t luaMemory() const;
+
+    // Settings overrides, layered over the layout's theme table (same shape:
+    // mode, font, mono, editor, colors). The layout file is never modified;
+    // an empty map means "use the layout's theme". Applied now and kept
+    // across layout loads.
+    void setThemeOverrides(const QVariantMap &overrides);
+    QVariantMap themeOverrides() const { return m_overrides; }
+    QVariantMap layoutTheme() const { return m_spec.theme; }
+    // Nested tables are merged key by key; anything else is replaced.
+    static QVariantMap mergeTheme(const QVariantMap &base, const QVariantMap &overrides);
 
     // Re-run view() now (normally coalesced to the next event-loop turn).
     bool renderNow(QString *error = nullptr);
@@ -153,6 +163,7 @@ private:
     QPointer<QWidget> m_editorParking;
     std::vector<QPointer<QShortcut>> m_shortcuts;
     QVariantMap m_theme;
+    QVariantMap m_overrides;
     Qt::ColorScheme m_systemScheme = Qt::ColorScheme::Unknown; // OS appearance, as last reported by Qt
     QColor m_accent;
     QHash<QString, QString> m_colors;
