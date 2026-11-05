@@ -156,38 +156,57 @@ Bench JSON schema:
 Extra top-level keys (e.g. `frames_within_16_7ms_ratio`) are shown by the
 report as "extra" fields.
 
-### `settings`: the Settings window
+### `settings`: the Settings page
 
-Each rep opens Settings (`showSettings()` → its next paint), applies two
-text-size and two light/dark changes (main-thread time, and time until the
-editor repaints), restores the overrides and closes the window the way its
-title-bar button does. Footprint is sampled before, 500 ms after each open
-and after each close; at the end the font lists are filled once.
-`window=0` measures theme changes alone, `apply=0` the window alone.
+Each rep opens Settings (`showSettings()` → the page's first paint), makes
+three text-size changes and then switches to dark and back to light
+(main-thread time, and time until the editor, or the Settings page while it
+covers the editor, repaints), restores the overrides and goes back to the
+notes (the page is deleted). Footprint is sampled before, 500 ms after each
+open and after each close; at the end the font lists are filled once.
+`window=0` measures theme changes alone, `apply=0` the page alone, `modes=0`
+leaves out the light/dark switches.
 
-M1, Release, seeded welcome workspace (not the 50k fixture), 2026-11-05,
-30 reps:
+M1, Release, seeded welcome workspace (not the 50k fixture), 2026-11-05:
 
 | Metric | Result |
 |---|---|
-| First open (creates the window) | 130 ms; `settings_create_us` 9–10 ms |
-| Reopen | p50 58 ms, p95 62 ms |
-| Footprint: before → first open → after close | 70.0 → 87.4 → 84.0 MB; then flat at 88.5 MB closed / 92.1 MB open for 30 reps |
-| Same with theme changes each rep | levels off at 98.6 MB closed (theme changes alone: +6 MB, then flat) |
-| Text-size change | main thread p50 3.0 ms (p95 5.7); to editor paint p50 32 ms (p95 58) |
-| Light/dark change | main thread p50 2.4 ms (p95 4.6); to editor paint p50 29 ms (p95 59) |
-| Font lists, first popup | 6.5 ms, +0.08 MB |
+| First open (creates the page) | 79–86 ms; `settings_create_us` 14–20 ms |
+| Reopen | p50 36 ms (58 ms in runs that also change the theme), p95 50 ms |
+| Footprint: before → first open → after close (`apply=0`, 30 reps) | 69.6 → 79.3 → 75.8 MB; then flat at 76.2–76.3 MB closed / 79.7–79.9 MB open |
+| Same with theme changes each rep (20 reps) | levels off at 84–86.5 MB closed |
+| Text-size change (`window=0 modes=0`) | main thread p50 0.8 ms; the first use of a size 12–16 ms (font engines); to paint ~32 ms |
+| Light/dark switch | main thread p50 17–21 ms; to paint p50 48 ms (p95 66–78) |
+| Font lists, first popup | 4–7 ms, +0.03 MB |
 
-Two findings shaped the window. On macOS 26 with Qt 6.12, a top-level
-window that was activated and then destroyed by Qt (deleted, or closed
-with an accepted close event) keeps its native `QNSWindow` alive; `heap`
-showed one more per cycle, and footprint grew 3.7–3.9 MB per open/close.
-Settings is therefore created once, and its close button, Mod+W and Esc
-hide it. Asking every font family whether it is fixed-pitch cost 300 ms
-and 4 MB, so the code-font list orders families by name instead. Benchmark
-loops run inside nested event loops, where `deleteLater()` is deferred:
-flush with `QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete)`
-before measuring a deletion.
+Findings:
+
+* **Dark mode, editor colors.** A layout's style sheets (`#n_main{background-color:…}`)
+  make Qt's style-sheet style save each descendant's palette when it
+  polishes it and restore that copy on the next polish. A theme change set
+  the editor's dark palette, then the re-render changed the style sheet and
+  the editor got its light palette back: a white body with light text.
+  `ShellHost::apply()` now re-applies the editor theme after reconciling
+  (`app_tests` `darkModeRepaintsEditor` fails without it).
+* **Native controls.** The palette does not reach macOS-drawn controls; they
+  follow the app's appearance. A light theme on a dark Mac drew dark spin
+  boxes and check marks on light colors. `applyTheme` now pins
+  `QStyleHints::setColorScheme` to the theme's mode (only when it changes:
+  re-sending the same scheme cost ~17 ms per apply). After a light/dark
+  switch macOS drops Qt's font engines, and reloading them is most of that
+  switch's 17–21 ms.
+* **Windows.** The first version was a separate window. On macOS 26 with
+  Qt 6.12, a top-level window that was activated and then destroyed by Qt
+  (deleted, or closed with an accepted close event) keeps its native
+  `QNSWindow` alive; `heap` showed one more per cycle and footprint grew
+  3.7–3.9 MB per open/close. The in-window page has no native window.
+* **Fonts.** Asking every font family whether it is fixed-pitch cost 300 ms
+  and 4 MB, so the code-font list orders families by name.
+* **Harness.** Benchmark loops run inside nested event loops, where
+  `deleteLater()` is deferred: flush with
+  `QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete)` before
+  measuring a deletion. While the page covers the editor, wait for the
+  page's paints, not the editor's.
 
 ## 3. External sampling (`folia_procstat`)
 

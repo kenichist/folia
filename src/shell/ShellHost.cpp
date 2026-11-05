@@ -725,8 +725,8 @@ ShellHost::ShellHost(const Deps &deps, QObject *parent) : QObject(parent), m_d(d
         if (scheme == m_systemScheme)
             return;
         m_systemScheme = scheme;
-        if (!m_rt)
-            return;
+        if (!m_rt || m_settingScheme)
+            return; // our own setColorScheme() from applyTheme()
         const QVariantMap theme = mergeTheme(m_spec.theme, m_overrides);
         if (theme.value(QStringLiteral("mode")).toString() == QLatin1String("system"))
             applyTheme(theme);
@@ -1274,6 +1274,11 @@ void ShellHost::apply(const UiNode &rootIn)
     if (editorHadFocus && m_d.editor->isVisible() && !QApplication::focusWidget())
         m_d.editor->editor()->setFocus(Qt::OtherFocusReason);
     applyPendingFocus();
+    // A changed style sheet above re-polishes the editor, and Qt's style-sheet
+    // style then restores the palettes it saw at the previous polish (the old
+    // theme: a white body and dark title in dark mode). Re-assert the current
+    // ones; unchanged palettes and fonts make this a no-op.
+    m_d.editor->applyTheme();
     instr::record("shell_reconcile_us", t.nsecsElapsed() / 1000);
 }
 
@@ -1731,6 +1736,33 @@ void ShellHost::applyTheme(const QVariantMap &theme)
 {
     m_theme = theme;
     const QString mode = theme.value(QStringLiteral("mode"), QStringLiteral("light")).toString();
+    // Native controls, menus and dialogs follow the app's color scheme, not
+    // the palette: pin it to the mode shown (light/dark), or follow the OS.
+    // Otherwise a light layout on a dark Mac gets dark spin boxes, combo
+    // boxes and check marks drawn on light colors (and vice versa).
+    QElapsedTimer phase;
+    phase.start();
+    // Only when it changes: re-sending even the same scheme makes macOS
+    // re-theme every native control (~17 ms measured per apply).
+    {
+        QStyleHints *hints = QGuiApplication::styleHints();
+        const Qt::ColorScheme want = mode == QLatin1String("dark") ? Qt::ColorScheme::Dark
+            : mode == QLatin1String("system")                      ? Qt::ColorScheme::Unknown
+                                                                   : Qt::ColorScheme::Light;
+        if (!m_schemeRequested || want != m_requestedScheme) {
+            m_schemeRequested = true;
+            m_requestedScheme = want;
+            m_settingScheme = true;
+            if (want == Qt::ColorScheme::Unknown)
+                hints->unsetColorScheme();
+            else
+                hints->setColorScheme(want);
+            m_settingScheme = false;
+            if (want == Qt::ColorScheme::Unknown && hints->colorScheme() != Qt::ColorScheme::Unknown)
+                m_systemScheme = hints->colorScheme(); // the OS's again, now that nothing is pinned
+        }
+    }
+    instr::record("theme_scheme_us", phase.nsecsElapsed() / 1000);
     const bool dark = mode == QLatin1String("dark")
         || (mode == QLatin1String("system") && m_systemScheme == Qt::ColorScheme::Dark);
     EditorTheme t = dark ? EditorTheme::dark() : EditorTheme::light();
@@ -1796,7 +1828,9 @@ void ShellHost::applyTheme(const QVariantMap &theme)
     if (material != QLatin1String("opaque") && m_warnings.filter(QStringLiteral("theme.material")).isEmpty())
         m_warnings << QStringLiteral("theme.material = '%1' requested: no native material adapter in this build; "
                                      "using the opaque fallback").arg(material);
+    phase.restart();
     m_d.editorCtx->setTheme(t);
+    instr::record("theme_editor_us", phase.nsecsElapsed() / 1000);
     QPalette pal = m_d.container->palette();
     pal.setColor(QPalette::Window, t.background);
     pal.setColor(QPalette::WindowText, t.text);
@@ -1810,9 +1844,11 @@ void ShellHost::applyTheme(const QVariantMap &theme)
     pal.setColor(QPalette::HighlightedText, t.text);
     // App-wide, so every native control (title field, lists, scroll bars)
     // follows the layout's theme instead of the system appearance.
+    phase.restart();
     QApplication::setPalette(pal);
     m_d.container->setPalette(pal);
     m_d.container->setAutoFillBackground(true);
+    instr::record("theme_palette_us", phase.nsecsElapsed() / 1000);
 }
 
 void ShellHost::applyBindings()
@@ -1824,6 +1860,7 @@ void ShellHost::applyBindings()
         auto *sc = new QShortcut(b.seq, m_d.window);
         sc->setContext(Qt::WindowShortcut);
         sc->setAutoRepeat(false);
+        sc->setEnabled(m_shortcutsEnabled);
         const Binding copy = b;
         connect(sc, &QShortcut::activated, this, [this, copy] { runBinding(copy); });
         connect(sc, &QShortcut::activatedAmbiguously, this, [this, copy] {
@@ -1831,6 +1868,14 @@ void ShellHost::applyBindings()
         });
         m_shortcuts.push_back(sc);
     }
+}
+
+void ShellHost::setShortcutsEnabled(bool on)
+{
+    m_shortcutsEnabled = on;
+    for (const QPointer<QShortcut> &s : m_shortcuts)
+        if (s)
+            s->setEnabled(on);
 }
 
 void ShellHost::runBinding(const Binding &b)

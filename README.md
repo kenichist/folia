@@ -55,7 +55,9 @@ Data lives in `~/Library/Application Support/Folia/`: `workspace.db`, plus the
 ## Settings
 
 Folia ▸ **Settings…** (File ▸ Settings… on Linux and Windows; Mod+, or the
-gear at the bottom of the sidebar) has:
+gear at the bottom of the sidebar) opens Settings inside the main window, in
+place of your notes; **‹ Notes**, Esc or Mod+W goes back, and so does opening
+any page. Its sections:
 
 - **General**: reopen the last page at startup; where your data lives.
 - **Appearance**: Light / Dark / Match System, accent color, text and code
@@ -68,9 +70,12 @@ gear at the bottom of the sidebar) has:
 Changes apply immediately and are stored in the workspace, layered over the
 active layout's `theme` — the Lua file is never rewritten. "Use Layout's …"
 buttons remove them. Launch flags (`--no-math`, `--no-watch`) win for that
-run. Cost (M1, `--bench settings`): nothing until first opened; first open
-about 130 ms and +17 MB, reopening about 58 ms with no further growth; a
-change reaches the screen in about 30 ms.
+run. Light, Dark and Match System also set the app's native controls,
+menus and dialogs to match. Cost (M1, `--bench settings`): nothing while
+closed; first open about 80 ms, reopening 36 ms; +3.5 MB while open and
++6.6 MB kept after the first open, with no growth over 30 opens; a text-size
+change takes under 1 ms of main-thread work (~32 ms to the screen), a
+light/dark switch about 17–21 ms (~48 ms to the screen).
 
 ## Customize the shell
 

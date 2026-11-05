@@ -1,9 +1,11 @@
-// Settings window (File ▸ Settings…, Mod+,). A native window that does not
-// depend on the Lua layout, so a broken or unusual layout can never hide or
-// break it. Appearance and editor values are overrides layered over the
-// active layout's theme (AppController::setThemeOverrides); the layout file
-// itself is never edited. Created on the first open; closing hides it and it
-// does no work while hidden (see the constructor for why it is not deleted).
+// Settings page (File ▸ Settings…, Mod+,): shown inside the main window in
+// place of the layout, with a section list (General, Appearance, Editor,
+// Layout) and a way back to the notes (the back button, Esc or Mod+W). It
+// is native Qt and does not depend on the Lua layout, so a broken or unusual
+// layout can never hide or break it. Appearance and editor values are
+// overrides layered over the active layout's theme
+// (AppController::setThemeOverrides); the layout file itself is never
+// edited. Created when opened and destroyed when closed.
 #pragma once
 
 #include <QComboBox>
@@ -16,8 +18,9 @@
 class QCheckBox;
 class QFormLayout;
 class QLabel;
+class QListWidget;
 class QPushButton;
-class QTabWidget;
+class QStackedWidget;
 class QToolButton;
 
 namespace folia {
@@ -42,23 +45,23 @@ private:
     bool m_populated = false;
 };
 
-class SettingsWindow : public QWidget {
+class SettingsPage : public QWidget {
     Q_OBJECT
 public:
-    SettingsWindow(AppController *app, QWidget *parent);
+    SettingsPage(AppController *app, QWidget *parent);
 
-    // Hide, keeping the native window (title-bar close, Mod+W and Esc do this).
-    void dismiss();
+    int sectionCount() const;
+    int section() const;
+    void setSection(int index);
 
     // Bench/test hooks.
-    int paintCount() const { return m_paints; }
+    int paintCount() const { return m_paints; } // the page's or its section list's paints
     qint64 populateFontLists();
     void applyPending(); // apply a throttled change now
-    QTabWidget *tabs() const { return m_tabs; }
 
 protected:
     void paintEvent(QPaintEvent *e) override;
-    void closeEvent(QCloseEvent *e) override;
+    bool eventFilter(QObject *o, QEvent *e) override;
     void showEvent(QShowEvent *e) override;
 
 private:
@@ -88,14 +91,16 @@ private:
     void runCommand(const QString &name, const QVariantMap &args = {});
 
     AppController *m_app;
-    QVariantMap m_over; // the window's copy of the overrides (source of truth while open)
+    QVariantMap m_over; // the page's copy of the overrides (source of truth while open)
     QTimer m_applyTimer;
     bool m_refreshing = false;
     int m_paints = 0;
     std::vector<std::function<void()>> m_refreshers;
     std::vector<Reset> m_resets;
 
-    QTabWidget *m_tabs = nullptr;
+    QToolButton *m_back = nullptr;
+    QListWidget *m_nav = nullptr;
+    QStackedWidget *m_sections = nullptr;
     QComboBox *m_mode = nullptr;
     QLabel *m_modeNote = nullptr;
     QToolButton *m_accent = nullptr;

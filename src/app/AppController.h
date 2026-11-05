@@ -13,6 +13,7 @@
 #include <QTimer>
 
 class QMainWindow;
+class QStackedWidget;
 
 namespace folia {
 
@@ -22,7 +23,7 @@ class EditorContext;
 class EditorPane;
 class PageSession;
 class PreviewService;
-class SettingsWindow;
+class SettingsPage;
 class ShellHost;
 class Store;
 
@@ -78,10 +79,13 @@ public:
     qint64 docCacheBytes() const;
     int docCacheEntries() const { return m_cache.size(); }
     bool sessionCached(PageId id) const { return m_cache.contains(id); }
-    // Settings window (File ▸ Settings…, Mod+,): created on the first open,
-    // hidden (not destroyed) when closed, dropped under critical memory pressure.
+    // Settings (File ▸ Settings…, Mod+,): a page shown inside the main
+    // window in place of the layout. Created when opened, destroyed when
+    // closed; the layout's key bindings are off while it is showing.
     void showSettings();
-    SettingsWindow *settingsWindow() const;
+    void closeSettings();
+    bool settingsOpen() const;
+    SettingsPage *settingsPage() const;
     // Appearance overrides layered over the layout theme: applied now,
     // written to the workspace shortly after (coalesced).
     void setThemeOverrides(const QVariantMap &overrides);
@@ -114,6 +118,7 @@ private:
     void evictCache();
     void scheduleSave(PageSession *s);
     void updateStatus();
+    void updateWindowTitle();
     void installUserPresets();
     void moveRelative(PageId id, int delta);
     void indent(PageId id);
@@ -133,7 +138,8 @@ private:
     ShellHost *m_shell = nullptr;
     QMainWindow *m_window = nullptr;
     QWidget *m_shellContainer = nullptr;
-    QPointer<SettingsWindow> m_settings;
+    QStackedWidget *m_stack = nullptr; // the layout, or the Settings page
+    QPointer<SettingsPage> m_settings;
     QTimer m_prefsTimer;         // coalesces settings writes
     bool m_themeDirty = false;
 

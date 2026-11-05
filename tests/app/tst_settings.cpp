@@ -1,11 +1,13 @@
-// Settings window tests (integrator-owned): a real AppController on a
-// temporary data folder, driven through the native menu, the command
-// registry and the window's own controls.
+// Settings tests (integrator-owned): a real AppController on a temporary
+// data folder, driven through the native menu, the command registry and the
+// Settings page's own controls; plus the dark-mode repaint regression.
 
 #include "app/AppController.h"
 #include "app/Preferences.h"
-#include "app/SettingsWindow.h"
+#include "app/SettingsPage.h"
 #include "editor/EditorContext.h"
+#include "editor/EditorPane.h"
+#include "editor/NoteEditor.h"
 #include "editor/PageSession.h"
 #include "shell/CommandRegistry.h"
 #include "shell/ShellHost.h"
@@ -14,10 +16,10 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
-#include <QCloseEvent>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMainWindow>
 #include <QMenuBar>
 #include <QPushButton>
@@ -25,7 +27,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QToolButton>
-#include <QWindow>
+#include <QShortcut>
 #include <memory>
 
 using namespace folia;
@@ -68,7 +70,7 @@ void choose(QComboBox *c, const QVariant &data)
 }
 
 template <typename T>
-T *control(SettingsWindow *w, const char *name)
+T *control(SettingsPage *w, const char *name)
 {
     T *c = w->findChild<T *>(QString::fromLatin1(name));
     if (!c)
@@ -82,57 +84,93 @@ class SettingsTest : public QObject {
     Q_OBJECT
 
 private slots:
-    void menuAndCommandOpenOneWindow()
+    void menuOpensSettingsInsideMainWindow()
     {
         QTemporaryDir dir;
         auto app = launch(dir.path());
-        QVERIFY(!app->settingsWindow()); // nothing exists until asked for
+        QTRY_VERIFY(app->activeSession());
+        QVERIFY(!app->settingsPage()); // nothing exists until asked for
+        const auto windows = [] {
+            int n = 0;
+            for (QWidget *w : QApplication::topLevelWidgets())
+                n += w->isVisible() ? 1 : 0;
+            return n;
+        };
+        const int before = windows();
+        const QString title = app->window()->windowTitle();
+        QShortcut *newPage = nullptr; // a layout binding (default preset: Mod+N)
+        for (QShortcut *sc : app->window()->findChildren<QShortcut *>())
+            if (sc->key() == QKeySequence(QStringLiteral("Ctrl+N")))
+                newPage = sc;
+        QVERIFY(newPage && newPage->isEnabled());
+
         QAction *a = preferencesAction(app->window());
         QVERIFY(a);
         QCOMPARE(a->shortcut(), QKeySequence(QStringLiteral("Ctrl+,")));
         a->trigger();
-        QTRY_VERIFY(app->settingsWindow() && app->settingsWindow()->isVisible());
-        SettingsWindow *first = app->settingsWindow();
+        QTRY_VERIFY(app->settingsOpen());
+        SettingsPage *page = app->settingsPage();
+        QVERIFY(page->isVisible());
+        QCOMPARE(page->window(), static_cast<QWidget *>(app->window())); // inside the main window
+        QCOMPARE(windows(), before);                                     // no new window
+        QVERIFY(!app->editorPane()->isVisible());                        // it covers the layout
+        QCOMPARE(app->window()->windowTitle(), QStringLiteral("Settings — Folia"));
+        QVERIFY(!newPage->isEnabled()); // layout keys would act on the hidden page
+        QVERIFY(!app->commands()->dispatchCommand(QStringLiteral("editor.undo"), {}).ok);
         QVERIFY(app->commands()->dispatchCommand(QStringLiteral("app.settings"), {}).ok);
         QTest::qWait(20);
-        QCOMPARE(app->settingsWindow(), first); // raised, not duplicated
-        QVERIFY(first->windowHandle() && first->windowHandle()->handle());
+        QCOMPARE(app->settingsPage(), page); // focused, not duplicated
 
-        // The title-bar close button hides it and keeps the native window
-        // (macOS never frees an activated native window that Qt destroys).
-        QCloseEvent titleBarClose;
-        QCoreApplication::sendEvent(first->windowHandle(), &titleBarClose);
-        QVERIFY(!first->isVisible());
-        QVERIFY(first->windowHandle() && first->windowHandle()->handle());
-        QTest::qWait(20);
-        QCOMPARE(app->settingsWindow(), first);
-        a->trigger();
-        QTRY_VERIFY(first->isVisible());
-        QCOMPARE(app->settingsWindow(), first);
-        QTest::keyClick(first, Qt::Key_Escape); // Esc (and Mod+W) do the same
-        QVERIFY(!first->isVisible());
-        QVERIFY(first->windowHandle()->handle());
+        QTest::keyClick(page, Qt::Key_Escape); // back to the notes
+        QVERIFY(!app->settingsOpen());
+        QTRY_VERIFY(!app->settingsPage()); // deleted while closed
+        QVERIFY(app->editorPane()->isVisible());
+        QVERIFY(newPage->isEnabled());
+        QCOMPARE(app->window()->windowTitle(), title);
 
-        // A programmatic close (the app quitting) is never refused.
         app->showSettings();
-        QVERIFY(first->close());
-        QVERIFY(!first->isVisible());
+        control<QToolButton>(app->settingsPage(), "settings.back")->click();
+        QVERIFY(!app->settingsOpen());
+
+        // Opening or creating a page (menu, command, link) returns to the notes.
+        app->showSettings();
+        QVERIFY(app->commands()->dispatchCommand(QStringLiteral("page.new"), {}).ok);
+        QTRY_VERIFY(!app->settingsOpen());
+        QVERIFY(app->editorPane()->isVisible());
     }
 
-    // Changes made while the window is hidden show up when it reopens.
+    void sectionsAreListed()
+    {
+        QTemporaryDir dir;
+        auto app = launch(dir.path());
+        app->showSettings();
+        SettingsPage *page = app->settingsPage();
+        QCOMPARE(page->sectionCount(), 4);
+        page->setSection(3);
+        QCOMPARE(page->section(), 3);
+        QVERIFY(control<QComboBox>(page, "settings.layout")->isVisible());
+        app->closeSettings();
+        app->showSettings(); // reopens on the section used last
+        QCOMPARE(app->settingsPage()->section(), 3);
+        app->settingsPage()->setSection(0);
+    }
+
+    // Changes made while Settings is closed show up when it reopens.
     void reopenedWindowShowsCurrentValues()
     {
         QTemporaryDir dir;
         auto app = launch(dir.path());
         app->showSettings();
-        SettingsWindow *w = app->settingsWindow();
+        SettingsPage *w = app->settingsPage();
         auto *mode = control<QComboBox>(w, "settings.mode");
         QCOMPARE(mode->currentIndex(), 0);
-        w->close();
+        app->closeSettings();
         app->setThemeOverrides({{QStringLiteral("mode"), QStringLiteral("dark")}});
         QVERIFY(app->commands()->dispatchCommand(QStringLiteral("shell.use"), {{QStringLiteral("name"), QStringLiteral("right-nav")}}).ok);
         QTRY_COMPARE(app->activeLayout(), QStringLiteral("right-nav"));
         app->showSettings();
+        w = app->settingsPage(); // a new page
+        mode = control<QComboBox>(w, "settings.mode");
         QCOMPARE(mode->currentData().toString(), QStringLiteral("dark"));
         QTRY_COMPARE(control<QComboBox>(w, "settings.layout")->currentData().toString(), QStringLiteral("right-nav"));
         QVERIFY(control<QLabel>(w, "settings.layout_status")->text().contains(app->shell()->activeName()));
@@ -143,7 +181,7 @@ private slots:
         QTemporaryDir dir;
         auto app = launch(dir.path());
         app->showSettings();
-        SettingsWindow *w = app->settingsWindow();
+        SettingsPage *w = app->settingsPage();
         const EditorContext *ectx = app->editorContext();
         QCOMPARE(ectx->theme().background, EditorTheme::light().background);
         const qreal layoutSize = ectx->theme().body.pointSizeF();
@@ -190,7 +228,7 @@ private slots:
         control<QPushButton>(w, "settings.reset_editor")->click();
         w->applyPending();
         QVERIFY(app->themeOverrides().isEmpty());
-        w->close(); // writes the pending change
+        app->closeSettings(); // writes the pending change
         QTRY_COMPARE(app->store()->setting(prefs::kThemeOverrides), QString());
     }
 
@@ -224,7 +262,7 @@ private slots:
             child = app->newPage(root, -1, QStringLiteral("Child"), false);
             QCOMPARE(app->currentPage(), child);
             app->showSettings();
-            auto *restore = control<QCheckBox>(app->settingsWindow(), "settings.restore_last_page");
+            auto *restore = control<QCheckBox>(app->settingsPage(), "settings.restore_last_page");
             QVERIFY(restore->isChecked());
             restore->setChecked(false);
             QVERIFY(app->shutdown(false));
@@ -247,7 +285,7 @@ private slots:
         QTemporaryDir dir;
         auto app = launch(dir.path());
         app->showSettings();
-        SettingsWindow *w = app->settingsWindow();
+        SettingsPage *w = app->settingsPage();
         auto *layout = control<QComboBox>(w, "settings.layout");
         QCOMPARE(layout->currentData().toString(), QStringLiteral("default"));
         for (const char *n : {"default", "keyboard", "right-nav"})
@@ -281,7 +319,7 @@ private slots:
         QTemporaryDir dir;
         auto app = launch(dir.path());
         app->showSettings();
-        SettingsWindow *w = app->settingsWindow();
+        SettingsPage *w = app->settingsPage();
         auto *body = control<QComboBox>(w, "settings.font.family");
         auto *mono = control<QComboBox>(w, "settings.mono.family");
         QCOMPARE(body->count(), 1); // only "Layout's font (…)" until the list is opened
@@ -297,6 +335,40 @@ private slots:
         w->applyPending();
         QCOMPARE(app->editorContext()->theme().body.family(), family);
         QVERIFY(!app->themeOverrides().value(QStringLiteral("font")).toMap().contains(QStringLiteral("size")));
+    }
+
+    // Switching to dark with a page open repaints the editor dark. The
+    // layout's style sheets used to re-polish the editor and restore its
+    // previous (light) palette: a white body with light text, a dark title.
+    void darkModeRepaintsEditor()
+    {
+        QTemporaryDir dir;
+        auto app = launch(dir.path());
+        QTRY_VERIFY(app->activeSession());
+        QTest::qWait(100);
+        NoteEditor *ed = app->editorPane()->editor();
+        QLineEdit *title = app->editorPane()->titleField();
+        const auto bodyPixel = [ed] {
+            const QImage img = ed->viewport()->grab().toImage();
+            return img.pixelColor(img.width() / 2, img.height() - 1); // below the text, inside the body
+        };
+        const auto check = [&](const EditorTheme &want) {
+            QTRY_COMPARE(ed->viewport()->palette().color(QPalette::Base), want.background);
+            QCOMPARE(bodyPixel(), want.background);
+            QCOMPARE(ed->palette().color(QPalette::Text), want.text);
+            QCOMPARE(title->palette().color(QPalette::Text), want.text);
+        };
+        check(EditorTheme::light());
+        app->setThemeOverrides({{QStringLiteral("mode"), QStringLiteral("dark")}});
+        check(EditorTheme::dark());
+        QVERIFY(app->commands()->dispatchCommand(QStringLiteral("shell.reload"), {}).ok); // re-polish again
+        QTest::qWait(50);
+        check(EditorTheme::dark());
+        QVERIFY(app->commands()->dispatchCommand(QStringLiteral("shell.use"), {{QStringLiteral("name"), QStringLiteral("keyboard")}}).ok);
+        QTRY_COMPARE(app->activeLayout(), QStringLiteral("keyboard"));
+        check(EditorTheme::dark());
+        app->setThemeOverrides({});
+        check(EditorTheme::light());
     }
 
     void settingsShortcutNotTakenByLayout()

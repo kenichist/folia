@@ -2,7 +2,7 @@
 
 #include "app/AppController.h"
 #include "app/Platform.h"
-#include "app/SettingsWindow.h"
+#include "app/SettingsPage.h"
 #include "core/Instrument.h"
 #include "editor/EditorContext.h"
 #include "editor/EditorPane.h"
@@ -18,7 +18,6 @@
 
 #include <QApplication>
 #include <QClipboard>
-#include <QCloseEvent>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -396,22 +395,29 @@ void BenchDriver::scenarioSnapshot()
     const PageId page = manifestPage(QStringLiteral("page"));
     if (page)
         openAndWait(page, nullptr, nullptr);
+    // mode=light|dark|system: capture with that Settings appearance override.
+    const QString mode = m_args.value(QStringLiteral("mode")).toString();
+    if (!mode.isEmpty()) {
+        QVariantMap o = m_app->themeOverrides();
+        o.insert(QStringLiteral("mode"), mode);
+        m_app->setThemeOverrides(o);
+    }
     settle(m_args.value(QStringLiteral("wait"), 600).toInt());
     const QString png = m_args.value(QStringLiteral("png"), QStringLiteral("snapshot.png")).toString();
     m_extra.insert(QStringLiteral("png"), png);
     m_extra.insert(QStringLiteral("saved"), m_app->window()->grab().save(png));
-    // settings_png=<prefix>: also <prefix>-<tab>.png for each Settings tab (docs/review).
+    // settings_png=<prefix>: also <prefix>-<n>.png of the window showing each Settings section.
     const QString settingsPng = m_args.value(QStringLiteral("settings_png")).toString();
     if (!settingsPng.isEmpty()) {
         m_app->showSettings();
-        SettingsWindow *w = m_app->settingsWindow();
+        SettingsPage *w = m_app->settingsPage();
         settle(300);
-        for (int i = 0; i < w->tabs()->count(); ++i) {
-            w->tabs()->setCurrentIndex(i);
+        for (int i = 0; i < w->sectionCount(); ++i) {
+            w->setSection(i);
             settle(150);
-            w->grab().save(QStringLiteral("%1-%2.png").arg(settingsPng).arg(i));
+            m_app->window()->grab().save(QStringLiteral("%1-%2.png").arg(settingsPng).arg(i));
         }
-        w->dismiss();
+        m_app->closeSettings();
     }
     m_extra.insert(QStringLiteral("shell_error"), m_app->shell()->lastError());
     m_extra.insert(QStringLiteral("warnings"), QJsonArray::fromStringList(m_app->shell()->warnings()));
@@ -912,11 +918,11 @@ void BenchDriver::scenarioNavigate()
 
 void BenchDriver::scenarioSettings()
 {
-    // What the Settings window costs: opening it (showSettings -> its next
+    // What the Settings page costs: opening it (showSettings -> its next
     // paint; the first open also creates it), applying a change (main-thread
     // work, and until the editor repaints), the footprint before, while open
-    // and after closing (it is hidden and reused), and the lazy font lists.
-    // window=0 / apply=0 isolate the two costs.
+    // and after closing (the page is deleted), and the lazy font lists.
+    // window=0 / apply=0 isolate the two costs; modes=0 leaves out light/dark.
     const PageId page = manifestPage(QStringLiteral("page"));
     if (page)
         openAndWait(page, nullptr, nullptr);
@@ -933,52 +939,55 @@ void BenchDriver::scenarioSettings()
     add(QStringLiteral("settings_footprint_before_bytes"), footprint(), QStringLiteral("bytes"), counter);
 
     for (int i = 0; i < reps; ++i) {
-        SettingsWindow *w = nullptr;
+        SettingsPage *w = nullptr;
         if (useWindow) {
-            const int paintsBefore = m_app->settingsWindow() ? m_app->settingsWindow()->paintCount() : 0;
+            const int paintsBefore = 0; // a new page each open
             QElapsedTimer t;
             t.start();
             m_app->showSettings();
-            w = m_app->settingsWindow();
+            w = m_app->settingsPage();
             const bool painted = waitFor([w, paintsBefore] { return w && w->paintCount() > paintsBefore; }, 5000);
             if (!painted)
                 m_notes.append(QStringLiteral("settings window did not paint (rep %1)").arg(i));
             add(i == 0 ? QStringLiteral("settings_open_first_ms") : QStringLiteral("settings_open_ms"), t.nsecsElapsed() / 1e6,
-                QStringLiteral("ms"), QStringLiteral("showSettings() to the end of the Settings window's next paint"));
+                QStringLiteral("ms"), QStringLiteral("showSettings() to the end of the Settings page's first paint"));
             settle(500);
             add(QStringLiteral("settings_open_footprint_bytes"), footprint(), QStringLiteral("bytes"), counter);
         }
-        for (int k = 0; k < (doApply ? 4 : 0); ++k) {
-            const bool mode = k % 2 == 1; // alternate a text-size change and a light/dark switch
+        // Three text-size changes, then a switch to dark and back to light
+        // (after a light/dark switch macOS drops Qt's font engines, so the
+        // first layout after it reloads them: measured separately).
+        const int changes = !doApply ? 0 : m_args.value(QStringLiteral("modes"), 1).toInt() ? 5 : 3; // modes=0: sizes only
+        for (int k = 0; k < changes; ++k) {
+            const bool mode = k >= 3;
             QVariantMap o = original;
             if (mode) {
-                o.insert(QStringLiteral("mode"), (k / 2) % 2 ? QStringLiteral("light") : QStringLiteral("dark"));
-            } else {
+                o.insert(QStringLiteral("mode"), k == 3 ? QStringLiteral("dark") : QStringLiteral("light"));
+            } else if (k < 2) {
                 QVariantMap f = o.value(QStringLiteral("font")).toMap();
-                f.insert(QStringLiteral("size"), baseSize + 1 + (k / 2) % 2);
+                f.insert(QStringLiteral("size"), baseSize + 1 + k);
                 o.insert(QStringLiteral("font"), f);
             }
-            const int before = m_paints;
+            // While the page covers the editor, the change shows as a page repaint.
+            const int before = w ? w->paintCount() : m_paints;
             QElapsedTimer a;
             a.start();
             m_app->setThemeOverrides(o);
             const double mainUs = a.nsecsElapsed() / 1000.0;
-            const bool repainted = waitFor([this, before] { return m_paints > before; }, 2000);
+            const bool repainted = waitFor([this, w, before] { return (w ? w->paintCount() : m_paints) > before; }, 2000);
             const QString kind = mode ? QStringLiteral("mode") : QStringLiteral("size");
             add(QStringLiteral("settings_apply_%1_main_us").arg(kind), mainUs, QStringLiteral("us"),
                 QStringLiteral("synchronous work in setThemeOverrides (theme, palette, layout invalidation)"));
             if (repainted)
                 add(QStringLiteral("settings_apply_%1_to_paint_ms").arg(kind), a.nsecsElapsed() / 1e6, QStringLiteral("ms"),
-                    QStringLiteral("setThemeOverrides() to the end of the next editor paint"));
+                    QStringLiteral("setThemeOverrides() to the next paint of the editor, or of the Settings page while it is open"));
             settle(150);
         }
         m_app->setThemeOverrides(original);
         settle(200);
         if (w) {
-            // As the title-bar close button delivers it (spontaneous): hidden, reused.
-            QCloseEvent ev;
-            QCoreApplication::sendEvent(w->windowHandle(), &ev);
-            waitFor([w] { return !w->isVisible(); }, 2000);
+            m_app->closeSettings(); // back to the notes; the page is deleted
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); // nested bench loops defer deleteLater
         }
         settle(m_args.value(QStringLiteral("close_settle_ms"), 1000).toInt());
         add(QStringLiteral("settings_closed_footprint_bytes"), footprint(), QStringLiteral("bytes"), counter);
@@ -990,7 +999,7 @@ void BenchDriver::scenarioSettings()
 
     // The font lists are filled only when first opened; measure that once.
     m_app->showSettings();
-    SettingsWindow *w = m_app->settingsWindow();
+    SettingsPage *w = m_app->settingsPage();
     settle(500);
     const double beforeFonts = footprint();
     QElapsedTimer f;
@@ -1000,7 +1009,8 @@ void BenchDriver::scenarioSettings()
         QStringLiteral("enumerate text + monospaced families (first popup)"));
     settle(500);
     add(QStringLiteral("settings_font_lists_footprint_delta_bytes"), footprint() - beforeFonts, QStringLiteral("bytes"), counter);
-    w->dismiss();
+    m_app->closeSettings();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     settle(500);
     addInstrSamples();
 }

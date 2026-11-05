@@ -120,7 +120,7 @@ Tree lists also handle, natively: Mod+Alt+↑/↓ reorder, Mod+Alt+→/← inden
 | `ctx.commands()` | list of command names |
 | `ctx.page` | `{ id, title, parent, depth }` of the current page |
 | `ctx.platform` | `"macos"`, `"windows"` or `"linux"` |
-| `ctx.prefers` | `{ dark, reduced_motion, reduced_transparency }` |
+| `ctx.prefers` | `{ dark, reduced_motion, reduced_transparency }`; `dark` is the appearance Folia shows: the OS's with `mode = "system"`, else the theme's mode |
 
 ## Keys
 
@@ -149,8 +149,8 @@ same shortcut are reported; the first one wins.
 `editor.focus`, `editor.undo`, `editor.redo`, `code.copy_block`, `link.edit`
 (the Text + Link form for the selection or the link at the caret),
 `shell.reload`, `shell.reset`,
-`shell.use{name}`, `shell.edit`, `shell.open_folder`, `app.settings` (opens
-the Settings window).
+`shell.use{name}`, `shell.edit`, `shell.open_folder`, `app.settings` (shows
+Settings in the main window).
 Arguments are validated: unknown commands/arguments and wrong types fail.
 
 ## Theme
@@ -168,11 +168,15 @@ theme = {
 }
 ```
 
-The Settings window (Mod+,) edits `mode`, `colors.accent`, `font`, `mono` and
-`editor` without touching this file: its choices are stored in the workspace
-and layered over whichever layout is active, key by key. A layout's other
-values still apply, and "Use Layout's …" in Settings removes the overrides.
-`ctx.prefers.dark` keeps reporting the OS appearance, not the effective mode.
+Settings (Mod+,) edits `mode`, `colors.accent`, `font`, `mono` and `editor`
+without touching this file: its choices are stored in the workspace and
+layered over whichever layout is active, key by key. A layout's other values
+still apply, and "Use Layout's …" in Settings removes the overrides.
+
+`mode` also sets the app's color scheme, so native controls, menus and
+dialogs match it: `"light"` and `"dark"` pin it, `"system"` follows the OS.
+Explicit `colors` are kept in either mode; a layout written for light
+colors should leave them out (or check `ctx.prefers.dark`) to work in dark.
 
 ## Sandbox and limits
 

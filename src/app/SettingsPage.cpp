@@ -1,4 +1,4 @@
-#include "app/SettingsWindow.h"
+#include "app/SettingsPage.h"
 
 #include "app/AppController.h"
 #include "app/Preferences.h"
@@ -12,7 +12,6 @@
 #include <QApplication>
 #include <QBoxLayout>
 #include <QCheckBox>
-#include <QCloseEvent>
 #include <QColorDialog>
 #include <QDesktopServices>
 #include <QDir>
@@ -22,13 +21,15 @@
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QLabel>
+#include <QListWidget>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QSpinBox>
-#include <QTabWidget>
+#include <QStackedWidget>
 #include <QToolButton>
 #include <QUrl>
 
@@ -36,7 +37,7 @@ namespace folia {
 
 namespace {
 
-int s_lastTab = 0; // reopen on the tab used last (per process)
+int s_lastTab = 0; // reopen on the section used last (per process)
 
 // "font.size" -> m["font"]["size"]; one level of nesting is all a theme has.
 QVariant pathValue(const QVariantMap &m, const QString &path)
@@ -107,10 +108,10 @@ QLabel *noteLabel(const QString &text = {})
 QString modeName(const QString &mode)
 {
     if (mode == QLatin1String("dark"))
-        return SettingsWindow::tr("Dark");
+        return SettingsPage::tr("Dark");
     if (mode == QLatin1String("system"))
-        return SettingsWindow::tr("Match System");
-    return SettingsWindow::tr("Light");
+        return SettingsPage::tr("Match System");
+    return SettingsPage::tr("Light");
 }
 
 QFormLayout *newForm(QWidget *page)
@@ -233,91 +234,171 @@ void FontFamilyCombo::showPopup()
     QComboBox::showPopup();
 }
 
-// ------------------------------------------------------------- window -----
-SettingsWindow::SettingsWindow(AppController *app, QWidget *parent)
-    : QWidget(parent, Qt::Window), m_app(app), m_over(app->themeOverrides())
+// --------------------------------------------------------------- page -----
+SettingsPage::SettingsPage(AppController *app, QWidget *parent)
+    : QWidget(parent), m_app(app), m_over(app->themeOverrides())
 {
-    // Closing hides it and the next open reuses it, native window included.
-    // On macOS 26 / Qt 6.12 an activated native window that Qt destroys (on
-    // delete, or on an accepted close event) is never freed: about 0.7–3.9 MB
-    // per open/close, measured with `--bench settings`.
-    setWindowTitle(tr("Settings"));
-    if (QCoreApplication::instance()->property("folia.bench").toBool()) {
-        // Like the bench main window: floats (stays painted) and is click-through.
-        setWindowFlag(Qt::WindowStaysOnTopHint, true);
-        setWindowFlag(Qt::WindowTransparentForInput, true);
-    }
+    setObjectName(QStringLiteral("folia-settings"));
+    setAutoFillBackground(true); // the theme's background (application palette)
     m_applyTimer.setSingleShot(true);
     m_applyTimer.setInterval(16); // at most one theme apply per frame while a value is held/dragged
-    connect(&m_applyTimer, &QTimer::timeout, this, &SettingsWindow::applyPending);
+    connect(&m_applyTimer, &QTimer::timeout, this, &SettingsPage::applyPending);
 
-    m_tabs = new QTabWidget(this);
-    m_tabs->addTab(buildGeneral(), tr("General"));
-    m_tabs->addTab(buildAppearance(), tr("Appearance"));
-    m_tabs->addTab(buildEditor(), tr("Editor"));
-    m_tabs->addTab(buildLayout(), tr("Layout"));
-    m_tabs->setCurrentIndex(qBound(0, s_lastTab, m_tabs->count() - 1));
-    connect(m_tabs, &QTabWidget::currentChanged, this, [](int i) { s_lastTab = i; });
+    // Header: the way back to the notes, and the page title.
+    auto *header = new QWidget(this);
+    auto *hl = new QHBoxLayout(header);
+    hl->setContentsMargins(8, 6, 16, 6);
+    hl->setSpacing(6);
+    m_back = new QToolButton(header);
+    m_back->setObjectName(QStringLiteral("settings.back"));
+    m_back->setAutoRaise(true);
+    m_back->setText(tr("Notes"));
+    m_back->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_back->setIconSize(QSize(16, 16));
+    m_back->setToolTip(tr("Back to your notes (Esc)"));
+    m_back->setAccessibleName(tr("Back to notes"));
+    connect(m_back, &QToolButton::clicked, this, [this] { m_app->closeSettings(); });
+    auto *title = new QLabel(tr("Settings"), header);
+    QFont tf = title->font();
+    tf.setPointSizeF(tf.pointSizeF() * 1.35);
+    tf.setWeight(QFont::DemiBold);
+    title->setFont(tf);
+    hl->addWidget(m_back);
+    hl->addSpacing(6);
+    hl->addWidget(title);
+    hl->addStretch(1);
+
+    // Body: the section list and the selected section.
+    m_nav = new QListWidget(this);
+    m_nav->setObjectName(QStringLiteral("settings.sections"));
+    m_nav->setFrameShape(QFrame::NoFrame);
+    m_nav->setFixedWidth(212);
+    m_nav->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_nav->setSpacing(1);
+    m_sections = new QStackedWidget(this);
+    const std::pair<QString, QWidget *> sections[] = {
+        {tr("General"), buildGeneral()},
+        {tr("Appearance"), buildAppearance()},
+        {tr("Editor"), buildEditor()},
+        {tr("Layout"), buildLayout()},
+    };
+    for (const auto &[name, content] : sections) {
+        auto *item = new QListWidgetItem(name, m_nav);
+        item->setSizeHint(QSize(0, 30));
+        // Each section scrolls on its own and keeps a readable width.
+        auto *scroll = new QScrollArea;
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setWidgetResizable(true);
+        scroll->viewport()->setAutoFillBackground(false);
+        auto *holder = new QWidget;
+        holder->setAutoFillBackground(false);
+        auto *h = new QHBoxLayout(holder);
+        h->setContentsMargins(24, 12, 24, 24);
+        content->setMaximumWidth(680);
+        h->addWidget(content, 1, Qt::AlignTop | Qt::AlignLeft);
+        h->addStretch(0);
+        scroll->setWidget(holder);
+        m_sections->addWidget(scroll);
+    }
+    connect(m_nav, &QListWidget::currentRowChanged, this, [this](int i) {
+        if (i < 0)
+            return;
+        m_sections->setCurrentIndex(i);
+        s_lastTab = i;
+    });
+    m_nav->setCurrentRow(qBound(0, s_lastTab, m_nav->count() - 1));
+
+    auto *divider = new QFrame(this);
+    divider->setFrameShape(QFrame::HLine);
+    divider->setFrameShadow(QFrame::Plain);
+    divider->setForegroundRole(QPalette::Mid);
+    auto *body = new QHBoxLayout;
+    body->setContentsMargins(0, 0, 0, 0);
+    body->setSpacing(0);
+    body->addWidget(m_nav);
+    body->addWidget(m_sections, 1);
     auto *lay = new QVBoxLayout(this);
-    lay->setContentsMargins(14, 14, 14, 14);
-    lay->addWidget(m_tabs);
+    lay->setContentsMargins(0, 0, 0, 0);
+    lay->setSpacing(0);
+    lay->addWidget(header);
+    lay->addWidget(divider);
+    lay->addLayout(body, 1);
 
-    auto *closeKey = new QShortcut(QKeySequence::Close, this);
-    connect(closeKey, &QShortcut::activated, this, &SettingsWindow::dismiss);
-    auto *escKey = new QShortcut(QKeySequence(Qt::Key_Escape), this);
-    connect(escKey, &QShortcut::activated, this, &SettingsWindow::dismiss);
+    for (const QKeySequence &k : {QKeySequence(Qt::Key_Escape), QKeySequence(QKeySequence::Close)}) {
+        auto *sc = new QShortcut(k, this);
+        sc->setContext(Qt::WidgetWithChildrenShortcut);
+        connect(sc, &QShortcut::activated, this, [this] { m_app->closeSettings(); });
+    }
+    setFocusProxy(m_nav); // opening Settings puts the keyboard on the section list
+    m_nav->viewport()->installEventFilter(this); // paintCount(): its paints count too
+    // The section list and back button follow the theme (refresh()): flat,
+    // rounded, in the layout's sidebar / selection / hover colors.
+    m_refreshers.push_back([this] {
+        const EditorTheme &t = m_app->editorContext()->theme();
+        ShellHost *shell = m_app->shell();
+        const auto named = [shell, &t](const char *name, const QColor &fallback) {
+            const QString c = shell->namedColor(QString::fromLatin1(name));
+            return c.isEmpty() ? fallback.name(QColor::HexArgb) : c;
+        };
+        m_back->setIcon(icons::icon(QStringLiteral("chevron-left"), t.text));
+        m_back->setStyleSheet(QStringLiteral("QToolButton{border:none;border-radius:6px;padding:4px 10px 4px 6px;color:%1;}"
+                                             "QToolButton:hover{background-color:%2;}QToolButton:pressed{background-color:%3;}")
+                                  .arg(t.text.name(), named("hover_bg", t.dim), named("border", t.dim)));
+        m_nav->setStyleSheet(QStringLiteral("QListWidget{background-color:%1;border:none;padding:8px 8px;outline:0;}"
+                                            "QListWidget::item{color:%2;padding:0 10px;border-radius:6px;}"
+                                            "QListWidget::item:hover{background-color:%3;}"
+                                            "QListWidget::item:selected{background-color:%4;color:%2;}")
+                                 .arg(named("sidebar", t.background), t.text.name(), named("hover_bg", t.dim),
+                                      named("selection_bg", t.selection)));
+    });
 
     // Keep in step with the app: a new layout, an OS light/dark switch.
     // Queued: loaded() fires before the host records the new file path.
     connect(app->shell(), &ShellHost::loaded, this, [this] { refresh(); }, Qt::QueuedConnection);
     connect(app->shell(), &ShellHost::loadFailed, this, [this] { refresh(); }, Qt::QueuedConnection);
     connect(app->editorContext(), &EditorContext::themeChanged, this, [this] { refresh(); });
-    setMinimumWidth(560);
 }
 
-void SettingsWindow::paintEvent(QPaintEvent *e)
+int SettingsPage::sectionCount() const
+{
+    return m_nav->count();
+}
+
+int SettingsPage::section() const
+{
+    return m_nav->currentRow();
+}
+
+void SettingsPage::setSection(int index)
+{
+    m_nav->setCurrentRow(qBound(0, index, m_nav->count() - 1));
+}
+
+void SettingsPage::paintEvent(QPaintEvent *e)
 {
     ++m_paints;
     QWidget::paintEvent(e);
 }
 
-void SettingsWindow::dismiss()
+bool SettingsPage::eventFilter(QObject *o, QEvent *e)
 {
-    if (m_applyTimer.isActive())
-        applyPending();
-    m_app->flushPreferences();
-    hide(); // keeps the native window for the next open
+    if (e->type() == QEvent::Paint && o == m_nav->viewport())
+        ++m_paints;
+    return QWidget::eventFilter(o, e);
 }
 
-void SettingsWindow::closeEvent(QCloseEvent *e)
+void SettingsPage::showEvent(QShowEvent *e)
 {
-    if (e->spontaneous()) {
-        // The title-bar close button. An accepted close makes Qt destroy the
-        // native window, which macOS then never frees; hide instead.
-        e->ignore();
-        dismiss();
-        return;
-    }
-    // A programmatic close (the app quitting): let it through.
-    if (m_applyTimer.isActive())
-        applyPending();
-    m_app->flushPreferences();
-    e->accept();
-}
-
-void SettingsWindow::showEvent(QShowEvent *e)
-{
-    m_over = m_app->themeOverrides(); // pick up anything changed while hidden
-    refresh();
     QWidget::showEvent(e);
+    refresh();
 }
 
-qint64 SettingsWindow::populateFontLists()
+qint64 SettingsPage::populateFontLists()
 {
     return m_bodyFamily->populate() + m_monoFamily->populate();
 }
 
-void SettingsWindow::runCommand(const QString &name, const QVariantMap &args)
+void SettingsPage::runCommand(const QString &name, const QVariantMap &args)
 {
     const CommandResult r = m_app->commands()->dispatchCommand(name, args);
     if (!r.ok && m_layoutStatus)
@@ -325,31 +406,31 @@ void SettingsWindow::runCommand(const QString &name, const QVariantMap &args)
 }
 
 // --------------------------------------------------- override plumbing ----
-QVariant SettingsWindow::over(const QString &path) const
+QVariant SettingsPage::over(const QString &path) const
 {
     return pathValue(m_over, path);
 }
 
-void SettingsWindow::setOver(const QString &path, const QVariant &value)
+void SettingsPage::setOver(const QString &path, const QVariant &value)
 {
     setPath(m_over, path, value);
     scheduleApply();
 }
 
-void SettingsWindow::clearOver(const QStringList &paths)
+void SettingsPage::clearOver(const QStringList &paths)
 {
     for (const QString &p : paths)
         removePath(m_over, p);
     scheduleApply();
 }
 
-void SettingsWindow::scheduleApply()
+void SettingsPage::scheduleApply()
 {
     if (!m_applyTimer.isActive())
         m_applyTimer.start();
 }
 
-void SettingsWindow::applyPending()
+void SettingsPage::applyPending()
 {
     m_applyTimer.stop();
     if (m_over != m_app->themeOverrides())
@@ -357,7 +438,7 @@ void SettingsWindow::applyPending()
     refresh();
 }
 
-void SettingsWindow::refresh()
+void SettingsPage::refresh()
 {
     if (!isVisible())
         return; // no work while hidden; showEvent() refreshes
@@ -372,7 +453,7 @@ void SettingsWindow::refresh()
     m_refreshing = false;
 }
 
-QWidget *SettingsWindow::withReset(QWidget *control, const QString &path, const QString &what)
+QWidget *SettingsPage::withReset(QWidget *control, const QString &path, const QString &what)
 {
     auto *row = new QWidget;
     auto *h = new QHBoxLayout(row);
@@ -395,14 +476,14 @@ QWidget *SettingsWindow::withReset(QWidget *control, const QString &path, const 
     return row;
 }
 
-void SettingsWindow::addRow(QFormLayout *form, const QString &label, QWidget *control, QWidget *row)
+void SettingsPage::addRow(QFormLayout *form, const QString &label, QWidget *control, QWidget *row)
 {
     auto *l = new QLabel(label);
     l->setBuddy(control);
     form->addRow(l, row ? row : control);
 }
 
-QWidget *SettingsWindow::doubleSpin(const QString &path, double min, double max, double step, int decimals,
+QWidget *SettingsPage::doubleSpin(const QString &path, double min, double max, double step, int decimals,
                                     const QString &suffix, std::function<double()> effective, const QString &what)
 {
     auto *s = new TrimmedSpinBox;
@@ -421,7 +502,7 @@ QWidget *SettingsWindow::doubleSpin(const QString &path, double min, double max,
     return withReset(s, path, what);
 }
 
-QWidget *SettingsWindow::intSpin(const QString &path, int min, int max, int step, const QString &suffix,
+QWidget *SettingsPage::intSpin(const QString &path, int min, int max, int step, const QString &suffix,
                                  std::function<double()> effective, const QString &what, const QString &special)
 {
     auto *s = new QSpinBox;
@@ -442,7 +523,7 @@ QWidget *SettingsWindow::intSpin(const QString &path, int min, int max, int step
 }
 
 // ------------------------------------------------------------- General ----
-QWidget *SettingsWindow::buildGeneral()
+QWidget *SettingsPage::buildGeneral()
 {
     auto *page = new QWidget;
     QFormLayout *form = newForm(page);
@@ -482,7 +563,7 @@ QWidget *SettingsWindow::buildGeneral()
 }
 
 // ---------------------------------------------------------- Appearance ----
-QWidget *SettingsWindow::buildAppearance()
+QWidget *SettingsPage::buildAppearance()
 {
     auto *page = new QWidget;
     QFormLayout *form = newForm(page);
@@ -524,7 +605,7 @@ QWidget *SettingsWindow::buildAppearance()
     m_accent->setObjectName(QStringLiteral("settings.colors.accent"));
     m_accent->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_accent->setIconSize(QSize(28, 16));
-    connect(m_accent, &QToolButton::clicked, this, &SettingsWindow::pickAccent);
+    connect(m_accent, &QToolButton::clicked, this, &SettingsPage::pickAccent);
     addRow(form, tr("Accent color:"), m_accent, withReset(m_accent, QStringLiteral("colors.accent"), tr("accent color")));
     m_refreshers.push_back([this, ectx] {
         const QColor c = ectx->theme().accent;
@@ -588,7 +669,7 @@ QWidget *SettingsWindow::buildAppearance()
     return page;
 }
 
-void SettingsWindow::pickAccent()
+void SettingsPage::pickAccent()
 {
     const QVariant before = over(QStringLiteral("colors.accent"));
     auto *dlg = new QColorDialog(m_app->editorContext()->theme().accent, this);
@@ -612,7 +693,7 @@ void SettingsWindow::pickAccent()
 }
 
 // -------------------------------------------------------------- Editor ----
-QWidget *SettingsWindow::buildEditor()
+QWidget *SettingsPage::buildEditor()
 {
     auto *page = new QWidget;
     QFormLayout *form = newForm(page);
@@ -675,7 +756,7 @@ QWidget *SettingsWindow::buildEditor()
 }
 
 // -------------------------------------------------------------- Layout ----
-QWidget *SettingsWindow::buildLayout()
+QWidget *SettingsPage::buildLayout()
 {
     auto *page = new QWidget;
     QFormLayout *form = newForm(page);
@@ -742,7 +823,7 @@ QWidget *SettingsWindow::buildLayout()
             QDir(m_app->userShellDir()).filePath(QStringLiteral("REFERENCE.md"))));
     });
     auto *reset = new QPushButton(tr("Reset to Default Layout…"));
-    connect(reset, &QPushButton::clicked, this, &SettingsWindow::confirmResetLayout);
+    connect(reset, &QPushButton::clicked, this, &SettingsPage::confirmResetLayout);
     more->addWidget(reference);
     more->addWidget(reset);
     more->addStretch(1);
@@ -753,7 +834,7 @@ QWidget *SettingsWindow::buildLayout()
     return page;
 }
 
-void SettingsWindow::refreshLayout()
+void SettingsPage::refreshLayout()
 {
     ShellHost *shell = m_app->shell();
     const QString active = m_app->activeLayout();
@@ -782,7 +863,7 @@ void SettingsWindow::refreshLayout()
     m_layoutStatus->setText(status);
 }
 
-void SettingsWindow::confirmResetLayout()
+void SettingsPage::confirmResetLayout()
 {
     auto *box = new QMessageBox(QMessageBox::Warning, tr("Reset to Default Layout"),
                                 tr("Replace your default.lua with the original default layout?"),

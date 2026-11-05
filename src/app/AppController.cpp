@@ -2,7 +2,7 @@
 
 #include "app/Platform.h"
 #include "app/Preferences.h"
-#include "app/SettingsWindow.h"
+#include "app/SettingsPage.h"
 #include "core/Instrument.h"
 #include "core/LucideIcons.h"
 #include "editor/EditorContext.h"
@@ -29,6 +29,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QStackedWidget>
 #include <QStandardPaths>
 #include <QTextBlock>
 #include <QTextDocument>
@@ -131,9 +132,11 @@ void AppController::installUserPresets()
         "936462a873193beb9070e12f025f36b9feef4a6e6745ccb4fb22dc3b8e210215",
         "d90c1d7fb06d897307ba961c62c89d7b329bbd97f4d2386859bc9f56a010c2fa",
         "26d03f8283819b25826128c1307abb023fa4d613f18cf791d3a99ba59bcee08b",
-        // Before the Settings window: default, REFERENCE.md
+        // Before Settings: default, REFERENCE.md
         "a3d1a7fbd23bc77951db4f828bd4093e11096bc02bf2769c83e32a09ed4742e9",
         "cc40ebbecffb15a668f30e1195f855ca4eb1972f3d19eca859446d8b983539f8",
+        // Settings as a separate window: REFERENCE.md
+        "89d527fa65c6bf6b10d4102a51b0d53b08d16222c9e2b4112f9438cf8c7c2fce",
     };
     auto digest = [](const QString &path) {
         QFile f(path);
@@ -308,8 +311,10 @@ void AppController::buildWindow()
     w->setWindowTitle(QStringLiteral("Folia"));
     w->resize(1180, 780);
     w->canClose = [this] { return shutdown(true); };
-    m_shellContainer = new QWidget(w);
-    w->setCentralWidget(m_shellContainer);
+    m_stack = new QStackedWidget(w);
+    w->setCentralWidget(m_stack);
+    m_shellContainer = new QWidget(m_stack);
+    m_stack->addWidget(m_shellContainer);
     m_pane = new EditorPane(m_ectx, m_shellContainer);
 
     ShellHost::Deps deps;
@@ -442,17 +447,56 @@ void AppController::showSettings()
     if (!m_settings) {
         QElapsedTimer t;
         t.start();
-        m_settings = new SettingsWindow(this, m_window);
+        m_settings = new SettingsPage(this, m_stack);
+        m_stack->addWidget(m_settings);
         instr::record("settings_create_us", t.nsecsElapsed() / 1000);
     }
-    m_settings->show();
-    m_settings->raise();
-    m_settings->activateWindow();
+    if (m_stack->currentWidget() != m_settings) {
+        if (m_active)
+            m_pane->editor()->storeViewState();
+        m_shell->setShortcutsEnabled(false); // Mod+N etc. would act on the hidden page
+        m_stack->setCurrentWidget(m_settings);
+        updateWindowTitle();
+    }
+    m_settings->setFocus(Qt::OtherFocusReason); // the section list (focus proxy)
 }
 
-SettingsWindow *AppController::settingsWindow() const
+void AppController::closeSettings()
+{
+    if (!m_settings)
+        return;
+    m_settings->applyPending();
+    flushPreferences();
+    SettingsPage *page = m_settings;
+    m_settings = nullptr;
+    m_stack->setCurrentWidget(m_shellContainer);
+    m_stack->removeWidget(page);
+    page->deleteLater(); // nothing of it stays while closed
+    m_shell->setShortcutsEnabled(true);
+    updateWindowTitle();
+    if (m_active)
+        m_pane->focusBody();
+}
+
+bool AppController::settingsOpen() const
+{
+    return m_settings && m_stack->currentWidget() == m_settings;
+}
+
+SettingsPage *AppController::settingsPage() const
 {
     return m_settings.data();
+}
+
+void AppController::updateWindowTitle()
+{
+    if (settingsOpen())
+        m_window->setWindowTitle(tr("Settings — Folia"));
+    else if (m_active)
+        m_window->setWindowTitle((m_active->title().isEmpty() ? tr("Untitled") : m_active->title())
+                                 + QStringLiteral(" — Folia"));
+    else
+        m_window->setWindowTitle(QStringLiteral("Folia"));
 }
 
 void AppController::setThemeOverrides(const QVariantMap &overrides)
@@ -520,7 +564,8 @@ PageSession *AppController::createSession(PageId id)
             if (o != s)
                 o->refreshLinkTo(s->pageId());
         if (s == m_active)
-            m_window->setWindowTitle(t.isEmpty() ? tr("Untitled — Folia") : t + QStringLiteral(" — Folia"));
+            updateWindowTitle();
+        Q_UNUSED(t);
     });
     return s;
 }
@@ -561,6 +606,10 @@ void AppController::openPage(PageId id, bool focusEditor)
 {
     if (id <= 0)
         return;
+    // Going to a page (menu, command, link) leaves Settings; the first page
+    // opened at startup, which arrives asynchronously, does not.
+    if (m_active && settingsOpen())
+        closeSettings();
     if (m_active && m_active->pageId() == id) {
         if (focusEditor)
             m_pane->focusBody();
@@ -606,7 +655,7 @@ void AppController::activate(PageSession *s, qint64 startedNs, bool cached, bool
     touchCache(s->pageId());
     m_pane->setSession(s);
     m_data->noteTitle(s->pageId(), s->title());
-    m_window->setWindowTitle((s->title().isEmpty() ? tr("Untitled") : s->title()) + QStringLiteral(" — Folia"));
+    updateWindowTitle();
     if (focusEditor)
         m_pane->focusBody();
     const qint64 us = (m_openClock.nsecsElapsed() - startedNs) / 1000;
@@ -628,6 +677,8 @@ void AppController::activate(PageSession *s, qint64 startedNs, bool cached, bool
 PageId AppController::newPage(PageId parent, int index, const QString &title, bool focusTitle)
 {
     instr::Scope scope("page_new_us");
+    if (settingsOpen())
+        closeSettings();
     QElapsedTimer t;
     t.start();
     const bool parentHeld = parent != 0 && m_cache.contains(parent);
@@ -756,8 +807,6 @@ void AppController::reclaimMemory(bool critical)
     if (m_previews)
         m_previews->trim(critical ? 0 : (1 << 20));
     icons::clearCache();
-    if (critical && m_settings && !m_settings->isVisible())
-        m_settings->deleteLater(); // its widgets and buffers; reopening recreates it
     if (m_active && m_active->layout())
         m_active->layout()->setLayoutCap(critical ? 150 : 300);
     instr::set(instr::DocCacheEntries, m_cache.size());
@@ -1024,6 +1073,8 @@ void AppController::registerCommands()
                 return okResult();
             }, {}});
     c->add({QStringLiteral("editor.undo"), tr("Undo"), {}, {}, [this](const QVariantMap &) {
+                if (settingsOpen())
+                    return fail(tr("Settings are open"));
                 if (m_pane->titleField()->hasFocus())
                     m_pane->titleField()->undo();
                 else
@@ -1031,6 +1082,8 @@ void AppController::registerCommands()
                 return okResult();
             }, {}});
     c->add({QStringLiteral("editor.redo"), tr("Redo"), {}, {}, [this](const QVariantMap &) {
+                if (settingsOpen())
+                    return fail(tr("Settings are open"));
                 if (m_pane->titleField()->hasFocus())
                     m_pane->titleField()->redo();
                 else
