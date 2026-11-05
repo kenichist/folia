@@ -82,5 +82,8 @@ Result render(const QString &tex, const Style &style, const Limits &limits = {},
 // Font family actually used for math on this system (for the release report).
 QString resolvedFontFamily();
 
+// True once the one-time font setup has run (a render is then ~10-40 µs).
+bool ready();
+
 } // namespace math
 } // namespace folia

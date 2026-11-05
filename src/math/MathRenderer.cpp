@@ -127,5 +127,7 @@ QString resolvedFontFamily()
     return fd ? fd->mathFamily : QString();
 }
 
+bool ready() { return detail::fontDataReady(); }
+
 } // namespace math
 } // namespace folia

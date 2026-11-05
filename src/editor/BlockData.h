@@ -11,6 +11,7 @@
 #include <QTextBlockUserData>
 #include <QTextFormat>
 #include <memory>
+#include <vector>
 
 namespace folia {
 
@@ -53,6 +54,24 @@ constexpr int kLinkHrefProperty = QTextFormat::UserProperty + 3;
 
 struct BlockTracker; // per-document bookkeeping, see PageSession
 
+// Inline $…$ formulas of a laid-out paragraph line. Allocated only for lines
+// that have any, rebuilt on each layout and freed when the layout is evicted.
+// A span with a display list is drawn rendered over its (invisible,
+// re-spaced) source; the span the caret touches shows its source.
+struct InlineMathState {
+    struct Span {
+        int start = 0; // block-relative position of the opening '$'
+        int end = 0;   // one past the closing '$'
+        std::shared_ptr<const MathDisplayList> list; // set: drawn rendered
+        size_t key = 0;     // hash of the span's source and point size
+        qreal natural = 0;  // advance of the source in the line's font
+    };
+    std::vector<Span> spans;
+    int revealed = -1;    // span showing its source because of the caret
+    bool pending = false; // a render was requested; re-probe after arrivals
+    quint32 gen = 0;      // VirtualLayout arrival generation at layout time
+};
+
 class BlockData : public QTextBlockUserData {
 public:
     BlockData(BlockId id, BlockTracker *tracker);
@@ -73,6 +92,9 @@ public:
     QString previewError;
     bool previewPending = false;
     float previewHeight = 0;
+
+    // Inline formulas (paragraph lines with $…$ only).
+    std::unique_ptr<InlineMathState> inlineMath;
 
     BlockTracker *tracker = nullptr;
 };

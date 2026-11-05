@@ -7,6 +7,7 @@
 #include "math/MathRenderer.h"
 #endif
 
+#include <QElapsedTimer>
 #include <QFontMetricsF>
 #include <QPainter>
 #include <QPainterPath>
@@ -18,6 +19,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace folia {
 
@@ -27,6 +29,7 @@ constexpr qreal kBottomSlack = 160; // scroll past the end
 constexpr qreal kCodeInset = 14;
 constexpr qreal kPreviewPad = 8;
 constexpr qreal kCopyIcon = 13;
+constexpr qreal kInlinePad = 1.5; // space on each side of a formula drawn in place
 
 LineRole roleOf(const QTextBlock &b)
 {
@@ -84,6 +87,13 @@ VirtualLayout::VirtualLayout(QTextDocument *doc, EditorContext *ctx)
 {
     setPaintDevice(nullptr);
     registerHandler(kPageLinkObjectType, new PageLinkHandler(this));
+    // Formulas rendered on the worker are shown in one repaint per burst,
+    // a couple of frames later, never right after the frame that asked.
+    m_inlineRepaint.setSingleShot(true);
+    m_inlineRepaint.setInterval(40);
+    connect(&m_inlineRepaint, &QTimer::timeout, this, [this] {
+        emit update(QRectF(0, m_viewTop, 1e9, qMax<qreal>(1, m_viewBottom - m_viewTop)));
+    });
 }
 
 // ----------------------------------------------------------- geometry -----
@@ -401,6 +411,10 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
 {
     const EditorTheme &t = m_ctx->theme();
     const QString text = block.text();
+    if (role != LineRole::Para) {
+        if (BlockData *bd = dataOf(block); bd && bd->inlineMath)
+            bd->inlineMath.reset(); // no longer a paragraph: no inline formulas
+    }
     const int len = int(text.size());
     QList<QTextLayout::FormatRange> fmts;
     auto add = [&](int s, int l, const QTextCharFormat &f) {
@@ -549,6 +563,32 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
     }
     case LineRole::Para: {
         int i = 0;
+        // Inline formulas are drawn rendered in place, except the one the
+        // caret touches (and none while an IME composition is open here:
+        // its text would shift the spans).
+        BlockData *bd = dataOf(block);
+        InlineMathState *im = nullptr;
+        const bool renderInline = m_ctx->previews && tl->preeditAreaText().isEmpty();
+        const int caretRel = (m_caret >= block.position() && m_caret < block.position() + block.length())
+            ? m_caret - block.position() : -2;
+        qreal inlinePt = 0;
+        std::optional<QFontMetricsF> inlineFm;
+        // The previous layout's formulas: a span whose source is unchanged
+        // (typing elsewhere on the line) reuses its result and measurement.
+        std::vector<InlineMathState::Span> previous;
+        auto spanState = [&]() {
+            if (!im) {
+                if (!bd->inlineMath)
+                    bd->inlineMath = std::make_unique<InlineMathState>();
+                im = bd->inlineMath.get();
+                previous.swap(im->spans);
+                im->spans.clear();
+                im->revealed = -1;
+                im->pending = false;
+                im->gen = m_inlineGen;
+            }
+            return im;
+        };
         const int h = headingLevel(text);
         if (h) {
             add(0, h + 1, dimF);
@@ -611,10 +651,54 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
                 while (e < len && !(text[e] == QLatin1Char('$') && text[e - 1] != QLatin1Char('\\')))
                     ++e;
                 if (e < len && e > i + 1) {
+                    const int end = e + 1;
+                    std::shared_ptr<const MathDisplayList> list;
+                    qreal natural = 0;
+                    if (bd) {
+                        InlineMathState *st = spanState();
+                        const bool touched = caretRel >= i && caretRel <= end;
+                        if (touched)
+                            st->revealed = int(st->spans.size());
+                        if (inlinePt <= 0)
+                            inlinePt = roleFont(block, role).pointSizeF();
+                        const size_t key = qHash(QStringView(text).mid(i, end - i), size_t(inlinePt * 64));
+                        if (renderInline && !touched) {
+                            for (const InlineMathState::Span &p : previous)
+                                if (p.key == key && p.list) {
+                                    list = p.list;
+                                    natural = p.natural;
+                                    break;
+                                }
+                            if (!list)
+                                list = inlineFormula(text.mid(i + 1, e - i - 1), inlinePt, &st->pending);
+                        }
+                        st->spans.push_back({i, end, list, key, natural});
+                    }
+#ifdef FOLIA_WITH_MATH
+                    if (list) {
+                        // The source stays in the line (positions, selection and
+                        // copy are unchanged) but is invisible and spaced to the
+                        // rendered width; draw() paints the formula over it.
+                        const int n = end - i;
+                        if (natural <= 0) {
+                            if (!inlineFm)
+                                inlineFm.emplace(roleFont(block, role));
+                            natural = inlineFm->horizontalAdvance(text.mid(i, n));
+                            im->spans.back().natural = natural;
+                        }
+                        QTextCharFormat cf;
+                        cf.setForeground(QBrush(Qt::transparent));
+                        cf.setFontLetterSpacingType(QFont::AbsoluteSpacing);
+                        cf.setFontLetterSpacing((list->width + 2 * kInlinePad - natural) / n);
+                        add(i, n, cf);
+                        i = end;
+                        continue;
+                    }
+#endif
                     add(i, 1, dimF);
                     add(i + 1, e - i - 1, mathF);
                     add(e, 1, dimF);
-                    i = e + 1;
+                    i = end;
                     continue;
                 }
             } else if (c == QLatin1Char('*') && i + 1 < len && text[i + 1] == QLatin1Char('*')) {
@@ -658,6 +742,8 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
             if (f.isValid() && links::isLink(f.charFormat()))
                 add(f.position() - block.position(), f.length(), linkF);
         }
+        if (bd && !im && bd->inlineMath)
+            bd->inlineMath.reset(); // no formulas left on this line
         break;
     }
     default:
@@ -715,6 +801,16 @@ void VirtualLayout::layoutBlock(const QTextBlock &block, int number) const
     const qreal x = columnLeft() + indent;
     const qreal lw = qMax<qreal>(40, columnWidth() - 2 * indent);
     qreal y = topPadFor(block, role);
+    // Lines with formulas drawn in place take the slower path below.
+    const InlineMathState *im = nullptr;
+#ifdef FOLIA_WITH_MATH
+    if (BlockData *d = dataOf(block); d && d->inlineMath)
+        for (const InlineMathState::Span &sp : d->inlineMath->spans)
+            if (sp.list) {
+                im = d->inlineMath.get();
+                break;
+            }
+#endif
     tl->beginLayout();
     for (;;) {
         QTextLine line = tl->createLine();
@@ -722,8 +818,32 @@ void VirtualLayout::layoutBlock(const QTextBlock &block, int number) const
             break;
         line.setLeadingIncluded(true);
         line.setLineWidth(lw);
-        line.setPosition(QPointF(x, y));
-        y += line.height() * t.lineSpacing;
+        qreal above = 0, below = 0;
+#ifdef FOLIA_WITH_MATH
+        if (im) {
+            // A rendered formula is one unit: if it would be split across
+            // lines, end this line before it.
+            const int ls = line.textStart(), le = ls + line.textLength();
+            for (const InlineMathState::Span &sp : im->spans) {
+                if (sp.list && sp.start > ls && sp.start < le && sp.end > le) {
+                    const qreal w = line.cursorToX(sp.start) - line.x();
+                    if (w > 1)
+                        line.setLineWidth(w);
+                    break;
+                }
+            }
+            // Tall formulas (fractions, roots…) get room above and below.
+            const int s2 = line.textStart(), e2 = s2 + line.textLength();
+            for (const InlineMathState::Span &sp : im->spans) {
+                if (sp.list && sp.start >= s2 && sp.start < e2) {
+                    above = qMax(above, sp.list->ascent - line.ascent());
+                    below = qMax(below, sp.list->descent - line.descent());
+                }
+            }
+        }
+#endif
+        line.setPosition(QPointF(x, y + above));
+        y += line.height() * t.lineSpacing + above + below;
     }
     tl->endLayout();
     if (role == LineRole::MathClose || role == LineRole::MathSingle) {
@@ -839,6 +959,100 @@ void VirtualLayout::requestPreview(const QTextBlock &block, BlockData *d, LineRo
 
 void VirtualLayout::previewArrived(quint64) {}
 
+std::shared_ptr<const MathDisplayList> VirtualLayout::inlineFormula(const QString &source, qreal pointSize,
+                                                                   bool *pending) const
+{
+#ifdef FOLIA_WITH_MATH
+    IPreviewService *svc = m_ctx->previews;
+    if (!svc || source.trimmed().isEmpty())
+        return nullptr;
+    // Same request as the caret's preview bubble, so a formula just edited
+    // is already cached when the caret leaves it.
+    PreviewRequest req;
+    req.kind = PreviewKind::InlineMath;
+    req.source = source;
+    req.pointSize = pointSize;
+    req.color = m_ctx->theme().text;
+    PreviewResult cached;
+    if (svc->lookup(req, &cached))
+        return cached.ok ? cached.list : nullptr; // an error keeps the source visible
+    if (m_inlineBudgetUs > 0) {
+        // Warm renderer: render here, within this paint's budget.
+        QElapsedTimer t;
+        t.start();
+        const bool done = svc->renderNow(req, &cached, int(qMax<qint64>(1, m_inlineBudgetUs / 1000)));
+        m_inlineBudgetUs -= t.nsecsElapsed() / 1000;
+        if (done)
+            return cached.ok ? cached.list : nullptr;
+    }
+    const quint64 key = previewHash(source, pointSize) ^ 0x1f83d9abfb41bd6bull;
+    *pending = true;
+    if (m_inlineRequested.contains(key))
+        return nullptr; // already in flight
+    m_inlineRequested.insert(key);
+    // Cold renderer or over budget: render on the preview worker. The request
+    // id is unique to this layout and formula, so nothing supersedes it.
+    req.block = BlockId(((key ^ (quint64(quintptr(this)) * 0x9e3779b97f4a7c15ull)) >> 3) | (quint64(1) << 61));
+    req.blockRev = key;
+    QPointer<VirtualLayout> self(const_cast<VirtualLayout *>(this));
+    svc->renderPreview(req, const_cast<VirtualLayout *>(this), [self, key](PreviewResult) {
+        if (self)
+            self->inlineFormulaArrived(key);
+    });
+    return nullptr;
+#else
+    Q_UNUSED(source);
+    Q_UNUSED(pointSize);
+    Q_UNUSED(pending);
+    return nullptr;
+#endif
+}
+
+void VirtualLayout::inlineFormulaArrived(quint64 key)
+{
+    m_inlineRequested.remove(key);
+    ++m_inlineGen;
+    // Lines waiting for a formula re-probe the cache when next painted.
+    if (!m_inlineRepaint.isActive())
+        m_inlineRepaint.start();
+}
+
+void VirtualLayout::setCaret(int position)
+{
+    if (position == m_caret)
+        return;
+    const int old = m_caret;
+    m_caret = position;
+    m_inlineBudgetUs = 2000; // the formula the caret leaves renders right away
+    QTextDocument *doc = document();
+    // Only lines with formulas care, and only when the caret starts or stops
+    // touching one of them: then that line is laid out again.
+    auto refresh = [&](int pos) {
+        if (pos < 0 || pos >= doc->characterCount())
+            return QTextBlock();
+        const QTextBlock b = doc->findBlock(pos);
+        const BlockData *d = b.isValid() ? dataOf(b) : nullptr;
+        if (!d || !d->inlineMath)
+            return b;
+        int want = -1;
+        if (m_caret >= b.position() && m_caret < b.position() + b.length()) {
+            const int rel = m_caret - b.position();
+            const auto &spans = d->inlineMath->spans;
+            for (int k = 0; k < int(spans.size()); ++k)
+                if (rel >= spans[size_t(k)].start && rel <= spans[size_t(k)].end) {
+                    want = k;
+                    break;
+                }
+        }
+        if (want != d->inlineMath->revealed)
+            relayoutBlock(b);
+        return b;
+    };
+    const QTextBlock ob = refresh(old);
+    if (!ob.isValid() || !(ob.position() <= position && position < ob.position() + ob.length()))
+        refresh(position);
+}
+
 quint64 VirtualLayout::previewHash(const QString &source, qreal pointSize)
 {
     return quint64(qHash(source)) ^ (quint64(qRound(pointSize * 16)) << 48) ^ 0x9e3779b97f4a7c15ull;
@@ -935,6 +1149,7 @@ void VirtualLayout::draw(QPainter *painter, const PaintContext &ctx)
         clip = QRectF(0, m_viewTop, m_width, qMax<qreal>(1, m_viewBottom - m_viewTop));
     m_inPaint = true;
     m_heightChangedInPaint = false;
+    m_inlineBudgetUs = 3000;
     const int first = blockAtY(clip.top());
     if (first < 0) {
         m_inPaint = false;
@@ -948,6 +1163,9 @@ void VirtualLayout::draw(QPainter *painter, const PaintContext &ctx)
     for (; block.isValid(); block = block.next(), ++i) {
         if (!(m_st[size_t(i)] & StLaidOut) || block.layout()->lineCount() == 0)
             layoutBlock(block, i);
+        else if (const BlockData *wd = dataOf(block);
+                 wd && wd->inlineMath && wd->inlineMath->pending && wd->inlineMath->gen != m_inlineGen)
+            layoutBlock(block, i); // a formula it waits for may have arrived
         const qreal top = topOf(i);
         if (top > clip.bottom())
             break;
@@ -963,6 +1181,40 @@ void VirtualLayout::draw(QPainter *painter, const PaintContext &ctx)
         const int blen = block.length();
         QList<QTextLayout::FormatRange> sels;
         bool selectionCoversSeparator = false;
+        const BlockData *bdata = dataOf(block);
+        const InlineMathState *ims = bdata && bdata->inlineMath ? bdata->inlineMath.get() : nullptr;
+        // Over a formula drawn in place, a selection paints its background
+        // but not the (invisible) source glyphs.
+        auto addSelection = [&](const QTextLayout::FormatRange &fr) {
+            if (!ims) {
+                sels.push_back(fr);
+                return;
+            }
+            int at = fr.start;
+            const int stop = fr.start + fr.length;
+            for (const InlineMathState::Span &sp : ims->spans) {
+                if (!sp.list || sp.end <= at || sp.start >= stop)
+                    continue;
+                if (sp.start > at) {
+                    QTextLayout::FormatRange a = fr;
+                    a.start = at;
+                    a.length = sp.start - at;
+                    sels.push_back(a);
+                }
+                QTextLayout::FormatRange m = fr;
+                m.start = qMax(at, sp.start);
+                m.length = qMin(stop, sp.end) - m.start;
+                m.format.clearForeground();
+                sels.push_back(m);
+                at = qMin(stop, sp.end);
+            }
+            if (at < stop) {
+                QTextLayout::FormatRange c = fr;
+                c.start = at;
+                c.length = stop - at;
+                sels.push_back(c);
+            }
+        };
         for (const Selection &s : ctx.selections) {
             const int ss = s.cursor.selectionStart();
             const int se = s.cursor.selectionEnd();
@@ -973,7 +1225,7 @@ void VirtualLayout::draw(QPainter *painter, const PaintContext &ctx)
             fr.length = qMin(se, bpos + blen - 1) - bpos - fr.start;
             fr.format = s.format;
             if (fr.length > 0)
-                sels.push_back(fr);
+                addSelection(fr);
             if (se > bpos + blen - 1 && ss < bpos + blen) {
                 selectionCoversSeparator = true;
                 selFmt = s.format;
@@ -981,6 +1233,22 @@ void VirtualLayout::draw(QPainter *painter, const PaintContext &ctx)
         }
         const QPointF origin(0, top);
         tl->draw(painter, origin, sels, clip);
+#ifdef FOLIA_WITH_MATH
+        if (ims) {
+            for (const InlineMathState::Span &sp : ims->spans) {
+                if (!sp.list)
+                    continue;
+                const QTextLine l = tl->lineForTextPosition(sp.start);
+                if (!l.isValid())
+                    continue;
+                const qreal x0 = l.cursorToX(sp.start);
+                const bool sameLine = sp.end <= l.textStart() + l.textLength();
+                const qreal slot = sameLine ? l.cursorToX(sp.end) - x0 : sp.list->width + 2 * kInlinePad;
+                sp.list->paint(painter, QPointF(x0 + qMax<qreal>(0, (slot - sp.list->width) / 2), top + l.y() + l.ascent()),
+                               t.text);
+            }
+        }
+#endif
         if (selectionCoversSeparator && tl->lineCount() > 0) {
             const QTextLine ll = tl->lineAt(tl->lineCount() - 1);
             const QRectF sep(ll.x() + ll.naturalTextWidth(), top + ll.y(), 6, ll.height());
@@ -1062,6 +1330,8 @@ void VirtualLayout::evictFarBlocks(int firstVisible, int lastVisible)
             continue; // pinned: active composition
         tl->clearLayout();
         tl->clearFormats(); // frees shaped glyph data
+        if (BlockData *d = dataOf(b))
+            d->inlineMath.reset(); // rebuilt (from the cache) if it comes back
         m_st[size_t(i)] &= uint8_t(~StLaidOut);
         --m_laidOut;
     }
@@ -1095,7 +1365,15 @@ int VirtualLayout::hitTest(const QPointF &point, Qt::HitTestAccuracy accuracy) c
             return -1;
     }
     const int off = line.xToCursor(local.x(), QTextLine::CursorBetweenCharacters);
-    return b.position() + qBound(0, off, b.length() - 1);
+    int rel = qBound(0, off, b.length() - 1);
+    // A click on a formula drawn in place opens its source, caret after '$'.
+    if (const BlockData *d = dataOf(b); d && d->inlineMath)
+        for (const InlineMathState::Span &sp : d->inlineMath->spans)
+            if (sp.list && rel > sp.start && rel < sp.end) {
+                rel = sp.start + 1;
+                break;
+            }
+    return b.position() + rel;
 }
 
 // ----------------------------------------------------- inline objects -----

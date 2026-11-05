@@ -97,6 +97,51 @@ void PreviewService::setCacheCap(qint64 bytes)
     trim(m_cap);
 }
 
+bool PreviewService::renderNow(const PreviewRequest &req, PreviewResult *out, int maxMillis)
+{
+#ifdef FOLIA_WITH_MATH
+    // Only once the renderer is warm (its one-time font setup runs on the
+    // worker) and for ordinary sizes; a render then takes tens of µs.
+    if (!math::ready() || req.source.size() > 400)
+        return false;
+    QElapsedTimer t;
+    t.start();
+    math::Style st;
+    st.pointSize = req.pointSize;
+    st.display = req.kind == PreviewKind::DisplayMath;
+    math::Limits lim;
+    lim.maxMillis = qMax(1, maxMillis);
+    math::Result r = math::render(req.source, st, lim);
+    if (!r.ok && r.error.startsWith(QLatin1String("render time limit")))
+        return false; // over budget here: let the worker take its full time
+    PreviewResult res;
+    res.block = req.block;
+    res.blockRev = req.blockRev;
+    res.ok = r.ok;
+    res.error = r.error;
+    res.errorOffset = r.errorOffset;
+    if (r.ok)
+        res.list = std::make_shared<const MathDisplayList>(std::move(r.list));
+    res.renderMicros = t.nsecsElapsed() / 1000;
+    ++m_rendered;
+    instr::add(instr::PreviewRenders);
+    instr::record("preview_render_us", res.renderMicros);
+    Entry e;
+    e.list = res.list;
+    e.error = res.error;
+    e.errorOffset = res.errorOffset;
+    e.bytes = 96 + listBytes(res) + res.error.size() * 2;
+    insert(keyFor(req), std::move(e));
+    *out = res;
+    return true;
+#else
+    Q_UNUSED(req);
+    Q_UNUSED(out);
+    Q_UNUSED(maxMillis);
+    return false;
+#endif
+}
+
 void PreviewService::cancel(BlockId block)
 {
     auto it = m_latest.find(block);

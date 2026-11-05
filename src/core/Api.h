@@ -100,6 +100,11 @@ public:
     virtual void renderPreview(const PreviewRequest &req, QObject *ctx,
                                std::function<void(PreviewResult)> done) = 0;
     virtual void cancel(BlockId block) = 0;
+    // Synchronous cache probe (main thread); never renders. Optional.
+    virtual bool lookup(const PreviewRequest &, PreviewResult *) { return false; }
+    // Render now on the calling thread and cache the result, when that is
+    // cheap (renderer warmed up, within maxMillis). False: use renderPreview.
+    virtual bool renderNow(const PreviewRequest &, PreviewResult *, int /*maxMillis*/) { return false; }
 };
 
 // --------------------------------------------------------------- commands --
