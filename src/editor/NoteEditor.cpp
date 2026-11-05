@@ -97,6 +97,11 @@ NoteEditor::NoteEditor(EditorContext *ctx, QWidget *parent) : QTextEdit(parent),
     m_linkTimer.setInterval(90);
     connect(&m_linkTimer, &QTimer::timeout, this, &NoteEditor::updateLinkBubble);
     connect(this, &QTextEdit::cursorPositionChanged, this, &NoteEditor::scheduleLinkPopups);
+    // Inline formulas show their source only while the caret touches them.
+    connect(this, &QTextEdit::cursorPositionChanged, this, [this] {
+        if (m_session && m_session->layout())
+            m_session->layout()->setCaret(textCursor().position());
+    });
     connect(this, &QTextEdit::selectionChanged, this, &NoteEditor::scheduleLinkPopups);
     caretActivity();
     applyTheme();
@@ -181,6 +186,7 @@ void NoteEditor::setSession(PageSession *s)
     c.setPosition(qBound(0, s->viewAnchor(), maxPos));
     c.setPosition(qBound(0, s->viewPosition(), maxPos), QTextCursor::KeepAnchor);
     setTextCursor(c);
+    s->layout()->setCaret(c.position());
     const int y = s->viewScrollY();
     verticalScrollBar()->setValue(y);
     if (y == 0 && (s->viewPosition() > 0))

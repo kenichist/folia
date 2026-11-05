@@ -155,6 +155,8 @@ struct FontData {
 
 // Lazily built, never freed. nullptr when no QGuiApplication exists yet.
 const FontData *fontData();
+// True once fontData() has been built (never builds it).
+bool fontDataReady();
 
 // Cached ink/advance metrics of `text` in `variant`, normalized to 1 em.
 // *missNanos (optional) receives the time spent when this was a cache miss.

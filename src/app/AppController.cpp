@@ -1016,7 +1016,7 @@ void AppController::seedWorkspace()
         block(BlockKind::Text, tr("Folia is a small, local notes app: nested pages, LaTeX math and code blocks.")),
         block(BlockKind::Text, tr("## Basics")),
         block(BlockKind::Text, tr("- Type anywhere. Everything autosaves locally within a second.")),
-        block(BlockKind::Text, tr("- Inline math like $e^{i\\pi} + 1 = 0$ shows a preview while the caret is inside it.")),
+        block(BlockKind::Text, tr("- Inline math like $e^{i\\pi} + 1 = 0$ renders in place; put the caret on it to edit the source.")),
         block(BlockKind::Text, tr("- Start a line with ``` for code or $$ for a display equation, then press Enter.")),
         block(BlockKind::Text, tr("- Links: select text and press Mod+K, or paste an address onto it. Click a link for "
                                   "Open, Edit or Remove; Mod-click opens it, like [Lucide icons](https://lucide.dev/icons).")),

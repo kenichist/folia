@@ -18,7 +18,9 @@
 
 #include <QAbstractTextDocumentLayout>
 #include <QPointer>
+#include <QSet>
 #include <QTextBlock>
+#include <QTimer>
 #include <vector>
 
 namespace folia {
@@ -45,6 +47,9 @@ public:
 
     void relayoutAll();
     void relayoutBlock(const QTextBlock &block);
+    // Document position of the caret. Inline $…$ formulas are drawn rendered
+    // in place except the one the caret touches, which shows its source.
+    void setCaret(int position);
     // Viewport (document coordinates) used to decide what to keep laid out.
     void setViewport(qreal top, qreal bottom);
     void setLayoutCap(int maxLaidOutBlocks) { m_cap = maxLaidOutBlocks; }
@@ -79,6 +84,8 @@ private:
     void evictFarBlocks(int firstVisible, int lastVisible);
     void applyFormats(const QTextBlock &block, LineRole role, QTextLayout *layout) const;
     void requestPreview(const QTextBlock &block, BlockData *data, LineRole role) const;
+    std::shared_ptr<const MathDisplayList> inlineFormula(const QString &source, qreal pointSize, bool *pending) const;
+    void inlineFormulaArrived(quint64 key);
     QString mathSourceFor(const QTextBlock &closeOrSingle, LineRole role) const;
     void paintBlockDecorations(QPainter *p, const QTextBlock &block, LineRole role,
                                const QRectF &rect, const PaintContext &ctx) const;
@@ -99,6 +106,15 @@ private:
     qreal m_viewTop = 0, m_viewBottom = 0;
     mutable bool m_inPaint = false;
     mutable bool m_heightChangedInPaint = false;
+    // Inline formulas: caret position, renders in flight (deduplicated) and
+    // a generation bumped per arrival so waiting lines re-probe once.
+    int m_caret = -1;
+    mutable QSet<quint64> m_inlineRequested;
+    mutable quint32 m_inlineGen = 0;
+    // Main-thread render time still allowed in this paint (µs): formulas are
+    // drawn in the paint that first needs them instead of a second one.
+    mutable qint64 m_inlineBudgetUs = 0;
+    QTimer m_inlineRepaint;
 };
 
 } // namespace folia

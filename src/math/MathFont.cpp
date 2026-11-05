@@ -495,6 +495,8 @@ const FontData *fontData()
     return p;
 }
 
+bool fontDataReady() { return g_fontData.load(std::memory_order_acquire) != nullptr; }
+
 QFont makeFont(const FontData &fd, int variant, qreal px)
 {
     const FontRole role = variantRole(variant);

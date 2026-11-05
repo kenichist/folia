@@ -31,7 +31,7 @@ math worker that exits when idle.
 | `fetchChildren(parent, offset, limit, ctx, done(rows, total))` | Store (reader) | One page of child metadata in sibling order. `total` sizes scroll bars without loading rows. |
 | `applyEdit(Edit)` | PageSession | Programmatic edit on the open page. Returns the new revision. User typing goes through the native control and uses the same revision counter. |
 | `commit(SaveBatch)` | Store (writer) | Make a batch durable. Batches still queued for the same page are coalesced (newer wins). |
-| `renderPreview(req, ctx, done)` | PreviewService | Source plus revision in, display list out. Supersedes any outstanding request for that block, and only the newest request's callback runs. |
+| `renderPreview(req, ctx, done)` | PreviewService | Source plus revision in, display list out. Supersedes any outstanding request for that block, and only the newest request's callback runs. Optional additions: `lookup` (cache probe) and `renderNow` (render on the calling thread when the renderer is warm and within a time limit). |
 | `dispatchCommand(name, args)` | CommandRegistry | Validated: unknown names, unknown arguments, missing or wrong-typed arguments are all rejected. Used by Lua, menus, buttons and keys alike. |
 
 Callbacks are delivered on the context object's thread. If the context has been
@@ -134,9 +134,24 @@ No separate application journal is used: no requirement needed one.
 - `QTextEdit::setDocument` sends a whole-document relayout request. With an
   unchanged width and block count it is ignored, so warm page switches keep
   their layouts.
-- Display math renders below its source. Inline `$…$` shows a floating
-  preview while the caret is inside it. Source always stays editable, and
-  errors are shown under the source.
+- Display math renders below its source. Inline `$…$` renders in place,
+  except the formula the caret touches, which shows its source (plus a
+  floating preview). Source always stays editable, and errors are shown
+  under the source (an inline formula with an error stays as source).
+- **Inline formulas in place.** The source characters stay in the line, so
+  positions, hit-testing, selection, undo and copy are unchanged. They are
+  drawn transparent with letter spacing that makes the span exactly as wide
+  as the rendered formula, which `draw()` paints over it; a line holding a
+  tall formula gets extra room above/below, and a formula is never split
+  across lines. Per-line state is one pointer, allocated only for lines with
+  formulas and freed on layout eviction; an unchanged formula keeps its
+  result and measurement across relayouts (typing elsewhere on the line).
+  Results come from the preview cache; on a miss a warm renderer renders on
+  the main thread within a 3 ms budget per paint (a formula takes about
+  12 µs), so it appears in the same frame. A cold renderer or an
+  over-budget formula goes to the worker, and arrivals are shown in one
+  repaint per burst, 40 ms later (an immediate second frame made macOS keep
+  an extra full-window buffer).
 
 ## 5. Programmable shell
 

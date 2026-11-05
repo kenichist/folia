@@ -6,7 +6,11 @@
 #include "editor/Links.h"
 #include "editor/NoteEditor.h"
 #include "editor/PageSession.h"
+#include "editor/PreviewService.h"
 #include "editor/VirtualLayout.h"
+#ifdef FOLIA_WITH_MATH
+#include "math/MathRenderer.h"
+#endif
 #include "storage/FaultVfs.h"
 #include "storage/Store.h"
 
@@ -545,6 +549,92 @@ private slots:
         QTest::keyClick(&ed, Qt::Key_Return);
         QVERIFY(!ed.editLink(&why));
         QVERIFY(!why.isEmpty());
+    }
+
+    void inlineMathRendersInPlace()
+    {
+#ifndef FOLIA_WITH_MATH
+        QSKIP("built without the math renderer");
+#else
+        EditorContext ctx;
+        PreviewService previews(1 << 20, 1);
+        ctx.previews = &previews;
+        BlockId next = 1;
+        PageSession ses(31, &ctx, [&next] { return next++; });
+        ses.initNew(0, QStringLiteral("Inline"));
+        NoteEditor ed(&ctx);
+        ed.resize(760, 420);
+        ed.show();
+        ed.setSession(&ses);
+        const QString line = QStringLiteral("Energy $E=mc^2$, ratio $\\frac{a}{b}$ and broken $\\frac{x$ end");
+        QTextCursor c(ses.document());
+        c.insertText(line + QStringLiteral("\nplain second line"));
+        QTextCursor away(ses.document());
+        away.movePosition(QTextCursor::End);
+        ed.setTextCursor(away);
+        const QTextBlock b = ses.document()->firstBlock();
+        VirtualLayout *vl = ses.layout();
+        auto spans = [&]() -> const std::vector<InlineMathState::Span> & {
+            static const std::vector<InlineMathState::Span> none;
+            const BlockData *d = PageSession::dataOf(b);
+            return d && d->inlineMath ? d->inlineMath->spans : none;
+        };
+        auto rendered = [&] {
+            ed.viewport()->repaint(); // lines waiting for a render re-probe on paint
+            int n = 0;
+            for (const InlineMathState::Span &sp : spans())
+                n += bool(sp.list);
+            return n;
+        };
+        // Rendered off the main thread, then drawn in place; the broken one
+        // keeps its source. The text itself never changes.
+        QTRY_COMPARE(rendered(), 2);
+        QCOMPARE(int(spans().size()), 3);
+        QVERIFY(!spans()[2].list);
+        QCOMPARE(b.text(), line);
+        QTextLayout *tl = b.layout();
+        const QTextLine l0 = tl->lineAt(0);
+        // Each rendered formula occupies exactly its own width (plus padding).
+        for (int k = 0; k < 2; ++k) {
+            const InlineMathState::Span &sp = spans()[size_t(k)];
+            const qreal slot = l0.cursorToX(sp.end) - l0.cursorToX(sp.start);
+            QVERIFY2(qAbs(slot - (sp.list->width + 3.0)) < 1.5,
+                     qPrintable(QStringLiteral("slot %1 vs formula %2").arg(slot).arg(sp.list->width)));
+        }
+        // A fraction is taller than the text: its line gets room for it.
+        QVERIFY(l0.y() > 0 || spans()[1].list->ascent <= l0.ascent());
+
+        // The caret touching a formula shows its source; leaving renders it again.
+        QTextCursor in(ses.document());
+        in.setPosition(b.position() + spans()[0].start + 2);
+        ed.setTextCursor(in);
+        QCOMPARE(PageSession::dataOf(b)->inlineMath->revealed, 0);
+        QCOMPARE(rendered(), 1);
+        ed.setTextCursor(away);
+        QCOMPARE(rendered(), 2); // from the cache: no waiting
+
+        // A click on a rendered formula puts the caret just inside its source.
+        const InlineMathState::Span frac = spans()[1];
+        const QRectF br = vl->blockBoundingRect(b);
+        const QTextLine fl = tl->lineForTextPosition(frac.start);
+        const QPointF on((fl.cursorToX(frac.start) + fl.cursorToX(frac.end)) / 2, br.top() + fl.y() + fl.height() / 2);
+        QCOMPARE(vl->hitTest(on, Qt::FuzzyHit), b.position() + frac.start + 1);
+
+        // Copying the line gives the source.
+        QTextCursor all(b);
+        all.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
+        ed.setTextCursor(all);
+        ed.copy();
+        QCOMPARE(QApplication::clipboard()->text(), line);
+
+        // Typing elsewhere on the line keeps the formulas rendered.
+        QTextCursor tail(b);
+        tail.movePosition(QTextCursor::EndOfBlock);
+        ed.setTextCursor(tail);
+        QTest::keyClicks(&ed, QStringLiteral("!!"));
+        ed.setTextCursor(away);
+        QCOMPARE(rendered(), 2);
+#endif
     }
 
     void layoutIsLazyOnHugeDocument()

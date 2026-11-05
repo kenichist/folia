@@ -13,8 +13,9 @@ no browser engine.
   and keyboard navigation. Local autosave commits within 1 s; "Saved" is shown
   only once that revision is committed.
 - **Math**: native TeX-subset renderer (`docs/MATH_SUBSET.md`). Display
-  equations render below their source; inline `$…$` shows a preview while the
-  caret is inside it. Source always stays editable.
+  equations render below their source. Inline `$…$` renders in place; the
+  formula the caret touches shows its source (with a preview bubble), as in
+  Obsidian. Source always stays editable.
 - **Links**: bare URLs are clickable, and named links work like Google Docs:
   select text and press Mod+K (Text + Link), or paste an address onto a
   selection. Clicking a link shows its address with Open / Copy / Edit /

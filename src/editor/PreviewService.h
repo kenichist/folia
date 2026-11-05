@@ -27,7 +27,8 @@ public:
     void cancel(BlockId block) override;
 
     // Synchronous cache probe (main thread).
-    bool lookup(const PreviewRequest &req, PreviewResult *out);
+    bool lookup(const PreviewRequest &req, PreviewResult *out) override;
+    bool renderNow(const PreviewRequest &req, PreviewResult *out, int maxMillis) override;
     void trim(qint64 targetBytes);
     void setCacheCap(qint64 bytes);
     qint64 cacheBytes() const { return m_bytes; }
