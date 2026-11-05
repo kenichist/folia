@@ -718,6 +718,19 @@ ShellHost::ShellHost(const Deps &deps, QObject *parent) : QObject(parent), m_d(d
     });
     connect(m_d.data, &DataContext::currentPageChanged, this, &ShellHost::scheduleRender);
     connect(m_d.data, &DataContext::ancestorsChanged, this, &ShellHost::scheduleRender);
+    // OS light/dark switch: a theme with mode = "system" follows it, and every
+    // layout re-renders so ctx.prefers.dark and named style colors are current.
+    m_systemScheme = QGuiApplication::styleHints()->colorScheme();
+    connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this](Qt::ColorScheme scheme) {
+        if (scheme == m_systemScheme)
+            return;
+        m_systemScheme = scheme;
+        if (!m_rt)
+            return;
+        if (m_spec.theme.value(QStringLiteral("mode")).toString() == QLatin1String("system"))
+            applyTheme(m_spec.theme);
+        scheduleRender();
+    });
 }
 
 ShellHost::~ShellHost()
@@ -1030,8 +1043,7 @@ void ShellHost::pushCtx()
     lua_pushstring(L, plat.constData());
     rawSet("platform");
     lua_createtable(L, 0, 3);
-    const auto *hints = QGuiApplication::styleHints();
-    lua_pushboolean(L, hints->colorScheme() == Qt::ColorScheme::Dark);
+    lua_pushboolean(L, m_systemScheme == Qt::ColorScheme::Dark);
     rawSet("dark");
     // System accessibility preferences (env vars force them on for tests).
     lua_pushboolean(L, platform::reducedMotion() || qEnvironmentVariableIsSet("FOLIA_REDUCED_MOTION"));
@@ -1694,7 +1706,7 @@ void ShellHost::applyTheme(const QVariantMap &theme)
     m_theme = theme;
     const QString mode = theme.value(QStringLiteral("mode"), QStringLiteral("light")).toString();
     const bool dark = mode == QLatin1String("dark")
-        || (mode == QLatin1String("system") && QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark);
+        || (mode == QLatin1String("system") && m_systemScheme == Qt::ColorScheme::Dark);
     EditorTheme t = dark ? EditorTheme::dark() : EditorTheme::light();
     const QVariantMap font = theme.value(QStringLiteral("font")).toMap();
     if (font.contains(QStringLiteral("family")))
@@ -1755,7 +1767,7 @@ void ShellHost::applyTheme(const QVariantMap &theme)
             m_colors.insert(it.key(), it.value().toString());
     // Native material request (optional; opaque fallback is always valid).
     const QString material = theme.value(QStringLiteral("material"), QStringLiteral("opaque")).toString();
-    if (material != QLatin1String("opaque") && !m_warnings.contains(QStringLiteral("material")))
+    if (material != QLatin1String("opaque") && m_warnings.filter(QStringLiteral("theme.material")).isEmpty())
         m_warnings << QStringLiteral("theme.material = '%1' requested: no native material adapter in this build; "
                                      "using the opaque fallback").arg(material);
     m_d.editorCtx->setTheme(t);

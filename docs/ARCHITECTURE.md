@@ -151,8 +151,9 @@ See `presets/REFERENCE.md` (the language reference shipped with the presets).
 - Lists render native, paged data sources (tree, search, recent, children,
   ancestors) from a declarative row template. There are no per-row or
   per-frame Lua callbacks.
-- Lua runs only on: load, `ctx.set` from handlers, page changes, and bound user
-  actions such as buttons, keys and input changes in shell inputs. It never
+- Lua runs only on: load, `ctx.set` from handlers, page changes, system
+  light/dark switches (a `mode = "system"` theme is re-applied first), and bound
+  user actions such as buttons, keys and input changes in shell inputs. It never
   runs while typing in the editor, scrolling or painting.
 - **Sandbox.**
   - Libraries loaded: base, string, table, math, utf8, coroutine.
