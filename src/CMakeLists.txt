@@ -25,7 +25,7 @@ if(FOLIA_WITH_MATH)
   target_compile_definitions(folia_app_core PUBLIC FOLIA_WITH_MATH=1)
 endif()
 if(APPLE)
-  target_link_libraries(folia_app_core PUBLIC "-framework AppKit" "-framework Foundation")
+  target_link_libraries(folia_app_core PUBLIC "-framework AppKit" "-framework Foundation" "-framework QuartzCore")
 endif()
 target_compile_definitions(folia_app_core PUBLIC
   FOLIA_VERSION="${PROJECT_VERSION}"

@@ -58,6 +58,9 @@ QString powerSource() { return QStringLiteral("unknown"); }
 bool reducedMotion() { return false; }
 bool reducedTransparency() { return false; }
 void onMemoryPressure(std::function<void(bool)>) {}
+bool glassSupported() { return false; }
+void applyWindowChrome(QWidget *, const WindowChrome &) {}
+void titlebarDoubleClicked(QWidget *) {}
 
 } // namespace folia::platform
 #endif

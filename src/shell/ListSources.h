@@ -131,6 +131,7 @@ public:
     };
     struct Template {
         int height = 26;
+        qreal radius = 5;   // selection / hover pill corners
         bool indent = true;
         bool disclosure = true;
         bool icon = false;

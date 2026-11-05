@@ -43,12 +43,30 @@ Common fields: `id` (stable identity: nodes with the same id keep their native
 widget across renders), `visible`, `autofocus`, `focusable`, `tooltip`,
 `label` (accessible name), `style`.
 
-`style`: `bg`, `fg`, `border` (colors: `#rrggbb` or a theme color name such as
-`"sidebar"`, `"accent"`, `"dim"`, `"panel"`, `"border"`), `font`, `size`,
+`style`: `bg`, `fg`, `border` (colors: `#rrggbb`, `#aarrggbb`, `"transparent"`
+or a theme color name such as `"sidebar"`, `"accent"`, `"dim"`, `"panel"`,
+`"border"`, `"fill"`), `font`, `size`,
 `weight` (`"bold"`, `"medium"`, `"light"` or 100–900), `padding`, `gap`,
 `radius`, `width`, `height`, `min_width`, `max_width`, `grow` (stretch factor),
 `align` (`"left" | "center" | "right"`, text), `icon_size` (button icons, px;
-default 16).
+default 16), `material`, `tint` (see Glass).
+
+### Glass
+
+`style.material = "glass"` (or `"clear"`, the more transparent kind) puts a
+node on macOS Liquid Glass when the theme asks for it (`theme.material =
+"glass"`) and the system has it (macOS 26 or later). The glass is native and
+drawn *behind* the window's controls, shaped by the node's `radius` and
+optionally tinted with `tint`. Where glass is unavailable the node draws its
+`bg` instead, so give it one:
+
+```lua
+ui.column{ style = { material = "glass", bg = "sidebar", radius = 18 }, ... }
+```
+
+Glass shows only where nothing above it paints: leave its ancestors without a
+`bg`, and give lists inside it `bg = "transparent"`. Behind the glass is the
+theme color `window` (default: `background`).
 
 ### Icons
 
@@ -89,7 +107,8 @@ ui.component("Sidebar", function(props) return ui.column{ ... } end)
 
 `row` template (declarative, no per-row Lua): `height`, `indent`,
 `disclosure`, `icon`, `detail = "count"`, `separator` (horizontal lists),
-`selected_bg`, `selected_fg`, `hover_bg`, `dim`, `actions`.
+`selected_bg`, `selected_fg`, `hover_bg`, `dim`, `radius` (selection and
+hover corners, default 5), `actions`.
 
 `actions` are icon buttons shown on the row under the mouse (like Notion's
 sidebar), drawn natively. Each runs a command with the row's page id passed as
@@ -121,6 +140,8 @@ Tree lists also handle, natively: Mod+Alt+↑/↓ reorder, Mod+Alt+→/← inden
 | `ctx.page` | `{ id, title, parent, depth }` of the current page |
 | `ctx.platform` | `"macos"`, `"windows"` or `"linux"` |
 | `ctx.prefers` | `{ dark, reduced_motion, reduced_transparency }`; `dark` is the appearance Folia shows: the OS's with `mode = "system"`, else the theme's mode |
+| `ctx.material` | `"glass"` when Liquid Glass is in effect, else `"opaque"` |
+| `ctx.titlebar` | `{ height, inset }` of a transparent title bar (both 0 with a standard one): the layout extends under it; `inset` is the width the window buttons take at its left |
 
 ## Keys
 
@@ -164,9 +185,18 @@ theme = {
   colors = { accent = "#2f6fdf", background = "#ffffff", text = "#1c1c1e", dim = "#8e8e93",
              sidebar = "#f6f6f8", panel = "#ffffff", border = "#dedee2", selection = "#b3d7ff",
              code_bg = "#f5f5f7", math = "#7846a0" },
-  material = "opaque",                 -- "glass" is accepted; opaque fallback is used when unavailable
+  material = "glass",                  -- "opaque" (default) | "glass": Liquid Glass where available
+  titlebar = "transparent",            -- "standard" (default) | "transparent" (macOS)
 }
 ```
+
+`material = "glass"` turns on the glass of nodes with `style.material` (see
+Glass); it needs macOS 26 or later and otherwise falls back to `bg` silently.
+`titlebar = "transparent"` (macOS) hides the title bar's background and
+title: the layout extends to the top of the window, the window buttons float
+over it, and a press that no control takes in the top `ctx.titlebar.height`
+pixels drags the window (a double-click zooms). Leave room for the buttons
+with `ctx.titlebar`.
 
 Settings (Mod+,) edits `mode`, `colors.accent`, `font`, `mono` and `editor`
 without touching this file: its choices are stored in the workspace and

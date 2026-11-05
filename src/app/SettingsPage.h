@@ -58,6 +58,9 @@ public:
     int paintCount() const { return m_paints; } // the page's or its section list's paints
     qint64 populateFontLists();
     void applyPending(); // apply a throttled change now
+    // Under a transparent title bar the header shares the window buttons'
+    // strip: it starts after them and is centered in it (0, 0: a plain header).
+    void setTitlebarInset(int left, int height);
 
 protected:
     void paintEvent(QPaintEvent *e) override;

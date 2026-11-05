@@ -225,6 +225,17 @@ repaint loop.
 - **Linux and Windows** (`app/PlatformPortable.cpp`): RSS or PrivateUsage
   counters, with no-op hooks.
 
-Native materials (Liquid Glass): a theme can request one, but no adapter is
-included in this build, so the opaque fallback is always used and a warning
-is shown.
+Native materials (Liquid Glass, macOS 26+): with `theme.material = "glass"`
+the main window becomes translucent and `platform::applyWindowChrome` places
+one `NSGlassEffectView` per `style.material` node, plus a backdrop view in the
+theme's `window` color, in the window's frame view *below* Qt's content view.
+Qt keeps its single raster backing store and paints every control on top; the
+glass shows wherever the layout paints no background. `ShellHost` tracks the
+glass nodes' window rects (event filters on them and their ancestors) and
+re-places the views on every move, resize or visibility change. Elsewhere,
+before macOS 26, offscreen, or with `FOLIA_NO_GLASS` set, nodes draw their
+`bg` instead. `theme.titlebar = "transparent"` sets
+`Qt::ExpandedClientAreaHint` and an empty unified `NSToolbar` (for its 52 pt
+height); presses the layout ignores in that strip move the window
+(`QWindow::startSystemMove`). The glass's compositor cost has not been
+benchmarked yet.

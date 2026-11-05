@@ -1222,7 +1222,7 @@ private slots:
         const auto layout = [](const char *mode) {
             return spec("return ui.column{ id = 'root', style = { bg = 'sidebar' },\n"
                         "  ui.text{ id = 'dark', text = tostring(ctx.prefers.dark) }, ui.editor{} }",
-                        "Sys", QByteArray("  theme = { mode = '") + mode + "', material = 'glass' },");
+                        "Sys", QByteArray("  theme = { mode = '") + mode + "', material = 'frosted' },");
         };
         const QString lightSidebar = QStringLiteral("#f6f6f8");
         const QString darkSidebar = QStringLiteral("#26262a");
@@ -1234,7 +1234,7 @@ private slots:
         QCOMPARE(h.ectx.theme().background, EditorTheme::light().background);
         QCOMPARE(h.labelText("dark"), QStringLiteral("false"));
         QVERIFY2(root->styleSheet().contains(lightSidebar), qPrintable(root->styleSheet()));
-        QCOMPARE(h.host->warnings().size(), 1); // the material fallback notice
+        QCOMPARE(h.host->warnings().size(), 1); // the unknown material notice
 
         // OS goes dark: editor theme, named style colors and ctx.prefers follow.
         osAppearance(Qt::ColorScheme::Dark);
@@ -1258,6 +1258,65 @@ private slots:
         QVERIFY2(h.host->widgetById(QStringLiteral("root"))->styleSheet().contains(lightSidebar),
                  qPrintable(h.host->widgetById(QStringLiteral("root"))->styleSheet()));
         QVERIFY2(h.host->lastError().isEmpty(), qPrintable(h.host->lastError()));
+    }
+
+    // Liquid Glass: offscreen there is no native glass, so glass nodes fall
+    // back to their bg, the view sees "opaque" and no title bar inset, and
+    // "glass" itself is not a problem worth a warning.
+    void glassFallsBackToBg()
+    {
+        Harness h;
+        QString err;
+        QVERIFY2(h.load(spec("return ui.row{ id = 'root',\n"
+                             "  ui.column{ id = 'panel', style = { material = 'glass', bg = 'sidebar', radius = 18 },\n"
+                             "    ui.text{ id = 'mat', text = ctx.material },\n"
+                             "    ui.text{ id = 'tb', text = ctx.titlebar.height .. '/' .. ctx.titlebar.inset },\n"
+                             "    ui.list{ id = 'outline', source = data.tree{}, row = { radius = 8 },\n"
+                             "             style = { bg = 'transparent' } } },\n"
+                             "  ui.column{ ui.list{ id = 'crumbs', orientation = 'horizontal', source = data.ancestors{} },\n"
+                             "             ui.editor{} } }",
+                             "Glass", "  theme = { material = 'glass', titlebar = 'transparent' },"),
+                        &err),
+                 qPrintable(err));
+        QVERIFY2(h.host->warnings().isEmpty(), qPrintable(h.host->warnings().join(QLatin1Char('\n'))));
+        QVERIFY(!h.host->glassActive());
+        QCOMPARE(h.host->titlebarHeight(), 0);
+        QCOMPARE(h.labelText("mat"), QStringLiteral("opaque"));
+        QCOMPARE(h.labelText("tb"), QStringLiteral("0/0"));
+        const QString sheet = h.host->widgetById(QStringLiteral("panel"))->styleSheet();
+        QVERIFY2(sheet.contains(h.host->namedColor(QStringLiteral("sidebar"))), qPrintable(sheet));
+        QVERIFY2(sheet.contains(QLatin1String("border-radius:18px")), qPrintable(sheet));
+        auto *list = qobject_cast<QListView *>(h.host->widgetById(QStringLiteral("outline")));
+        QVERIFY(list);
+        QCOMPARE(qobject_cast<PageRowDelegate *>(list->itemDelegate())->tpl.radius, 8.0);
+        QVERIFY(!h.host->namedColor(QStringLiteral("fill")).isEmpty());
+        QCOMPARE(h.host->namedColor(QStringLiteral("window")), h.host->namedColor(QStringLiteral("background")));
+
+        // Empty space beside the breadcrumbs is not the list's: the press goes
+        // on to its parent (a transparent title bar drags the window there).
+        auto *crumbs = qobject_cast<QListView *>(h.host->widgetById(QStringLiteral("crumbs")));
+        QVERIFY(crumbs);
+        struct Count : QObject {
+            int presses = 0;
+            bool eventFilter(QObject *, QEvent *e) override
+            {
+                presses += e->type() == QEvent::MouseButtonPress;
+                return false;
+            }
+        } count;
+        crumbs->parentWidget()->installEventFilter(&count);
+        QTest::mouseClick(crumbs->viewport(), Qt::LeftButton, {}, QPoint(crumbs->viewport()->width() - 3, 3));
+        QCOMPARE(count.presses, 1);
+
+        // Bad values: an unknown style.material is a layout error; unknown
+        // theme values warn.
+        QVERIFY(!h.load(spec("return ui.column{ ui.row{ id = 'x', style = { material = 'frosted' } }, ui.editor{} }"),
+                        &err));
+        QVERIFY2(err.contains(QLatin1String("style.material")), qPrintable(err));
+        QVERIFY2(h.load(spec("return ui.column{ ui.editor{} }", "T", "  theme = { titlebar = 'hidden' },"), &err),
+                 qPrintable(err));
+        QVERIFY2(h.host->warnings().join(QLatin1Char('\n')).contains(QLatin1String("theme.titlebar")),
+                 qPrintable(h.host->warnings().join(QLatin1Char('\n'))));
     }
 
     // Settings overrides: layered over the layout's theme, never edit it,

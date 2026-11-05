@@ -494,12 +494,12 @@ void PageRowDelegate::paint(QPainter *p, const QStyleOptionViewItem &opt, const 
         p->setRenderHint(QPainter::Antialiasing, true);
         p->setPen(Qt::NoPen);
         p->setBrush(tpl.selectedBg);
-        p->drawRoundedRect(QRectF(r).adjusted(4, 1, -4, -1), 5, 5);
+        p->drawRoundedRect(QRectF(r).adjusted(4, 1, -4, -1), tpl.radius, tpl.radius);
     } else if (hover && tpl.hoverBg.isValid()) {
         p->setRenderHint(QPainter::Antialiasing, true);
         p->setPen(Qt::NoPen);
         p->setBrush(tpl.hoverBg);
-        p->drawRoundedRect(QRectF(r).adjusted(4, 1, -4, -1), 5, 5);
+        p->drawRoundedRect(QRectF(r).adjusted(4, 1, -4, -1), tpl.radius, tpl.radius);
     }
     const int depth = idx.data(PageListModel::DepthRole).toInt();
     const bool more = idx.data(PageListModel::MoreRole).toBool();

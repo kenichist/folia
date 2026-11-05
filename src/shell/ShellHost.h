@@ -5,6 +5,7 @@
 // explicitly bound user actions — never on typing, scrolling or painting.
 #pragma once
 
+#include "app/Platform.h"
 #include "core/Types.h"
 
 #include <QColor>
@@ -84,6 +85,13 @@ public:
     QVariantMap theme() const { return m_theme; } // effective: layout theme + overrides
     // A named style color of the current theme ("sidebar", "selection_bg"…), or empty.
     QString namedColor(const QString &name) const { return m_colors.value(name); }
+    // Native chrome in effect: theme.material = "glass" where Liquid Glass
+    // exists, and theme.titlebar = "transparent" on macOS.
+    bool glassActive() const { return m_glass; }
+    // Height of the transparent title bar the layout draws under (0: standard title bar).
+    int titlebarHeight() const;
+    static constexpr int kTitlebarHeight = 52; // unified toolbar height
+    static constexpr int kTitlebarInset = 80;  // width of the window buttons at its left
     size_t luaMemory() const;
 
     // Settings overrides, layered over the layout's theme table (same shape:
@@ -105,6 +113,9 @@ signals:
     void loadFailed(const QString &error);
     void resetRequested();
     void rendered(qint64 micros);
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     friend struct ShellApi;
@@ -154,6 +165,11 @@ private:
     void fileChanged();
     void maybeReloadPending();
     void applyPendingFocus();
+    // Native chrome: what a theme asks for and this system can do, applying
+    // it to the window, and placing the glass behind this render's nodes.
+    void windowMode(const QVariantMap &theme, bool *glass, bool *titlebar) const;
+    void applyWindowMode(bool glass, bool titlebar);
+    void updateChrome(bool force = false);
 
     Deps m_d;
     Limits m_lim;
@@ -191,6 +207,16 @@ private:
     bool m_inView = false;
     QStringList m_pendingFocus;
     QSet<QString> m_autofocusShown;
+    struct GlassNode {
+        QPointer<QWidget> w;
+        qreal radius = 0;
+        QColor tint;
+        bool clear = false;
+    };
+    QVector<GlassNode> m_glassNodes; // this render's style.material nodes, tree order
+    bool m_glass = false;
+    bool m_titlebar = false;
+    platform::WindowChrome m_lastChrome;
 };
 
 } // namespace folia

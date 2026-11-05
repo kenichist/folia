@@ -29,11 +29,14 @@ extern "C" {
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QShortcut>
 #include <QStyleHints>
+#include <QSurfaceFormat>
 #include <QToolTip>
+#include <QWindow>
 
 namespace folia {
 
@@ -509,8 +512,18 @@ protected:
         }
         return QListView::viewportEvent(e);
     }
+    // Empty space beside a horizontal list (breadcrumbs) is not part of it:
+    // the press goes on to the window, which a transparent title bar drags.
+    bool passThrough(QMouseEvent *e) const
+    {
+        return flow() == QListView::LeftToRight && !indexAt(e->position().toPoint()).isValid();
+    }
     void mousePressEvent(QMouseEvent *e) override
     {
+        if (passThrough(e)) {
+            e->ignore();
+            return;
+        }
         int row = -1;
         const int a = e->button() == Qt::LeftButton ? actionAt(e->position().toPoint(), &row) : -1;
         if (a >= 0) {
@@ -557,6 +570,10 @@ protected:
     }
     void mouseDoubleClickEvent(QMouseEvent *e) override
     {
+        if (passThrough(e)) {
+            e->ignore();
+            return;
+        }
         int row = -1;
         if (actionAt(e->position().toPoint(), &row) >= 0) {
             mousePressEvent(e); // a fast second click is another click on the action
@@ -732,6 +749,10 @@ ShellHost::ShellHost(const Deps &deps, QObject *parent) : QObject(parent), m_d(d
             applyTheme(theme);
         scheduleRender();
     });
+    // Native chrome follows the window's native window and size; a
+    // transparent title bar is dragged where the layout ignores the mouse.
+    if (m_d.window)
+        m_d.window->window()->installEventFilter(this);
 }
 
 ShellHost::~ShellHost()
@@ -1052,6 +1073,18 @@ void ShellHost::pushCtx()
     lua_pushboolean(L, platform::reducedTransparency() || qEnvironmentVariableIsSet("FOLIA_REDUCED_TRANSPARENCY"));
     rawSet("reduced_transparency");
     rawSet("prefers");
+    // The chrome this theme gets here (before applyTheme on a load).
+    bool glass = false;
+    bool titlebar = false;
+    windowMode(mergeTheme(m_spec.theme, m_overrides), &glass, &titlebar);
+    lua_pushstring(L, glass ? "glass" : "opaque");
+    rawSet("material");
+    lua_createtable(L, 0, 2);
+    lua_pushinteger(L, titlebar ? kTitlebarHeight : 0);
+    rawSet("height");
+    lua_pushinteger(L, titlebar ? kTitlebarInset : 0);
+    rawSet("inset");
+    rawSet("titlebar");
     lua_rawgeti(L, LUA_REGISTRYINDEX, m_spec.stateRef);
     rawSet("state");
 }
@@ -1181,6 +1214,10 @@ bool ShellHost::validate(const UiNode &root, QString *err) const
                 problem = QStringLiteral("id '%1' is reserved for the editor").arg(n.id);
             ids.insert(n.id);
         }
+        if (const QString mat = n.props.value(QStringLiteral("style.material")).toString();
+            !mat.isEmpty() && mat != QLatin1String("glass") && mat != QLatin1String("clear"))
+            problem = QStringLiteral("'%1': style.material must be 'glass' or 'clear', got '%2'")
+                          .arg(n.id.isEmpty() ? n.key : n.id, mat);
         if (n.type == QLatin1String("button")) {
             const QString icon = n.props.value(QStringLiteral("icon")).toString();
             if (!icon.isEmpty() && !icons::has(icon))
@@ -1248,6 +1285,7 @@ void ShellHost::apply(const UiNode &rootIn)
     QWidget *focused = QApplication::focusWidget();
     const bool editorHadFocus = focused && (focused == m_d.editor || m_d.editor->isAncestorOf(focused));
     QSet<QString> seen;
+    m_glassNodes.clear();
     QWidget *w = realize(root, seen, m_shellArea);
     if (m_rootWidget != w) {
         auto *lay = static_cast<QVBoxLayout *>(m_shellArea->layout());
@@ -1279,6 +1317,13 @@ void ShellHost::apply(const UiNode &rootIn)
     // theme: a white body and dark title in dark mode). Re-assert the current
     // ones; unchanged palettes and fonts make this a no-op.
     m_d.editor->applyTheme();
+    // Glass sits behind its node: follow the node and every ancestor whose
+    // move, resize or visibility changes where (or whether) it shows.
+    QWidget *win = m_d.window ? m_d.window->window() : nullptr;
+    for (const GlassNode &g : std::as_const(m_glassNodes))
+        for (QWidget *a = g.w.data(); a && a != win; a = a->parentWidget())
+            a->installEventFilter(this); // re-installing does not duplicate
+    updateChrome();
     instr::record("shell_reconcile_us", t.nsecsElapsed() / 1000);
 }
 
@@ -1319,7 +1364,10 @@ void ShellHost::updateCommon(QWidget *w, const UiNode &n)
     w->setObjectName(obj);
     QStringList css;
     auto sv = [&](const char *k) { return p.value(QStringLiteral("style.") + QLatin1String(k)); };
-    const QString bg = resolveColor(sv("bg"));
+    // With native glass behind it, a glass node paints no background of its
+    // own; `bg` is its look where glass is unavailable.
+    const bool overGlass = m_glass && sv("material").isValid();
+    const QString bg = overGlass ? QStringLiteral("transparent") : resolveColor(sv("bg"));
     const QString fg = resolveColor(sv("fg"));
     if (!bg.isEmpty())
         css << QStringLiteral("background-color:%1;").arg(bg);
@@ -1391,6 +1439,11 @@ QWidget *ShellHost::realize(const UiNode &n, QSet<QString> &seen, QWidget *paren
     const bool visible = p.value(QStringLiteral("visible"), true).toBool();
     QWidget *w = reuse ? lv.w.data() : nullptr;
     instr::add(reuse ? instr::WidgetsReused : instr::WidgetsCreated);
+    // Reserved before the children so that nested glass stacks above this one.
+    const QString material = p.value(QStringLiteral("style.material")).toString();
+    const qsizetype glassSlot = material.isEmpty() ? -1 : m_glassNodes.size();
+    if (glassSlot >= 0)
+        m_glassNodes.push_back({});
 
     if (n.type == QLatin1String("editor")) {
         w = m_d.editor;
@@ -1586,6 +1639,7 @@ QWidget *ShellHost::realize(const UiNode &n, QSet<QString> &seen, QWidget *paren
         PageRowDelegate::Template &tpl = lw->delegate->tpl;
         const QVariantMap &row = n.row;
         tpl.height = row.value(QStringLiteral("height"), horizontal ? 28 : 26).toInt();
+        tpl.radius = qBound(0.0, row.value(QStringLiteral("radius"), 5).toDouble(), 32.0);
         tpl.indent = row.value(QStringLiteral("indent"), true).toBool();
         tpl.disclosure = row.value(QStringLiteral("disclosure"), kind == QLatin1String("tree")).toBool();
         tpl.icon = row.value(QStringLiteral("icon"), false).toBool();
@@ -1683,6 +1737,14 @@ QWidget *ShellHost::realize(const UiNode &n, QSet<QString> &seen, QWidget *paren
             w->setParent(parent);
     }
     w->setVisible(visible);
+    if (glassSlot >= 0) {
+        GlassNode &g = m_glassNodes[glassSlot];
+        g.w = w;
+        g.radius = p.value(QStringLiteral("style.radius"), 0).toDouble();
+        g.clear = material == QLatin1String("clear");
+        const QString tint = resolveColor(p.value(QStringLiteral("style.tint")));
+        g.tint = tint.isEmpty() ? QColor() : QColor::fromString(tint);
+    }
     // autofocus when the node becomes visible
     if (p.value(QStringLiteral("autofocus"), false).toBool()) {
         if (visible && !done.wasVisible)
@@ -1820,14 +1882,29 @@ void ShellHost::applyTheme(const QVariantMap &theme)
     hov.setAlpha(14);
     m_colors.insert(QStringLiteral("hover_bg"), hov.name(QColor::HexArgb));
     m_colors.insert(QStringLiteral("panel"), (dark ? QColor(44, 44, 48) : QColor(255, 255, 255)).name());
+    QColor fill = t.text; // a quiet control fill (search fields, capsules) that works on glass
+    fill.setAlpha(dark ? 30 : 20);
+    m_colors.insert(QStringLiteral("fill"), fill.name(QColor::HexArgb));
+    m_colors.insert(QStringLiteral("window"), t.background.name()); // behind native glass
     for (auto it = colors.cbegin(); it != colors.cend(); ++it)
         if (QColor::isValidColorName(it.value().toString()))
             m_colors.insert(it.key(), it.value().toString());
-    // Native material request (optional; opaque fallback is always valid).
+    // Native chrome. "glass" falls back to opaque where Liquid Glass does not
+    // exist (that is expected, not a layout problem); unknown values warn.
     const QString material = theme.value(QStringLiteral("material"), QStringLiteral("opaque")).toString();
-    if (material != QLatin1String("opaque") && m_warnings.filter(QStringLiteral("theme.material")).isEmpty())
-        m_warnings << QStringLiteral("theme.material = '%1' requested: no native material adapter in this build; "
-                                     "using the opaque fallback").arg(material);
+    if (material != QLatin1String("opaque") && material != QLatin1String("glass")
+        && m_warnings.filter(QStringLiteral("theme.material")).isEmpty())
+        m_warnings << QStringLiteral("theme.material = '%1' is not a material ('glass' or 'opaque'); "
+                                     "using 'opaque'").arg(material);
+    const QString titlebar = theme.value(QStringLiteral("titlebar"), QStringLiteral("standard")).toString();
+    if (titlebar != QLatin1String("standard") && titlebar != QLatin1String("transparent")
+        && m_warnings.filter(QStringLiteral("theme.titlebar")).isEmpty())
+        m_warnings << QStringLiteral("theme.titlebar = '%1' is not a title bar style ('standard' or "
+                                     "'transparent'); using 'standard'").arg(titlebar);
+    bool glass = false;
+    bool transparentTitlebar = false;
+    windowMode(theme, &glass, &transparentTitlebar);
+    applyWindowMode(glass, transparentTitlebar);
     phase.restart();
     m_d.editorCtx->setTheme(t);
     instr::record("theme_editor_us", phase.nsecsElapsed() / 1000);
@@ -1847,8 +1924,126 @@ void ShellHost::applyTheme(const QVariantMap &theme)
     phase.restart();
     QApplication::setPalette(pal);
     m_d.container->setPalette(pal);
-    m_d.container->setAutoFillBackground(true);
+    m_d.container->setAutoFillBackground(!m_glass); // under glass the native backdrop is the fill
     instr::record("theme_palette_us", phase.nsecsElapsed() / 1000);
+    updateChrome(); // the backdrop follows the theme's colors
+}
+
+int ShellHost::titlebarHeight() const
+{
+    return m_titlebar ? kTitlebarHeight : 0;
+}
+
+void ShellHost::windowMode(const QVariantMap &theme, bool *glass, bool *titlebar) const
+{
+    // Only Qt's macOS platform has the native window to style (tests run offscreen).
+    const bool cocoa = QGuiApplication::platformName() == QLatin1String("cocoa");
+    *glass = cocoa && platform::glassSupported() && !qEnvironmentVariableIsSet("FOLIA_NO_GLASS")
+        && theme.value(QStringLiteral("material")).toString() == QLatin1String("glass");
+    *titlebar = cocoa && theme.value(QStringLiteral("titlebar")).toString() == QLatin1String("transparent");
+}
+
+void ShellHost::applyWindowMode(bool glass, bool titlebar)
+{
+    m_glass = glass;
+    m_titlebar = titlebar;
+    if (auto *bl = m_banner->layout())
+        bl->setContentsMargins(titlebar ? kTitlebarInset : 12, 6, 8, 6); // clear of the window buttons
+    QWidget *win = m_d.window ? m_d.window->window() : nullptr;
+    if (!win)
+        return;
+    if (win->testAttribute(Qt::WA_TranslucentBackground) != glass) {
+        win->setAttribute(Qt::WA_TranslucentBackground, glass);
+        if (!glass)
+            win->setAttribute(Qt::WA_NoSystemBackground, false); // set along with translucency
+        // Qt takes the alpha channel from the surface format when it creates
+        // the native window; for one that exists, update the format Qt
+        // reports (and clears the backing store by). A raster window has no
+        // GL context that could disagree with it.
+        if (QWindow *wh = win->windowHandle(); wh && wh->handle()) {
+            QSurfaceFormat f = wh->requestedFormat();
+            f.setAlphaBufferSize(glass ? 8 : -1);
+            wh->setFormat(f);
+        }
+        win->update();
+    }
+    const Qt::WindowFlags bits = Qt::ExpandedClientAreaHint | Qt::NoTitleBarBackgroundHint;
+    const Qt::WindowFlags want = titlebar ? bits : Qt::WindowFlags();
+    if ((win->windowFlags() & bits) != want) {
+        const bool shown = win->isVisible();
+        win->setWindowFlags((win->windowFlags() & ~bits) | want); // hides a shown window
+        if (shown)
+            win->show();
+    }
+    // Top-level widgets keep their contents out of the title bar's safe area
+    // by default; under a transparent title bar the layout itself makes room.
+    if (win->testAttribute(Qt::WA_ContentsMarginsRespectsSafeArea) == titlebar) {
+        win->setAttribute(Qt::WA_ContentsMarginsRespectsSafeArea, !titlebar);
+        if (QLayout *l = win->layout())
+            l->invalidate();
+    }
+}
+
+void ShellHost::updateChrome(bool force)
+{
+    QWidget *win = m_d.window ? m_d.window->window() : nullptr;
+    if (!win)
+        return;
+    platform::WindowChrome c;
+    c.glass = m_glass;
+    c.transparentTitlebar = m_titlebar;
+    c.backdrop = QColor::fromString(m_colors.value(QStringLiteral("window")));
+    if (m_glass) {
+        for (const GlassNode &g : std::as_const(m_glassNodes)) {
+            QWidget *w = g.w.data();
+            if (!w || !w->isVisible() || w->window() != win)
+                continue;
+            const QRect r(w->mapTo(win, QPoint(0, 0)), w->size());
+            if (!r.isEmpty())
+                c.panels.push_back({r, g.radius, g.tint, g.clear});
+        }
+    }
+    if (!force && c == m_lastChrome)
+        return;
+    m_lastChrome = c;
+    platform::applyWindowChrome(win, c); // a no-op until the native window exists
+}
+
+bool ShellHost::eventFilter(QObject *watched, QEvent *event)
+{
+    QWidget *win = m_d.window ? m_d.window->window() : nullptr;
+    switch (event->type()) {
+    case QEvent::Show:
+    case QEvent::WinIdChange:
+        updateChrome(watched == win); // the native window may be new: reapply
+        break;
+    case QEvent::Resize:
+        // The native glass is placed from the window's bottom edge, so a
+        // window resize moves it even when no node's rect changed.
+        updateChrome(watched == win);
+        break;
+    case QEvent::Move:
+    case QEvent::Hide:
+        updateChrome();
+        break;
+    case QEvent::MouseButtonPress:
+    case QEvent::MouseButtonDblClick: {
+        // A press nothing in the layout took, in the transparent title bar:
+        // move the window (double-click zooms, per the system setting).
+        auto *me = static_cast<QMouseEvent *>(event);
+        if (watched != win || !m_titlebar || me->button() != Qt::LeftButton
+            || me->position().y() >= kTitlebarHeight)
+            break;
+        if (event->type() == QEvent::MouseButtonDblClick)
+            platform::titlebarDoubleClicked(win);
+        else if (QWindow *wh = win->windowHandle())
+            wh->startSystemMove();
+        return true;
+    }
+    default:
+        break;
+    }
+    return QObject::eventFilter(watched, event);
 }
 
 void ShellHost::applyBindings()

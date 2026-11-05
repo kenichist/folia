@@ -137,6 +137,9 @@ void AppController::installUserPresets()
         "cc40ebbecffb15a668f30e1195f855ca4eb1972f3d19eca859446d8b983539f8",
         // Settings as a separate window: REFERENCE.md
         "89d527fa65c6bf6b10d4102a51b0d53b08d16222c9e2b4112f9438cf8c7c2fce",
+        // Before Liquid Glass: default, REFERENCE.md
+        "f0ed47d02a24cc7bb9230dd8a17c87b49f34dacb83ac55052316f8f7a0f9f229",
+        "1ccdf9fcf65b8331a655f1c236560d3dda6e4632e0e81b84d6193ec3785317ca",
     };
     auto digest = [](const QString &path) {
         QFile f(path);
@@ -451,6 +454,10 @@ void AppController::showSettings()
         m_stack->addWidget(m_settings);
         instr::record("settings_create_us", t.nsecsElapsed() / 1000);
     }
+    if (const int h = m_shell->titlebarHeight(); h > 0)
+        m_settings->setTitlebarInset(ShellHost::kTitlebarInset, h);
+    else
+        m_settings->setTitlebarInset(0, 0);
     if (m_stack->currentWidget() != m_settings) {
         if (m_active)
             m_pane->editor()->storeViewState();

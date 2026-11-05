@@ -76,7 +76,7 @@ smaller p99 values are labeled exploratory.
 | Max dirty interval under healthy storage | ≤ 1 s | max **967 ms** (p95 945) | 230 commits | **Achieved** |
 | Expand, open, typing, idle and navigation on **Windows / Linux reference hardware** | same gates | not run | — | **Unmeasured**; acceptance open |
 | Real IME (Kotoeri / Pinyin) through the OS | works | synthetic `QInputMethodEvent` only | — | **Unmeasured**; manual check open |
-| Native material (Liquid Glass) compositor/GPU cost | measure separately | no adapter in this build; the opaque fallback is always used | — | Not applicable / unmeasured |
+| Native material (Liquid Glass) compositor/GPU cost | measure separately | adapter added after this report (macOS 26+, the default layout uses it); runs above predate it | — | **Unmeasured** |
 
 Repeat runs: 3 for typing, open, create, expand, scroll and presentation; 2 for
 each typing variant; 7 idle runs; 5 launches.
@@ -297,6 +297,7 @@ a minute. The integrator detected it, restored the file and kept a backup.
    platforms.
 4. Idle footprint against the 60 MB stretch target: the Qt backing-store
    patch above, then a heap profile.
-5. Optional: a native material adapter (Liquid Glass) with separate
-   GPU/compositor measurement; image and media import (a separate milestone,
+5. GPU/compositor measurement of the Liquid Glass adapter (benches on
+   macOS 26 now run the glass default layout; `FOLIA_NO_GLASS=1` gives the
+   opaque one for comparison); image and media import (a separate milestone,
    not started).

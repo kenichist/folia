@@ -246,6 +246,7 @@ SettingsPage::SettingsPage(AppController *app, QWidget *parent)
 
     // Header: the way back to the notes, and the page title.
     auto *header = new QWidget(this);
+    header->setObjectName(QStringLiteral("settings.header"));
     auto *hl = new QHBoxLayout(header);
     hl->setContentsMargins(8, 6, 16, 6);
     hl->setSpacing(6);
@@ -436,6 +437,13 @@ void SettingsPage::applyPending()
     if (m_over != m_app->themeOverrides())
         m_app->setThemeOverrides(m_over); // emits themeChanged -> refresh()
     refresh();
+}
+
+void SettingsPage::setTitlebarInset(int left, int height)
+{
+    QWidget *header = m_back->parentWidget();
+    header->layout()->setContentsMargins(left > 0 ? left : 8, 6, 16, 6);
+    header->setMinimumHeight(height);
 }
 
 void SettingsPage::refresh()
