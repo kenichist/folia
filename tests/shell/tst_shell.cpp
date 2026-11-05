@@ -164,7 +164,8 @@ struct Harness {
         commands.add(echo);
         for (const char *n : {"page.new_child", "nav.back", "nav.forward", "nav.parent", "title.focus",
                               "code.copy_block", "page.move_up", "page.move_down", "page.indent", "page.outdent",
-                              "palette.open", "outline.toggle", "page.trash", "shell.reload", "link.edit"})
+                              "palette.open", "outline.toggle", "page.trash", "shell.reload", "link.edit",
+                              "app.settings"})
             noop(QString::fromLatin1(n));
         noop(QStringLiteral("page.open"), {ArgSpec{QStringLiteral("id"), QMetaType::LongLong, true}});
         noop(QStringLiteral("page.new"), {ArgSpec{QStringLiteral("parent"), QMetaType::LongLong},
@@ -1257,6 +1258,110 @@ private slots:
         QVERIFY2(h.host->widgetById(QStringLiteral("root"))->styleSheet().contains(lightSidebar),
                  qPrintable(h.host->widgetById(QStringLiteral("root"))->styleSheet()));
         QVERIFY2(h.host->lastError().isEmpty(), qPrintable(h.host->lastError()));
+    }
+
+    // Settings overrides: layered over the layout's theme, never edit it,
+    // survive reloads and a different layout, and clear back to the layout.
+    void themeOverridesLayerOverLayout()
+    {
+        const QByteArray fields = "  theme = { mode = 'light', font = { family = 'Georgia', size = 15 },\n"
+                                  "    editor = { max_width = 700, margin = 40 }, colors = { accent = '#2f6fdf' } },";
+        const QByteArray code = spec("return ui.column{ id = 'root', style = { bg = 'sidebar' }, ui.editor{} }",
+                                     "Layered", fields);
+        const QString darkSidebar = QStringLiteral("#26262a");
+        Harness h;
+        QString err;
+        QVERIFY2(h.load(code, &err), qPrintable(err));
+        QCOMPARE(h.ectx.theme().background, EditorTheme::light().background);
+        QCOMPARE(h.ectx.theme().body.pointSizeF(), 15.0);
+
+        QVariantMap font{{QStringLiteral("size"), 20}};
+        QVariantMap colors{{QStringLiteral("accent"), QStringLiteral("#ff0000")}};
+        QVariantMap editor{{QStringLiteral("max_width"), 0}};
+        h.host->setThemeOverrides({{QStringLiteral("mode"), QStringLiteral("dark")}, {QStringLiteral("font"), font},
+                                   {QStringLiteral("colors"), colors}, {QStringLiteral("editor"), editor}});
+        const EditorTheme &t = h.ectx.theme();
+        QCOMPARE(t.background, EditorTheme::dark().background);
+        QCOMPARE(t.body.pointSizeF(), 20.0);
+        QCOMPARE(t.body.family(), QStringLiteral("Georgia")); // sibling key kept by the deep merge
+        QCOMPARE(t.maxColumnWidth, 0.0);                      // "full width"
+        QCOMPARE(t.sideMargin, 40.0);                         // untouched layout value
+        QCOMPARE(t.accent, QColor(QStringLiteral("#ff0000")));
+        // The layout's own table is unchanged; the effective theme has both.
+        QCOMPARE(h.host->layoutTheme().value(QStringLiteral("mode")).toString(), QStringLiteral("light"));
+        QCOMPARE(h.host->theme().value(QStringLiteral("mode")).toString(), QStringLiteral("dark"));
+        // Named style colors follow on the next render, with the same widgets.
+        QWidget *root = h.host->widgetById(QStringLiteral("root"));
+        QTRY_VERIFY2(root->styleSheet().contains(darkSidebar), qPrintable(root->styleSheet()));
+        QCOMPARE(QApplication::palette().color(QPalette::Window), EditorTheme::dark().background);
+
+        // Reloading the layout (or loading another) keeps the overrides.
+        QVERIFY2(h.load(code, &err), qPrintable(err));
+        QCOMPARE(h.ectx.theme().background, EditorTheme::dark().background);
+        QVERIFY2(h.load(kMinimal, &err), qPrintable(err));
+        QCOMPARE(h.ectx.theme().body.pointSizeF(), 20.0);
+        QCOMPARE(h.ectx.theme().accent, QColor(QStringLiteral("#ff0000")));
+
+        // Clearing them returns to the layout's values.
+        QVERIFY2(h.load(code, &err), qPrintable(err));
+        h.host->setThemeOverrides({});
+        QCOMPARE(h.ectx.theme().background, EditorTheme::light().background);
+        QCOMPARE(h.ectx.theme().body.pointSizeF(), 15.0);
+        QCOMPARE(h.ectx.theme().maxColumnWidth, 700.0);
+        QCOMPARE(h.ectx.theme().accent, QColor(QStringLiteral("#2f6fdf")));
+        QVERIFY2(h.host->lastError().isEmpty(), qPrintable(h.host->lastError()));
+
+        // A "system" override follows the OS like a layout's mode = "system".
+        h.host->setThemeOverrides({{QStringLiteral("mode"), QStringLiteral("system")}});
+        emit QGuiApplication::styleHints()->colorSchemeChanged(Qt::ColorScheme::Dark);
+        QTRY_COMPARE(h.ectx.theme().background, EditorTheme::dark().background);
+        emit QGuiApplication::styleHints()->colorSchemeChanged(Qt::ColorScheme::Light);
+        QTRY_COMPARE(h.ectx.theme().background, EditorTheme::light().background);
+    }
+
+    void mergeThemeIsDeep()
+    {
+        const QVariantMap base{{QStringLiteral("mode"), QStringLiteral("light")},
+                               {QStringLiteral("font"), QVariantMap{{QStringLiteral("family"), QStringLiteral("A")},
+                                                                    {QStringLiteral("size"), 15}}}};
+        const QVariantMap over{{QStringLiteral("font"), QVariantMap{{QStringLiteral("size"), 18}}},
+                               {QStringLiteral("colors"), QVariantMap{{QStringLiteral("accent"), QStringLiteral("#123456")}}}};
+        const QVariantMap m = ShellHost::mergeTheme(base, over);
+        QCOMPARE(m.value(QStringLiteral("mode")).toString(), QStringLiteral("light"));
+        QCOMPARE(m.value(QStringLiteral("font")).toMap().value(QStringLiteral("family")).toString(), QStringLiteral("A"));
+        QCOMPARE(m.value(QStringLiteral("font")).toMap().value(QStringLiteral("size")).toInt(), 18);
+        QCOMPARE(m.value(QStringLiteral("colors")).toMap().value(QStringLiteral("accent")).toString(), QStringLiteral("#123456"));
+        QCOMPARE(ShellHost::mergeTheme(base, {}), base);
+    }
+
+    // Mod+, opens Settings from the native menu; a layout cannot take it.
+    void settingsShortcutIsReserved()
+    {
+        Harness h;
+        QString err;
+        QVERIFY2(h.load(spec("return ui.column{ ui.editor{} }", "Keys",
+                             "  keys = { [\"Mod+,\"] = \"test.ping\", [\"Mod+.\"] = \"test.ping\" },"), &err),
+                 qPrintable(err));
+        const QString all = h.host->warnings().join(QLatin1Char('\n'));
+        QVERIFY2(all.contains(QLatin1String("keys['Mod+,'] is reserved")), qPrintable(all));
+        QVERIFY(h.shortcutsFor(QKeySequence(QStringLiteral("Ctrl+,"))).isEmpty());
+        QCOMPARE(h.shortcutsFor(QKeySequence(QStringLiteral("Ctrl+."))).size(), 1);
+    }
+
+    void defaultPresetSettingsButton()
+    {
+        Harness h;
+        QString err;
+        const QString path = QStringLiteral(FOLIA_PRESET_SOURCE_DIR) + QStringLiteral("/default/shell.lua");
+        QVERIFY2(h.host->loadFile(path, &err), qPrintable(err));
+        QVERIFY2(!h.bannerShown(), qPrintable(h.bannerText()));
+        auto *b = qobject_cast<QPushButton *>(h.host->widgetById(QStringLiteral("open_settings")));
+        QVERIFY(b);
+        QVERIFY(!b->icon().isNull());
+        QVERIFY(b->text().isEmpty());
+        QCOMPARE(b->accessibleName(), QStringLiteral("Settings"));
+        b->click();
+        QTRY_VERIFY(h.dispatched.contains(QStringLiteral("app.settings")));
     }
 
     void timingDefaultPreset()

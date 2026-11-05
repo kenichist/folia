@@ -69,6 +69,10 @@ public:
     bool loadSource(const QByteArray &code, const QString &name, QString *error);
     void setWatchFile(bool on);
     void setSafeModeNotice(const QString &notice);
+    // The layout's key bindings (off while another page, such as Settings,
+    // covers the layout; bindings created by a reload follow this too).
+    void setShortcutsEnabled(bool on);
+    bool shortcutsEnabled() const { return m_shortcutsEnabled; }
 
     QString activePath() const { return m_path; }
     QString activeName() const { return m_name; }
@@ -77,8 +81,20 @@ public:
     bool hasLayout() const { return bool(m_rt); }
     int liveWidgetCount() const { return m_live.size(); }
     QWidget *widgetById(const QString &id) const;
-    QVariantMap theme() const { return m_theme; }
+    QVariantMap theme() const { return m_theme; } // effective: layout theme + overrides
+    // A named style color of the current theme ("sidebar", "selection_bg"…), or empty.
+    QString namedColor(const QString &name) const { return m_colors.value(name); }
     size_t luaMemory() const;
+
+    // Settings overrides, layered over the layout's theme table (same shape:
+    // mode, font, mono, editor, colors). The layout file is never modified;
+    // an empty map means "use the layout's theme". Applied now and kept
+    // across layout loads.
+    void setThemeOverrides(const QVariantMap &overrides);
+    QVariantMap themeOverrides() const { return m_overrides; }
+    QVariantMap layoutTheme() const { return m_spec.theme; }
+    // Nested tables are merged key by key; anything else is replaced.
+    static QVariantMap mergeTheme(const QVariantMap &base, const QVariantMap &overrides);
 
     // Re-run view() now (normally coalesced to the next event-loop turn).
     bool renderNow(QString *error = nullptr);
@@ -153,7 +169,13 @@ private:
     QPointer<QWidget> m_editorParking;
     std::vector<QPointer<QShortcut>> m_shortcuts;
     QVariantMap m_theme;
-    Qt::ColorScheme m_systemScheme = Qt::ColorScheme::Unknown; // OS appearance, as last reported by Qt
+    QVariantMap m_overrides;
+    // Appearance Qt reports: the OS's while mode = "system", else the pinned one.
+    Qt::ColorScheme m_systemScheme = Qt::ColorScheme::Unknown;
+    bool m_settingScheme = false; // inside our own QStyleHints::setColorScheme()
+    bool m_schemeRequested = false;
+    Qt::ColorScheme m_requestedScheme = Qt::ColorScheme::Unknown; // Unknown = follow the OS
+    bool m_shortcutsEnabled = true;
     QColor m_accent;
     QHash<QString, QString> m_colors;
     QString m_path;

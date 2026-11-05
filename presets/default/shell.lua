@@ -62,6 +62,8 @@ ui.component("Sidebar", function(p)
       ui.button{ icon = "plus", text = "New page", command = "page.new", tooltip = "New page (Mod+N)",
                  style = { fg = "dim", size = 12, icon_size = 14, padding = 5 } },
       ui.spacer{},
+      ui.button{ id = "open_settings", icon = "settings", label = "Settings", command = "app.settings",
+                 tooltip = "Settings (Mod+,)", style = { fg = "dim", width = 30, height = 26, icon_size = 15 } },
     },
   }
 end)

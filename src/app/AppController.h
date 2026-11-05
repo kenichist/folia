@@ -13,6 +13,7 @@
 #include <QTimer>
 
 class QMainWindow;
+class QStackedWidget;
 
 namespace folia {
 
@@ -22,6 +23,7 @@ class EditorContext;
 class EditorPane;
 class PageSession;
 class PreviewService;
+class SettingsPage;
 class ShellHost;
 class Store;
 
@@ -77,6 +79,27 @@ public:
     qint64 docCacheBytes() const;
     int docCacheEntries() const { return m_cache.size(); }
     bool sessionCached(PageId id) const { return m_cache.contains(id); }
+    // Settings (File ▸ Settings…, Mod+,): a page shown inside the main
+    // window in place of the layout. Created when opened, destroyed when
+    // closed; the layout's key bindings are off while it is showing.
+    void showSettings();
+    void closeSettings();
+    bool settingsOpen() const;
+    SettingsPage *settingsPage() const;
+    // Appearance overrides layered over the layout theme: applied now,
+    // written to the workspace shortly after (coalesced).
+    void setThemeOverrides(const QVariantMap &overrides);
+    QVariantMap themeOverrides() const;
+    void flushPreferences();
+    bool liveReload() const;
+    void setLiveReload(bool on);
+    bool liveReloadDisabledByFlag() const { return !m_opt.watchShell; }
+    bool safeMode() const { return m_opt.safeMode; }
+    bool mathDisabledByFlag() const { return m_opt.noMath; }
+    QString homeDir() const { return m_opt.homeDir; }
+    QStringList availableLayouts() const; // *.lua in the shell folder, "default" first
+    QString activeLayout() const;         // its name, or empty for a file outside the shell folder
+
     // Bench/recovery harness only: take over save timing.
     void setAutosaveEnabled(bool on) { m_autosave = on; if (!on) { m_idleTimer.stop(); m_deadlineTimer.stop(); } }
 
@@ -95,6 +118,7 @@ private:
     void evictCache();
     void scheduleSave(PageSession *s);
     void updateStatus();
+    void updateWindowTitle();
     void installUserPresets();
     void moveRelative(PageId id, int delta);
     void indent(PageId id);
@@ -114,6 +138,10 @@ private:
     ShellHost *m_shell = nullptr;
     QMainWindow *m_window = nullptr;
     QWidget *m_shellContainer = nullptr;
+    QStackedWidget *m_stack = nullptr; // the layout, or the Settings page
+    QPointer<SettingsPage> m_settings;
+    QTimer m_prefsTimer;         // coalesces settings writes
+    bool m_themeDirty = false;
 
     QHash<PageId, PageSession *> m_cache;
     QList<PageId> m_lru; // front = most recent
