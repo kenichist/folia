@@ -84,6 +84,39 @@ live. **Use “keyboard” Layout** switches presets. If a layout has an error,
 the last valid layout stays and a banner explains the problem. Shell ▸
 **Reset to Default Layout** (Mod+Alt+Shift+R) always works.
 
+## Resource usage
+
+Latest valid run (`bench/results/m1-2026-11-04/`): MacBook Air M1 (8 GB),
+macOS 26.6.2 (25G83), Release build, Qt 6.12.0, on battery with Low Power
+Mode off, thermal state nominal unless noted. The window was 1180×765 pt at
+2×, and the fixture was a 50,000-page workspace (seed 42). The "ordinary
+page" has 100 blocks (about 25 KiB) with formulas and code. Counters cover
+Folia's own process only, so WindowServer is not included; MB = 10⁶ bytes.
+Runs disturbed by a covered window, a sleeping Mac or user input were rerun,
+and the originals are set aside (`PROVENANCE.md`). These runs predate the
+first commit (`environment.json` says "uncommitted working tree"), so they
+measure the 0.1.0 code. Links, icons, in-place inline math and Settings came
+later and were not re-run; Settings has its own numbers above.
+
+| Measure | Result | Counter | Date |
+|---|---|---|---|
+| Idle footprint, 60 s after a 5 s settle | median 80.2 MB with the default layout, 79.2 MB with keyboard, 76.0 MB with an editor-only layout and `--no-math`; 114.2 MB with the 10 MiB stress note open. Misses the 60 MB stretch target | `task_vm_info.phys_footprint`, 1 s samples | 2026-11-05 |
+| Idle CPU, same runs | mean 0.16–0.27% of one core (7 runs; target < 1%) | `task_power_info` user + system time | 2026-11-05 |
+| Idle wakeups, same runs | 5.2–5.7/s mean, 5/s median. Includes the bench driver's own 1 Hz sampler and 4 Hz window probe; app-only wakeups are not isolated | `task_power_info` interrupt + platform-idle wakeups | 2026-11-05 |
+| Typing CPU, 1000 edits in 16.8 s on the ordinary page | 5.0–5.4 ms per edit, all threads (3 runs); 3.0 ms in a 1 MiB code block | `task_power_info` user + system ÷ edits | 2026-11-04 |
+| Typing wakeups, same runs | 18–37 per run; interrupt wakeups are not isolated | `task_platform_idle_wakeups` | 2026-11-04 |
+| Peak footprint | 118.9–119.1 MB over a typing run (launch, open, 1000 edits); 214 MB in the 10 MiB stress-note test (open, jump to end and back, select all, copy) | `task_vm_info.ledger_phys_footprint_peak` | 2026-11-04 |
+| Launch → editable ordinary page | 375–404 ms (4 warm launches); 1406 ms for the first launch after a rebuild. Footprint 2 s later: 80.0–80.5 MB | kernel process start (`p_starttime`) to end of the first editor paint; `phys_footprint` | 2026-11-05 |
+| 500 page switches in 5 batches of 100 | footprint after each batch: 107.2 → 110.0 → 110.5 → 110.6 → 110.7 MB, a plateau; document cache 3.7 MB of its 48 MiB cap. Thermal state fair | `phys_footprint` after settling | 2026-11-04 |
+
+For scale, an empty Qt Widgets window idles at 47.0 MB on the same counter.
+On disk, the 0.1.0 `dist/Folia.app` is 68 MB and `dist/Folia.dmg` is 30 MB.
+Windows and Linux reference hardware are not measured yet: Linux builds and
+passes its tests in a container, and Windows is not built. For per-run tables,
+proxies and open items, see [`docs/RELEASE_REPORT.md`](docs/RELEASE_REPORT.md),
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) and
+[`bench/results/m1-2026-11-04/REPORT.md`](bench/results/m1-2026-11-04/REPORT.md).
+
 ## Documentation
 
 - `docs/ARCHITECTURE.md`: interfaces, identities and revisions, durability, threads, caches
