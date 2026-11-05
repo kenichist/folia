@@ -43,7 +43,15 @@ ui.component("Sidebar", function(p)
       id = "outline",
       visible = not searching,
       source = data.tree{},                  -- lazily paged, expand with Right/click
-      row = { height = 27, indent = true, disclosure = true, icon = false, detail = "count" },
+      row = {
+        height = 27, indent = true, disclosure = true, icon = false, detail = "count",
+        -- Shown on the row under the mouse (drawn natively, no Lua per row).
+        -- The row's page id is passed as `id_arg` (default "id").
+        actions = {
+          { icon = "trash-2", command = "page.delete", args = { confirm = true }, tooltip = "Delete page" },
+          { icon = "plus", command = "page.new", id_arg = "parent", tooltip = "Add a page inside" },
+        },
+      },
       activate = "page.open",
       style = { bg = "sidebar", grow = 1, size = 13 },
     },
@@ -54,8 +62,6 @@ ui.component("Sidebar", function(p)
       ui.button{ icon = "plus", text = "New page", command = "page.new", tooltip = "New page (Mod+N)",
                  style = { fg = "dim", size = 12, icon_size = 14, padding = 5 } },
       ui.spacer{},
-      ui.button{ icon = "file-plus", text = "Child page", command = "page.new_child", tooltip = "New child page (Mod+Shift+N)",
-                 style = { fg = "dim", size = 12, icon_size = 14, padding = 5 } },
     },
   }
 end)
@@ -86,15 +92,7 @@ ui.component("TopBar", function(p)
       activate = "page.open",
       style = { grow = 1, size = 13 },
     },
-    ui.text{ id = "status", bind = "status", style = { fg = "dim", size = 12 } },
-    ui.button{
-      id = "delete_page",
-      icon = "trash-2",
-      label = "Delete page",
-      tooltip = "Delete page",
-      on_click = function(ctx) ctx.run("page.delete", { confirm = true }) end,   -- asks first
-      style = icon_button,
-    },
+    ui.text{ id = "status", bind = "status", style = { fg = "dim", size = 12, padding = 6 } },
   }
 end)
 

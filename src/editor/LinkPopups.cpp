@@ -4,7 +4,6 @@
 #include "editor/EditorContext.h"
 
 #include <QApplication>
-#include <QGraphicsDropShadowEffect>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -30,7 +29,7 @@ PopupColors colorsFor(const EditorTheme &t)
     c.dim = t.dim;
     c.accent = t.accent;
     c.border = t.dim;
-    c.border.setAlpha(light ? 70 : 110);
+    c.border.setAlpha(light ? 95 : 120); // no drop shadow (offscreen blur on every repaint): a firmer border
     c.hover = t.text;
     c.hover.setAlpha(light ? 20 : 34);
     c.field = light ? t.background.darker(103) : t.background.lighter(150);
@@ -40,15 +39,6 @@ PopupColors colorsFor(const EditorTheme &t)
 QString rgba(const QColor &c)
 {
     return QStringLiteral("rgba(%1,%2,%3,%4)").arg(c.red()).arg(c.green()).arg(c.blue()).arg(c.alpha());
-}
-
-void addShadow(QWidget *w)
-{
-    auto *fx = new QGraphicsDropShadowEffect(w);
-    fx->setBlurRadius(18);
-    fx->setOffset(0, 3);
-    fx->setColor(QColor(0, 0, 0, 45));
-    w->setGraphicsEffect(fx);
 }
 
 } // namespace
@@ -91,7 +81,6 @@ LinkBubble::LinkBubble(QWidget *parent) : QFrame(parent)
     connect(m_remove, &QToolButton::clicked, this, &LinkBubble::removeRequested);
     for (QToolButton *b : {m_open, m_copy, m_edit, m_remove})
         row->addWidget(b);
-    addShadow(this);
     hide();
 }
 
@@ -175,7 +164,6 @@ LinkEditor::LinkEditor(QWidget *parent) : QFrame(parent)
         if (isVisible() && now && now != this && !isAncestorOf(now))
             emit cancelled();
     });
-    addShadow(this);
     hide();
 }
 

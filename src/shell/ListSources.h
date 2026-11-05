@@ -9,6 +9,8 @@
 #include <QHash>
 #include <QSet>
 #include <QStyledItemDelegate>
+#include <QVariantMap>
+#include <QVector>
 
 namespace folia {
 
@@ -118,6 +120,15 @@ private:
 class PageRowDelegate : public QStyledItemDelegate {
     Q_OBJECT
 public:
+    // A button shown on the hovered row only (e.g. "add a page inside",
+    // "delete"), painted here and hit-tested by the list: no widgets per row.
+    struct Action {
+        QString icon;        // Lucide name
+        QString command;
+        QString idArg;       // argument that receives the row's page id
+        QVariantMap args;    // fixed extra arguments
+        QString tooltip;
+    };
     struct Template {
         int height = 26;
         bool indent = true;
@@ -128,6 +139,7 @@ public:
         QString separator;
         QColor text, dim, selectedBg, selectedText, hoverBg;
         QFont font;
+        QVector<Action> actions;
     };
     explicit PageRowDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
     Template tpl;
@@ -135,6 +147,11 @@ public:
     QSize sizeHint(const QStyleOptionViewItem &opt, const QModelIndex &idx) const override;
     // Hit area of the disclosure triangle for a row rect.
     QRect disclosureRect(const QRect &row, int depth) const;
+    // Hit area of hover action `i` for a row rect.
+    QRect actionRect(const QRect &row, int i) const;
+    // Row under the mouse and the action under it (-1: none); set by the list.
+    int hoverRow = -1;
+    int hoverAction = -1;
 };
 
 } // namespace folia

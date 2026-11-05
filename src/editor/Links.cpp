@@ -69,9 +69,19 @@ bool parseLink(const QString &s, int i, QString *label, QString *href, int *end)
     return true;
 }
 
+bool mayContainLink(QStringView s)
+{
+    // Runs on every stored line at page load: a vectorized search for ']'
+    // instead of a substring search.
+    for (qsizetype i = s.indexOf(QLatin1Char(']')); i >= 0; i = s.indexOf(QLatin1Char(']'), i + 1))
+        if (i + 1 < s.size() && s[i + 1] == QLatin1Char('('))
+            return true;
+    return false;
+}
+
 QString parseMarkdown(const QString &s, QVector<Span> *spans)
 {
-    if (!s.contains(QLatin1String("](")))
+    if (!mayContainLink(s))
         return s;
     const int n = int(s.size());
     QString out;

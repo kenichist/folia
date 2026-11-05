@@ -90,10 +90,11 @@ NoteEditor::NoteEditor(EditorContext *ctx, QWidget *parent) : QTextEdit(parent),
             QGuiApplication::styleHints()->setCursorFlashTime(0); // steady caret
     });
     connect(this, &QTextEdit::cursorPositionChanged, this, &NoteEditor::caretActivity);
-    // Link bubble: coalesced to the next event-loop turn so it never runs
-    // (or lays out) in the middle of a document change.
+    // Link bubble: throttled, so fast typing or caret travel costs one check
+    // per burst instead of one per keystroke, and it never runs (or lays
+    // out) in the middle of a document change.
     m_linkTimer.setSingleShot(true);
-    m_linkTimer.setInterval(0);
+    m_linkTimer.setInterval(90);
     connect(&m_linkTimer, &QTimer::timeout, this, &NoteEditor::updateLinkBubble);
     connect(this, &QTextEdit::cursorPositionChanged, this, &NoteEditor::scheduleLinkPopups);
     connect(this, &QTextEdit::selectionChanged, this, &NoteEditor::scheduleLinkPopups);
@@ -522,8 +523,11 @@ void NoteEditor::scrollContentsBy(int dx, int dy)
 {
     QTextEdit::scrollContentsBy(dx, dy);
     updateLayoutViewport();
-    if ((m_bubble && m_bubble->isVisible()) || isEditingLink())
-        scheduleLinkPopups();
+    // Follow the scroll directly (cheap: one cursorRect each).
+    if (m_bubble && m_bubble->isVisible())
+        placePopup(m_bubble, m_bubbleStart);
+    if (isEditingLink())
+        placePopup(m_linkEditor, m_editStart);
 }
 
 void NoteEditor::updateLayoutViewport()
@@ -805,7 +809,13 @@ NoteEditor::LinkHit NoteEditor::linkUnderPoint(const QPointF &docPt) const
 
 bool NoteEditor::isEditingLink() const { return m_linkEditor && m_linkEditor->isVisible(); }
 
-void NoteEditor::scheduleLinkPopups() { m_linkTimer.start(); }
+void NoteEditor::scheduleLinkPopups()
+{
+    // Throttle, don't debounce: re-arming a timer on every keystroke costs
+    // more than the check itself; one check per 90 ms burst is enough.
+    if (!m_linkTimer.isActive())
+        m_linkTimer.start();
+}
 
 void NoteEditor::updateLinkBubble()
 {
@@ -836,7 +846,10 @@ void NoteEditor::updateLinkBubble()
         connect(m_bubble, &LinkBubble::editRequested, this, [this] { editLink(); });
         connect(m_bubble, &LinkBubble::removeRequested, this, &NoteEditor::removeLink);
     }
-    m_bubble->setLink(h.href, h.named);
+    if (!m_bubble->isVisible() || m_bubbleStart != h.start || m_bubble->href() != h.href) {
+        m_bubbleStart = h.start;
+        m_bubble->setLink(h.href, h.named); // relayouts the bubble: only when the link changed
+    }
     placePopup(m_bubble, h.start);
     m_bubble->show();
     m_bubble->raise();
@@ -846,7 +859,6 @@ void NoteEditor::placePopup(QWidget *w, int start)
 {
     if (!w)
         return;
-    w->adjustSize();
     QTextDocument *d = document();
     const int maxPos = d->characterCount() - 1;
     QTextCursor sc(d);

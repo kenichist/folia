@@ -2,6 +2,7 @@
 
 #include "app/Platform.h"
 #include "core/Instrument.h"
+#include "core/LucideIcons.h"
 #include "editor/EditorContext.h"
 #include "editor/EditorPane.h"
 #include "editor/NoteEditor.h"
@@ -663,6 +664,7 @@ void AppController::reclaimMemory(bool critical)
     }
     if (m_previews)
         m_previews->trim(critical ? 0 : (1 << 20));
+    icons::clearCache();
     if (m_active && m_active->layout())
         m_active->layout()->setLayoutCap(critical ? 150 : 300);
     instr::set(instr::DocCacheEntries, m_cache.size());

@@ -1,11 +1,12 @@
 #include "core/LucideIcons.h"
 
+#include <QCache>
+#include <QHashFunctions>
 #include <QHash>
 #include <QIconEngine>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
-#include <QRegularExpression>
 #include <QtMath>
 
 #include <cmath>
@@ -292,27 +293,55 @@ private:
 };
 
 // ---------------------------------------------------------- elements -----
-QPainterPath parseIcon(const QString &markup)
+// A tiny scanner for the embedded markup (`<tag a="v" b="w" />` only), so
+// no regular-expression engine is compiled at startup.
+QPainterPath parseIcon(QLatin1StringView m)
 {
     QPainterPath path;
-    static const QRegularExpression elementRe(QStringLiteral(R"(<(\w+)([^>]*?)/?>)"));
-    static const QRegularExpression attrRe(QStringLiteral(R"(([\w-]+)\s*=\s*"([^"]*)\")"));
-    for (auto it = elementRe.globalMatch(markup); it.hasNext();) {
-        const QRegularExpressionMatch m = it.next();
-        const QString tag = m.captured(1);
-        QHash<QString, QString> a;
-        for (auto at = attrRe.globalMatch(m.captured(2)); at.hasNext();) {
-            const QRegularExpressionMatch am = at.next();
-            a.insert(am.captured(1), am.captured(2));
+    const qsizetype n = m.size();
+    qsizetype i = 0;
+    struct Attr { QLatin1StringView name, value; };
+    while ((i = m.indexOf(QLatin1Char('<'), i)) >= 0) {
+        const qsizetype t = ++i;
+        while (i < n && QChar(m[i]).isLetter())
+            ++i;
+        const QLatin1StringView tag = m.sliced(t, i - t);
+        Attr attrs[8];
+        int count = 0;
+        while (i < n && m[i] != QLatin1Char('>')) {
+            while (i < n && (m[i] == QLatin1Char(' ') || m[i] == QLatin1Char('/')))
+                ++i;
+            if (i >= n || m[i] == QLatin1Char('>'))
+                break;
+            const qsizetype a = i;
+            while (i < n && m[i] != QLatin1Char('=') && m[i] != QLatin1Char(' ') && m[i] != QLatin1Char('>'))
+                ++i;
+            const QLatin1StringView name = m.sliced(a, i - a);
+            QLatin1StringView value;
+            if (i + 1 < n && m[i] == QLatin1Char('=') && m[i + 1] == QLatin1Char('"')) {
+                const qsizetype v = i += 2;
+                while (i < n && m[i] != QLatin1Char('"'))
+                    ++i;
+                value = m.sliced(v, i - v);
+                ++i;
+            }
+            if (count < 8)
+                attrs[count++] = {name, value};
         }
-        auto num = [&a](const char *k, qreal def = 0) {
+        auto str = [&](const char *k) {
+            for (int j = 0; j < count; ++j)
+                if (attrs[j].name == QLatin1StringView(k))
+                    return attrs[j].value;
+            return QLatin1StringView();
+        };
+        auto num = [&](const char *k, qreal def = 0) {
             bool ok = false;
-            const qreal v = a.value(QLatin1String(k)).toDouble(&ok);
+            const qreal v = QString(str(k)).toDouble(&ok);
             return ok ? v : def;
         };
-        if (tag == QLatin1String("path")) {
-            PathData(a.value(QStringLiteral("d")), path).run();
-        } else if (tag == QLatin1String("rect")) {
+        if (tag == QLatin1StringView("path")) {
+            PathData(QString(str("d")), path).run();
+        } else if (tag == QLatin1StringView("rect")) {
             const QRectF r(num("x"), num("y"), num("width"), num("height"));
             qreal rx = num("rx", -1), ry = num("ry", -1);
             if (rx < 0)
@@ -325,93 +354,53 @@ QPainterPath parseIcon(const QString &markup)
                 path.addRoundedRect(r, rx, ry);
             else
                 path.addRect(r);
-        } else if (tag == QLatin1String("circle")) {
+        } else if (tag == QLatin1StringView("circle")) {
             path.addEllipse(QPointF(num("cx"), num("cy")), num("r"), num("r"));
-        } else if (tag == QLatin1String("ellipse")) {
+        } else if (tag == QLatin1StringView("ellipse")) {
             path.addEllipse(QPointF(num("cx"), num("cy")), num("rx"), num("ry"));
-        } else if (tag == QLatin1String("line")) {
+        } else if (tag == QLatin1StringView("line")) {
             path.moveTo(num("x1"), num("y1"));
             path.lineTo(num("x2"), num("y2"));
-        } else if (tag == QLatin1String("polyline") || tag == QLatin1String("polygon")) {
-            const QStringList v = a.value(QStringLiteral("points"))
-                                      .split(QRegularExpression(QStringLiteral("[\\s,]+")), Qt::SkipEmptyParts);
-            for (int k = 0; k + 1 < v.size(); k += 2) {
-                const QPointF p(v[k].toDouble(), v[k + 1].toDouble());
-                if (k == 0)
-                    path.moveTo(p);
-                else
-                    path.lineTo(p);
-            }
-            if (tag == QLatin1String("polygon"))
-                path.closeSubpath();
+        } else if (tag == QLatin1StringView("polyline") || tag == QLatin1StringView("polygon")) {
+            // "x,y x,y …" is path data once prefixed with a move-to.
+            QString d = QStringLiteral("M") + QString(str("points"));
+            if (tag == QLatin1StringView("polygon"))
+                d += QLatin1Char('Z');
+            PathData(d, path).run();
         }
     }
     return path;
 }
 
-const QHash<QString, QPainterPath> &library()
+const Source *findSource(const QString &name)
 {
-    static const QHash<QString, QPainterPath> lib = [] {
-        QHash<QString, QPainterPath> h;
-        for (const Source &s : kSources)
-            h.insert(QString::fromLatin1(s.name), parseIcon(QString::fromLatin1(s.svg)));
-        return h;
-    }();
-    return lib;
+    for (const Source &s : kSources)
+        if (name == QLatin1StringView(s.name))
+            return &s;
+    return nullptr;
 }
 
-class LucideEngine : public QIconEngine {
-public:
-    LucideEngine(const QString &name, const QColor &color) : m_name(name), m_color(color) {}
-
-    void paint(QPainter *p, const QRect &rect, QIcon::Mode mode, QIcon::State) override
-    {
-        QColor c = m_color;
-        if (mode == QIcon::Disabled)
-            c.setAlphaF(c.alphaF() * 0.35);
-        icons::paint(p, m_name, rect, c);
-    }
-    QPixmap pixmap(const QSize &size, QIcon::Mode mode, QIcon::State state) override
-    {
-        return scaledPixmap(size, mode, state, 1.0);
-    }
-    QPixmap scaledPixmap(const QSize &size, QIcon::Mode mode, QIcon::State state, qreal scale) override
-    {
-        QPixmap pm(QSize(qCeil(size.width() * scale), qCeil(size.height() * scale)));
-        pm.setDevicePixelRatio(scale);
-        pm.fill(Qt::transparent);
-        QPainter p(&pm);
-        paint(&p, QRect(QPoint(0, 0), size), mode, state);
-        return pm;
-    }
-    QIconEngine *clone() const override { return new LucideEngine(m_name, m_color); }
-    QString key() const override { return QStringLiteral("folia-lucide"); }
-
-private:
-    QString m_name;
-    QColor m_color;
-};
-
-} // namespace
-
-bool has(const QString &name) { return library().contains(name); }
-
-QStringList names()
+// Icons are parsed on first use only (most sessions draw a handful).
+bool pathFor(const QString &name, QPainterPath *out)
 {
-    QStringList out = library().keys();
-    out.sort();
-    return out;
-}
-
-bool paint(QPainter *p, const QString &name, const QRectF &rect, const QColor &color, qreal strokeWidth)
-{
-    const auto &lib = library();
-    const auto it = lib.constFind(name);
-    if (it == lib.cend())
+    static QHash<QString, QPainterPath> parsed;
+    if (const auto it = parsed.constFind(name); it != parsed.cend()) {
+        *out = *it;
+        return true;
+    }
+    const Source *s = findSource(name);
+    if (!s)
         return false;
+    *out = parseIcon(QLatin1StringView(s->svg));
+    parsed.insert(name, *out);
+    return true;
+}
+
+void strokeInto(QPainter *p, const QPainterPath &path, const QRectF &rect, const QColor &color, qreal strokeWidth)
+{
     const qreal s = qMin(rect.width(), rect.height()) / 24.0;
     if (s <= 0)
-        return true;
+        return;
     p->save();
     p->setRenderHint(QPainter::Antialiasing, true);
     p->translate(rect.center().x() - 12 * s, rect.center().y() - 12 * s);
@@ -421,10 +410,121 @@ bool paint(QPainter *p, const QString &name, const QRectF &rect, const QColor &c
     pen.setJoinStyle(Qt::RoundJoin);
     p->setPen(pen);
     p->setBrush(Qt::NoBrush);
-    p->drawPath(*it);
+    p->drawPath(path);
     p->restore();
+}
+
+// Rendered icons, keyed by name/color/size/stroke. Rows, chips and buttons
+// repaint often; blitting a cached pixmap is far cheaper than stroking the
+// paths again. Capped in bytes (LRU), dropped on memory pressure. The key is
+// a plain value (the name is shared, not copied), so a lookup allocates nothing.
+struct PixKey {
+    QString name;
+    QRgb rgba;
+    int w, h, stroke, dpr;
+    bool operator==(const PixKey &o) const
+    {
+        return rgba == o.rgba && w == o.w && h == o.h && stroke == o.stroke && dpr == o.dpr && name == o.name;
+    }
+};
+size_t qHash(const PixKey &k, size_t seed = 0)
+{
+    return qHashMulti(seed, k.name, k.rgba, k.w, k.h, k.stroke, k.dpr);
+}
+
+QCache<PixKey, QPixmap> &pixmapCache()
+{
+    static QCache<PixKey, QPixmap> cache(192 * 1024);
+    return cache;
+}
+
+QPixmap cachedPixmap(const QString &name, QSize devSize, qreal dpr, const QColor &color, qreal strokeWidth)
+{
+    const PixKey key{name, color.rgba(), devSize.width(), devSize.height(), qRound(strokeWidth * 100), qRound(dpr * 100)};
+    if (const QPixmap *hit = pixmapCache().object(key))
+        return *hit;
+    QPainterPath path;
+    if (!pathFor(name, &path) || devSize.isEmpty())
+        return QPixmap();
+    QPixmap pm(devSize);
+    pm.setDevicePixelRatio(dpr);
+    pm.fill(Qt::transparent);
+    {
+        QPainter q(&pm);
+        strokeInto(&q, path, QRectF(QPointF(0, 0), QSizeF(devSize) / dpr), color, strokeWidth);
+    }
+    pixmapCache().insert(key, new QPixmap(pm), qMax(1, devSize.width() * devSize.height() * 4));
+    return pm;
+}
+
+class LucideEngine : public QIconEngine {
+public:
+    LucideEngine(const QString &name, const QColor &color) : m_name(name), m_color(color) {}
+
+    void paint(QPainter *p, const QRect &rect, QIcon::Mode mode, QIcon::State) override
+    {
+        icons::paint(p, m_name, rect, colorFor(mode));
+    }
+    QPixmap pixmap(const QSize &size, QIcon::Mode mode, QIcon::State state) override
+    {
+        return scaledPixmap(size, mode, state, 1.0);
+    }
+    QPixmap scaledPixmap(const QSize &size, QIcon::Mode mode, QIcon::State, qreal scale) override
+    {
+        const QSize dev(qCeil(size.width() * scale), qCeil(size.height() * scale));
+        return cachedPixmap(m_name, dev, scale, colorFor(mode), 2.0);
+    }
+    QIconEngine *clone() const override { return new LucideEngine(m_name, m_color); }
+    QString key() const override { return QStringLiteral("folia-lucide"); }
+
+private:
+    QColor colorFor(QIcon::Mode mode) const
+    {
+        QColor c = m_color;
+        if (mode == QIcon::Disabled)
+            c.setAlphaF(c.alphaF() * 0.35);
+        return c;
+    }
+    QString m_name;
+    QColor m_color;
+};
+
+} // namespace
+
+bool has(const QString &name) { return findSource(name) != nullptr; }
+
+QStringList names()
+{
+    QStringList out;
+    for (const Source &s : kSources)
+        out << QString::fromLatin1(s.name);
+    out.sort();
+    return out;
+}
+
+bool paint(QPainter *p, const QString &name, const QRectF &rect, const QColor &color, qreal strokeWidth)
+{
+    const QTransform &tf = p->transform();
+    const qreal dpr = p->device() ? p->device()->devicePixelRatio() : 1.0;
+    if (tf.type() <= QTransform::TxTranslate) {
+        const QSize dev(qRound(rect.width() * dpr), qRound(rect.height() * dpr));
+        const QPixmap pm = cachedPixmap(name, dev, dpr, color, strokeWidth);
+        if (pm.isNull())
+            return has(name);
+        // Snap to device pixels so the cached bitmap is not resampled.
+        const qreal dx = tf.dx(), dy = tf.dy();
+        const QPointF at(std::round((rect.x() + dx) * dpr) / dpr - dx, std::round((rect.y() + dy) * dpr) / dpr - dy);
+        p->drawPixmap(at, pm);
+        return true;
+    }
+    QPainterPath path; // scaled/rotated painter: draw vectors
+    if (!pathFor(name, &path))
+        return false;
+    strokeInto(p, path, rect, color, strokeWidth);
     return true;
 }
+
+void clearCache() { pixmapCache().clear(); }
 
 QIcon icon(const QString &name, const QColor &color)
 {

@@ -6,9 +6,9 @@ without recompiling. C++17 · Qt 6 Widgets · embedded Lua 5.5 · SQLite 3.54 ·
 no browser engine.
 
 - **Pages**: nested pages, titles, child-page links inside the parent,
-  breadcrumbs, collapse/expand, move/reorder/indent, title jump, back/forward,
-  delete (with confirmation). Icons are [Lucide](https://lucide.dev), drawn
-  natively.
+  breadcrumbs, collapse/expand, move/reorder/indent, title jump, back/forward.
+  Hovering a page in the sidebar shows Delete (asks first) and Add a page
+  inside, as in Notion. Icons are [Lucide](https://lucide.dev), drawn natively.
 - **Editing**: native text editing with IME, undo/redo, plain-text clipboard
   and keyboard navigation. Local autosave commits within 1 s; "Saved" is shown
   only once that revision is committed.

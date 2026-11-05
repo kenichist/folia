@@ -576,8 +576,8 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
                 i += 2;
                 continue;
             }
-            if (const ushort lc = c.toLower().unicode();
-                lc == 'h' || lc == 'w' || lc == 'm' || lc == 'f') {
+            if (const char16_t lc = c.unicode() | 0x20; // ASCII lower-case, no table lookup
+                (lc == u'h' || lc == u'w' || lc == u'm' || lc == u'f') && (i == 0 || !text[i - 1].isLetterOrNumber())) {
                 if (const int ul = links::bareUrlLength(text, i)) {
                     QTextCharFormat f = linkF;
                     f.setProperty(kLinkHrefProperty, links::bareUrlHref(QStringView(text).mid(i, ul)));

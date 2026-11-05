@@ -99,6 +99,7 @@ private:
     LinkBubble *m_bubble = nullptr;
     LinkEditor *m_linkEditor = nullptr;
     QTimer m_linkTimer;
+    int m_bubbleStart = -1;
     int m_editStart = -1;
     int m_editEnd = -1;
 

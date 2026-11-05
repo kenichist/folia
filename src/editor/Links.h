@@ -27,6 +27,8 @@ struct Span {
 // Inline code spans, inline math and backslash-escaped brackets are left
 // untouched. Returns `line` unchanged (and no spans) when there is no link.
 QString parseMarkdown(const QString &line, QVector<Span> *spans);
+// Cheap pre-check: false when `line` cannot contain `[label](url)`.
+bool mayContainLink(QStringView line);
 // One `[label](url)` starting at line[i] == '['; `end` is one past ')'.
 bool parseLink(const QString &line, int i, QString *label, QString *href, int *end);
 

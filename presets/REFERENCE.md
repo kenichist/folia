@@ -88,7 +88,20 @@ ui.component("Sidebar", function(props) return ui.column{ ... } end)
 
 `row` template (declarative, no per-row Lua): `height`, `indent`,
 `disclosure`, `icon`, `detail = "count"`, `separator` (horizontal lists),
-`selected_bg`, `selected_fg`, `hover_bg`, `dim`.
+`selected_bg`, `selected_fg`, `hover_bg`, `dim`, `actions`.
+
+`actions` are icon buttons shown on the row under the mouse (like Notion's
+sidebar), drawn natively. Each runs a command with the row's page id passed as
+`id_arg` (default `"id"`) plus any fixed `args`:
+
+```lua
+row = { actions = {
+  { icon = "trash-2", command = "page.delete", args = { confirm = true }, tooltip = "Delete page" },
+  { icon = "plus", command = "page.new", id_arg = "parent", tooltip = "Add a page inside" },
+} }
+```
+
+Unknown icons, unknown commands and invalid arguments are layout errors.
 
 `on_activate(ctx, item)` receives `item = { id, title, depth, row }`.
 

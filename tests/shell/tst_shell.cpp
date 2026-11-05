@@ -17,6 +17,7 @@
 #include "editor/PageSession.h"
 #include "shell/CommandRegistry.h"
 #include "shell/DataContext.h"
+#include "shell/ListSources.h"
 #include "shell/ShellHost.h"
 #include "storage/Store.h"
 
@@ -29,6 +30,7 @@
 #include <QInputMethodEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListView>
 #include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -112,6 +114,7 @@ struct Harness {
     EditorPane *pane = nullptr;
     std::unique_ptr<ShellHost> host;
     QStringList dispatched;
+    QVariantMap lastArgs;
     int pings = 0;
 
     Harness()
@@ -134,8 +137,9 @@ struct Harness {
             c.name = name;
             c.title = name;
             c.args = std::move(args);
-            c.run = [this, name](const QVariantMap &) {
+            c.run = [this, name](const QVariantMap &a) {
                 dispatched << name;
+                lastArgs = a;
                 return CommandResult{true, {}};
             };
             commands.add(c);
@@ -157,11 +161,13 @@ struct Harness {
             return CommandResult{true, {}};
         };
         commands.add(echo);
-        for (const char *n : {"page.new", "page.new_child", "nav.back", "nav.forward", "nav.parent", "title.focus",
+        for (const char *n : {"page.new_child", "nav.back", "nav.forward", "nav.parent", "title.focus",
                               "code.copy_block", "page.move_up", "page.move_down", "page.indent", "page.outdent",
                               "palette.open", "outline.toggle", "page.trash", "shell.reload", "link.edit"})
             noop(QString::fromLatin1(n));
         noop(QStringLiteral("page.open"), {ArgSpec{QStringLiteral("id"), QMetaType::LongLong, true}});
+        noop(QStringLiteral("page.new"), {ArgSpec{QStringLiteral("parent"), QMetaType::LongLong},
+                                          ArgSpec{QStringLiteral("title"), QMetaType::QString}});
         noop(QStringLiteral("page.delete"), {ArgSpec{QStringLiteral("id"), QMetaType::LongLong},
                                              ArgSpec{QStringLiteral("confirm"), QMetaType::Bool}});
         ShellHost::Deps d;
@@ -1148,13 +1154,63 @@ private slots:
         QCOMPARE(toggle->accessibleName(), QStringLiteral("Show sidebar"));
         toggle->click();
         QTRY_VERIFY(h.host->widgetById(QStringLiteral("sidebar"))->isVisible());
-        auto *del = qobject_cast<QPushButton *>(h.host->widgetById(QStringLiteral("delete_page")));
-        QVERIFY(del && !del->icon().isNull());
-        h.dispatched.clear();
-        del->click();
-        QCOMPARE(h.dispatched, QStringList{QStringLiteral("page.delete")});
     }
 
+    void sidebarRowHoverActions()
+    {
+        Harness h;
+        h.store.createPage(0, -1, QStringLiteral("Alpha"));
+        h.store.createPage(0, -1, QStringLiteral("Beta"));
+        QString err;
+        const QString path = QStringLiteral(FOLIA_PRESET_SOURCE_DIR) + QStringLiteral("/default/shell.lua");
+        QVERIFY2(h.host->loadFile(path, &err), qPrintable(err));
+        auto *list = qobject_cast<QListView *>(h.host->widgetById(QStringLiteral("outline")));
+        QVERIFY(list);
+        QTRY_VERIFY(list->model() && list->model()->rowCount() >= 2);
+        auto *rows = qobject_cast<PageRowDelegate *>(list->itemDelegate());
+        QVERIFY(rows);
+        QCOMPARE(rows->tpl.actions.size(), 2);
+        const QModelIndex first = list->model()->index(0, 0);
+        const qint64 firstId = first.data(PageListModel::IdRole).toLongLong();
+        const QRect r0 = list->visualRect(first);
+        const QPoint trash = rows->actionRect(r0, 0).center();
+        const QPoint plus = rows->actionRect(r0, 1).center();
+
+        // Hovering a row reveals its actions.
+        QTest::mouseMove(list->viewport(), QPoint(r0.left() + 60, r0.center().y()));
+        QTRY_COMPARE(rows->hoverRow, 0);
+        QCOMPARE(rows->hoverAction, -1);
+        QTest::mouseMove(list->viewport(), plus);
+        QTRY_COMPARE(rows->hoverAction, 1);
+
+        // "+" adds a page inside that row's page; it does not open the row.
+        h.dispatched.clear();
+        QTest::mouseClick(list->viewport(), Qt::LeftButton, {}, plus);
+        QCOMPARE(h.dispatched, QStringList{QStringLiteral("page.new")});
+        QCOMPARE(h.lastArgs.value(QStringLiteral("parent")).toLongLong(), firstId);
+        // The trash asks before deleting that row's page.
+        h.dispatched.clear();
+        QTest::mouseClick(list->viewport(), Qt::LeftButton, {}, trash);
+        QCOMPARE(h.dispatched, QStringList{QStringLiteral("page.delete")});
+        QCOMPARE(h.lastArgs.value(QStringLiteral("id")).toLongLong(), firstId);
+        QVERIFY(h.lastArgs.value(QStringLiteral("confirm")).toBool());
+        // The title still opens the page.
+        h.dispatched.clear();
+        QTest::mouseClick(list->viewport(), Qt::LeftButton, {}, QPoint(r0.left() + 60, r0.center().y()));
+        QVERIFY2(h.dispatched.contains(QStringLiteral("page.open")), qPrintable(h.dispatched.join(QLatin1Char(','))));
+
+        // Bad actions are layout errors.
+        QVERIFY(!h.load("return { version = 1, view = function() return ui.column{ ui.list{ id = 'l', "
+                        "source = data.tree{}, row = { actions = { { icon = 'plus', command = 'no.such' } } } }, "
+                        "ui.editor{} } end }", &err));
+        QVERIFY2(err.contains(QStringLiteral("row action")), qPrintable(err));
+        QVERIFY(!h.load("return { version = 1, view = function() return ui.column{ ui.list{ id = 'l', "
+                        "source = data.tree{}, row = { actions = { { icon = 'nope', command = 'page.delete' } } } }, "
+                        "ui.editor{} } end }", &err));
+        QVERIFY2(err.contains(QStringLiteral("known icon")), qPrintable(err));
+    }
+
+    // -------------------------------------------------------------- theme --
     void timingDefaultPreset()
     {
         Harness h;
