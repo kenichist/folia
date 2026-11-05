@@ -1,6 +1,7 @@
 #include "shell/ListSources.h"
 
 #include "core/Instrument.h"
+#include "core/LucideIcons.h"
 #include "shell/DataContext.h"
 #include "storage/Store.h"
 
@@ -502,31 +503,16 @@ void PageRowDelegate::paint(QPainter *p, const QStyleOptionViewItem &opt, const 
         x = r.left() + 6 + (tpl.indent ? depth * 16 : 0);
         if (tpl.disclosure) {
             if (kids > 0 && !more) {
-                p->setRenderHint(QPainter::Antialiasing, true);
-                QPainterPath tri;
-                const QPointF c(x + 7, r.center().y() + 0.5);
-                if (expanded) {
-                    tri.moveTo(c + QPointF(-4, -2));
-                    tri.lineTo(c + QPointF(4, -2));
-                    tri.lineTo(c + QPointF(0, 3));
-                } else {
-                    tri.moveTo(c + QPointF(-2, -4));
-                    tri.lineTo(c + QPointF(3, 0));
-                    tri.lineTo(c + QPointF(-2, 4));
-                }
-                tri.closeSubpath();
-                p->setPen(Qt::NoPen);
-                p->setBrush(selected ? tpl.selectedText : tpl.dim);
-                p->drawPath(tri);
+                const QRectF ir(x + 1, r.center().y() - 6.5, 13, 13);
+                icons::paint(p, expanded ? QStringLiteral("chevron-down") : QStringLiteral("chevron-right"), ir,
+                             selected ? tpl.selectedText : tpl.dim, 2.4);
             }
             x += 18;
         }
         if (tpl.icon && !more) {
-            p->setRenderHint(QPainter::Antialiasing, true);
-            p->setPen(QPen(selected ? tpl.selectedText : tpl.dim, 1.1));
-            p->setBrush(Qt::NoBrush);
-            p->drawRoundedRect(QRectF(x, r.center().y() - 6, 9, 12), 1.5, 1.5);
-            x += 16;
+            icons::paint(p, QStringLiteral("file-text"), QRectF(x, r.center().y() - 7.5, 15, 15),
+                         selected ? tpl.selectedText : tpl.dim);
+            x += 21;
         }
     }
     QFont f = tpl.font;

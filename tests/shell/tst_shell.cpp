@@ -159,9 +159,11 @@ struct Harness {
         commands.add(echo);
         for (const char *n : {"page.new", "page.new_child", "nav.back", "nav.forward", "nav.parent", "title.focus",
                               "code.copy_block", "page.move_up", "page.move_down", "page.indent", "page.outdent",
-                              "palette.open", "outline.toggle", "page.trash", "shell.reload"})
+                              "palette.open", "outline.toggle", "page.trash", "shell.reload", "link.edit"})
             noop(QString::fromLatin1(n));
         noop(QStringLiteral("page.open"), {ArgSpec{QStringLiteral("id"), QMetaType::LongLong, true}});
+        noop(QStringLiteral("page.delete"), {ArgSpec{QStringLiteral("id"), QMetaType::LongLong},
+                                             ArgSpec{QStringLiteral("confirm"), QMetaType::Bool}});
         ShellHost::Deps d;
         d.editor = pane;
         d.editorCtx = &ectx;
@@ -1111,6 +1113,48 @@ private slots:
     }
 
     // ------------------------------------------------------------- timing --
+    void nilHolesInChildrenAreSkipped()
+    {
+        Harness h;
+        QString err;
+        QVERIFY2(h.load("return { version = 1, state = { off = true }, view = function(s) return ui.row{ id = 'root', "
+                        "ui.text{ id = 'a', text = 'A' }, (not s.off) and ui.text{ id = 'b', text = 'B' } or nil, "
+                        "nil, ui.column{ id = 'main', ui.editor{} } } end }", &err),
+                 qPrintable(err));
+        QVERIFY(h.host->widgetById(QStringLiteral("a")));
+        QVERIFY(h.host->widgetById(QStringLiteral("main")));
+        QVERIFY(!h.host->widgetById(QStringLiteral("b")));
+    }
+
+    void buttonIconsAndDefaultPresetControls()
+    {
+        Harness h;
+        QString err;
+        QVERIFY2(!h.load("return { version = 1, view = function() return ui.column{ "
+                         "ui.button{ id = 'b', icon = 'no-such-icon' }, ui.editor{} } end }", &err),
+                 "an unknown icon was accepted");
+        QVERIFY2(err.contains(QStringLiteral("unknown icon")), qPrintable(err));
+        const QString path = QStringLiteral(FOLIA_PRESET_SOURCE_DIR) + QStringLiteral("/default/shell.lua");
+        QVERIFY2(h.host->loadFile(path, &err), qPrintable(err));
+        auto *toggle = qobject_cast<QPushButton *>(h.host->widgetById(QStringLiteral("toggle_sidebar")));
+        QVERIFY(toggle);
+        QVERIFY(!toggle->icon().isNull());
+        QVERIFY(toggle->text().isEmpty());
+        QCOMPARE(toggle->accessibleName(), QStringLiteral("Hide sidebar"));
+        QVERIFY(h.host->widgetById(QStringLiteral("sidebar"))->isVisible());
+        toggle->click();
+        QTRY_VERIFY(!h.host->widgetById(QStringLiteral("sidebar"))->isVisible());
+        QVERIFY2(!h.bannerShown(), qPrintable(h.bannerText()));
+        QCOMPARE(toggle->accessibleName(), QStringLiteral("Show sidebar"));
+        toggle->click();
+        QTRY_VERIFY(h.host->widgetById(QStringLiteral("sidebar"))->isVisible());
+        auto *del = qobject_cast<QPushButton *>(h.host->widgetById(QStringLiteral("delete_page")));
+        QVERIFY(del && !del->icon().isNull());
+        h.dispatched.clear();
+        del->click();
+        QCOMPARE(h.dispatched, QStringList{QStringLiteral("page.delete")});
+    }
+
     void timingDefaultPreset()
     {
         Harness h;

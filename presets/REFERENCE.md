@@ -32,7 +32,7 @@ skipped, so `cond and ui.text{...} or nil` works.
 | `ui.row{...}` / `ui.column{...}` | horizontal / vertical container | `gap`, children |
 | `ui.overlay{base, popup...}` | first child fills; later children float centered | popup `style.width`, `style.top` |
 | `ui.text{}` | label | `text`, or `bind = "status" \| "title" \| "path"` (updated natively), `wrap` |
-| `ui.button{}` | push button | `text`, `command = "page.new"` or `on_click = function(ctx) end` |
+| `ui.button{}` | push button | `text` and/or `icon` (a Lucide name, see Icons), `command = "page.new"` or `on_click = function(ctx) end` |
 | `ui.input{}` | single-line text field | `placeholder`, `value`, `list = "<list id>"`, `on_change(ctx, text)`, `on_submit(ctx, text)`, `on_cancel(ctx)` |
 | `ui.list{}` | virtualized page list | `source`, `row`, `activate = "page.open"` or `on_activate(ctx, item)`, `orientation = "horizontal"`, `click_activates`, `select_first`, `follow_current` |
 | `ui.editor{}` | the page title + body editor (one instance, re-parented, never recreated) | `style` |
@@ -47,7 +47,24 @@ widget across renders), `visible`, `autofocus`, `focusable`, `tooltip`,
 `"sidebar"`, `"accent"`, `"dim"`, `"panel"`, `"border"`), `font`, `size`,
 `weight` (`"bold"`, `"medium"`, `"light"` or 100–900), `padding`, `gap`,
 `radius`, `width`, `height`, `min_width`, `max_width`, `grow` (stretch factor),
-`align` (`"left" | "center" | "right"`, text).
+`align` (`"left" | "center" | "right"`, text), `icon_size` (button icons, px;
+default 16).
+
+### Icons
+
+Button icons are [Lucide](https://lucide.dev/icons) icons drawn natively in the
+button's `fg` color. An icon-only button should set `label` (its accessible
+name) and usually `tooltip`:
+
+```lua
+ui.button{ icon = "trash-2", label = "Delete page", tooltip = "Delete page",
+           on_click = function(ctx) ctx.run("page.delete", { confirm = true }) end }
+```
+
+Available: `check`, `chevron-down`, `chevron-left`, `chevron-right`, `copy`,
+`external-link`, `file-plus`, `file-text`, `globe`, `link`, `panel-left-close`,
+`panel-left-open`, `pencil`, `plus`, `trash-2`, `unlink`, `x`. An unknown name
+is a layout error (the message lists the available names).
 
 An input with `list = "results"` forwards ↑/↓/PgUp/PgDn/Enter to that list
 and feeds its typed text to a `data.search{}` source natively.
@@ -113,9 +130,11 @@ same shortcut are reported; the first one wins.
 `page.open{id}`, `page.new{parent?, title?}`, `page.new_child{title?}`,
 `page.new_sibling`, `page.move{id, parent, index?}`, `page.move_up{id?}`,
 `page.move_down{id?}`, `page.indent{id?}`, `page.outdent{id?}`,
-`page.delete{id?}` (moves to trash), `page.reveal{id?}`, `nav.back`,
-`nav.forward`, `nav.parent`, `title.focus`, `editor.focus`, `editor.undo`,
-`editor.redo`, `code.copy_block`, `shell.reload`, `shell.reset`,
+`page.delete{id?, confirm?}` (moves to trash; `confirm = true` asks first),
+`page.reveal{id?}`, `nav.back`, `nav.forward`, `nav.parent`, `title.focus`,
+`editor.focus`, `editor.undo`, `editor.redo`, `code.copy_block`, `link.edit`
+(the Text + Link form for the selection or the link at the caret),
+`shell.reload`, `shell.reset`,
 `shell.use{name}`, `shell.edit`, `shell.open_folder`.
 Arguments are validated: unknown commands/arguments and wrong types fail.
 

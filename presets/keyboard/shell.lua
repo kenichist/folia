@@ -87,6 +87,7 @@ return {
     ["Mod+Shift+Up"] = "nav.parent",
     ["Mod+L"]       = "title.focus",
     ["Mod+Shift+C"] = "code.copy_block",
+    ["Mod+Shift+K"] = "link.edit",                -- Mod+K is the page picker here
   },
 
   focus_order = { "title", "editor" },

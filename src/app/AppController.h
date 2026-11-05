@@ -99,6 +99,7 @@ private:
     void moveRelative(PageId id, int delta);
     void indent(PageId id);
     void outdent(PageId id);
+    void confirmDelete(PageId id);
     void afterMove(PageId id, PageId oldParent, PageId newParent);
     QSet<PageId> heldPages() const;
     PageId argId(const QVariantMap &args) const;

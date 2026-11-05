@@ -6,13 +6,19 @@ without recompiling. C++17 · Qt 6 Widgets · embedded Lua 5.5 · SQLite 3.54 ·
 no browser engine.
 
 - **Pages**: nested pages, titles, child-page links inside the parent,
-  breadcrumbs, collapse/expand, move/reorder/indent, title jump, back/forward.
+  breadcrumbs, collapse/expand, move/reorder/indent, title jump, back/forward,
+  delete (with confirmation). Icons are [Lucide](https://lucide.dev), drawn
+  natively.
 - **Editing**: native text editing with IME, undo/redo, plain-text clipboard
   and keyboard navigation. Local autosave commits within 1 s; "Saved" is shown
   only once that revision is committed.
 - **Math**: native TeX-subset renderer (`docs/MATH_SUBSET.md`). Display
   equations render below their source; inline `$…$` shows a preview while the
   caret is inside it. Source always stays editable.
+- **Links**: bare URLs are clickable, and named links work like Google Docs:
+  select text and press Mod+K (Text + Link), or paste an address onto a
+  selection. Clicking a link shows its address with Open / Copy / Edit /
+  Remove; Mod-click opens it. Stored as Markdown `[text](url)`.
 - **Code**: fenced code blocks with lazy highlighting for 19 languages
   (`docs/CODE_LANGUAGES.md`), a Copy button and `Mod+Shift+C`.
 - **Shell**: `presets/default` (sidebar), `presets/keyboard` (keyboard-first:

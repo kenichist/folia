@@ -2,6 +2,7 @@
 
 #include "core/Instrument.h"
 #include "editor/EditorContext.h"
+#include "editor/Links.h"
 #include "editor/VirtualLayout.h"
 
 #include <QTextDocument>
@@ -142,6 +143,10 @@ void PageSession::load(const PageContent &pc)
     QStringList lines;
     struct Link { int line; PageId target; };
     std::vector<Link> links;
+    // Named web links: lines are stored as Markdown `[label](url)`; the
+    // document holds the label with an anchor format.
+    struct WebLinks { int line; QVector<links::Span> spans; };
+    std::vector<WebLinks> webLinks;
     ids.reserve(size_t(pc.blocks.size()) + 16);
     m_savedOrder.reserve(pc.blocks.size());
     for (const BlockRecord &r : pc.blocks) {
@@ -151,7 +156,11 @@ void PageSession::load(const PageContent &pc)
         case BlockKind::Text: {
             const QStringList parts = r.text.split(QLatin1Char('\n'));
             for (int i = 0; i < parts.size(); ++i) {
-                lines.push_back(parts[i]);
+                QVector<links::Span> spans;
+                QString shown = links::parseMarkdown(parts[i], &spans);
+                if (!spans.isEmpty())
+                    webLinks.push_back({int(lines.size()), std::move(spans)});
+                lines.push_back(std::move(shown));
                 ids.push_back(i == 0 ? r.id : m_alloc());
             }
             break;
@@ -225,6 +234,14 @@ void PageSession::load(const PageContent &pc)
         next = l.line + 1;
     }
     flushTo(int(lines.size()));
+    for (const WebLinks &w : webLinks) {
+        const QTextBlock lb = m_doc->findBlockByNumber(w.line);
+        for (const links::Span &sp : w.spans) {
+            c.setPosition(lb.position() + sp.start);
+            c.setPosition(lb.position() + sp.start + sp.length, QTextCursor::KeepAnchor);
+            c.mergeCharFormat(links::anchorFormat(sp.href));
+        }
+    }
     c.endEditBlock();
 
     // 3. Attach identities and derive roles.
@@ -449,7 +466,7 @@ SaveBatch PageSession::takeSaveBatch()
                         for (QTextBlock x = b.next(); x != e; x = x.next()) {
                             if (x != b.next())
                                 src += QLatin1Char('\n');
-                            src += x.text();
+                            src += links::blockSource(x); // keeps a link's address if a linked line was fenced
                         }
                         r.text = std::move(src);
                         emitRec(std::move(r));
@@ -469,7 +486,7 @@ SaveBatch PageSession::takeSaveBatch()
                     if (xd->dirty || !m_savedIds.contains(xd->id)) {
                         BlockRecord r;
                         r.id = xd->id;
-                        r.text = x.text();
+                        r.text = links::blockSource(x);
                         emitRec(std::move(r));
                     }
                     xd->dirty = false;
@@ -491,7 +508,7 @@ SaveBatch PageSession::takeSaveBatch()
                     r.text = t.mid(2, t.size() - 4);
                 } else {
                     r.kind = BlockKind::Text;
-                    r.text = b.text();
+                    r.text = links::blockSource(b); // named links -> [label](url)
                 }
                 emitRec(std::move(r));
             }

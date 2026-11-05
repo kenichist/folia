@@ -20,3 +20,13 @@ build on macOS, Windows and Linux, and lets us pin compile options
   raises "pattern too complex (step limit)" beyond it. Backtracking runs in C,
   where the VM instruction hook used for the shell's budgets cannot interrupt
   it. Search for `FOLIA` in that file to see every changed line.
+
+## Embedded icon data
+
+`src/core/LucideIcons.cpp` embeds the SVG element markup of a few
+[Lucide](https://lucide.dev) icons, copied verbatim from
+`lucide-static@0.469.0` (https://unpkg.com/lucide-static@0.469.0/icons/).
+Lucide is ISC licensed: copyright (c) for portions of Lucide are held by Cole
+Bemis 2013-2022 as part of Feather (MIT); all other copyright (c) for Lucide
+are held by Lucide Contributors 2022. To add an icon, paste its elements into
+the table in that file.

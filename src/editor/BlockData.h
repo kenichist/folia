@@ -48,6 +48,8 @@ constexpr int kPageLinkObjectType = QTextFormat::UserObject + 1;
 constexpr int kPageLinkTargetProperty = QTextFormat::UserProperty + 1;
 // Marker on formats the layout adds (so IME preedit formats are preserved).
 constexpr int kLayoutFormatMarker = QTextFormat::UserProperty + 2;
+// On layout formats of bare URLs: the address the URL opens (QString).
+constexpr int kLinkHrefProperty = QTextFormat::UserProperty + 3;
 
 struct BlockTracker; // per-document bookkeeping, see PageSession
 

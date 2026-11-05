@@ -2,6 +2,8 @@
 
 #include "core/Instrument.h"
 #include "editor/EditorContext.h"
+#include "editor/LinkPopups.h"
+#include "editor/Links.h"
 #include "editor/PageSession.h"
 #include "editor/VirtualLayout.h"
 #ifdef FOLIA_WITH_MATH
@@ -88,6 +90,13 @@ NoteEditor::NoteEditor(EditorContext *ctx, QWidget *parent) : QTextEdit(parent),
             QGuiApplication::styleHints()->setCursorFlashTime(0); // steady caret
     });
     connect(this, &QTextEdit::cursorPositionChanged, this, &NoteEditor::caretActivity);
+    // Link bubble: coalesced to the next event-loop turn so it never runs
+    // (or lays out) in the middle of a document change.
+    m_linkTimer.setSingleShot(true);
+    m_linkTimer.setInterval(0);
+    connect(&m_linkTimer, &QTimer::timeout, this, &NoteEditor::updateLinkBubble);
+    connect(this, &QTextEdit::cursorPositionChanged, this, &NoteEditor::scheduleLinkPopups);
+    connect(this, &QTextEdit::selectionChanged, this, &NoteEditor::scheduleLinkPopups);
     caretActivity();
     applyTheme();
 }
@@ -112,6 +121,10 @@ void NoteEditor::applyTheme()
     setPalette(p);
     viewport()->setPalette(p);
     viewport()->setAutoFillBackground(true);
+    if (m_bubble)
+        m_bubble->applyTheme(t);
+    if (m_linkEditor)
+        m_linkEditor->applyTheme(t);
 }
 
 void NoteEditor::storeViewState()
@@ -124,6 +137,9 @@ void NoteEditor::storeViewState()
 
 void NoteEditor::detachSession()
 {
+    closeLinkEditor();
+    if (m_bubble)
+        m_bubble->hide();
     storeViewState();
     if (m_session)
         disconnect(m_session, &PageSession::closing, this, nullptr);
@@ -148,6 +164,9 @@ void NoteEditor::setSession(PageSession *s)
         return;
     }
     setReadOnly(false);
+    closeLinkEditor();
+    if (m_bubble)
+        m_bubble->hide();
     // QTextEdit does not own the document: never outlive it.
     connect(s, &PageSession::closing, this, [this, s] {
         if (m_session == s)
@@ -173,6 +192,8 @@ bool NoteEditor::event(QEvent *e)
     const QEvent::Type t = e->type();
     if (t == QEvent::FocusIn || t == QEvent::MouseButtonPress)
         caretActivity();
+    if (t == QEvent::FocusIn || t == QEvent::FocusOut)
+        scheduleLinkPopups();
     if (t != QEvent::KeyPress && t != QEvent::InputMethod)
         return QTextEdit::event(e);
     caretActivity();
@@ -329,12 +350,17 @@ bool NoteEditor::handleSmartKeys(QKeyEvent *e)
 
 void NoteEditor::keyPressEvent(QKeyEvent *e)
 {
+    const bool inserts = !e->text().isEmpty() && !(e->modifiers() & Qt::ControlModifier);
+    if (inserts || e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter)
+        preventLinkGrowth();
     if (handleSmartKeys(e)) {
         e->accept();
         ensureCursorVisible();
         return;
     }
     QTextEdit::keyPressEvent(e);
+    if (e->text() == QLatin1String(")"))
+        autoLinkTypedMarkdown();
 }
 
 void NoteEditor::inputMethodEvent(QInputMethodEvent *e)
@@ -345,6 +371,8 @@ void NoteEditor::inputMethodEvent(QInputMethodEvent *e)
         && !textCursor().hasSelection();
     if (m_session)
         m_session->setPresentationOnly(presentationOnly);
+    if (!e->commitString().isEmpty())
+        preventLinkGrowth();
     QTextEdit::inputMethodEvent(e);
     if (m_session)
         m_session->setPresentationOnly(false);
@@ -374,6 +402,13 @@ void NoteEditor::mouseReleaseEvent(QMouseEvent *e)
     if (e->button() != Qt::LeftButton || !m_session || textCursor().hasSelection())
         return;
     const QPointF docPt = e->position() + QPointF(horizontalScrollBar()->value(), verticalScrollBar()->value());
+    if (e->modifiers() & Qt::ControlModifier) { // Cmd-click (Ctrl-click elsewhere) opens a web link
+        const LinkHit h = linkUnderPoint(docPt);
+        if (h.valid()) {
+            emit openUrlRequested(h.href);
+            return;
+        }
+    }
     VirtualLayout *vl = m_session->layout();
     const int pos = vl->hitTest(docPt, Qt::FuzzyHit);
     if (pos < 0)
@@ -420,6 +455,8 @@ void NoteEditor::mouseMoveEvent(QMouseEvent *e)
                     shape = Qt::PointingHandCursor;
             }
         } else if (r == LineRole::CodeOpen && vl->codeCopyRect(b).contains(docPt)) {
+            shape = Qt::PointingHandCursor;
+        } else if ((e->modifiers() & Qt::ControlModifier) && linkUnderPoint(docPt).valid()) {
             shape = Qt::PointingHandCursor;
         }
     }
@@ -478,12 +515,15 @@ void NoteEditor::resizeEvent(QResizeEvent *e)
 {
     QTextEdit::resizeEvent(e);
     updateLayoutViewport();
+    scheduleLinkPopups();
 }
 
 void NoteEditor::scrollContentsBy(int dx, int dy)
 {
     QTextEdit::scrollContentsBy(dx, dy);
     updateLayoutViewport();
+    if ((m_bubble && m_bubble->isVisible()) || isEditingLink())
+        scheduleLinkPopups();
 }
 
 void NoteEditor::updateLayoutViewport()
@@ -595,7 +635,7 @@ QString NoteEditor::plainTextForRange(int from, int to) const
             const QString title = m_ctx->titleOf ? m_ctx->titleOf(linkTarget(b)) : QString();
             out << QStringLiteral("[[%1]]").arg(title.isEmpty() ? QStringLiteral("Untitled") : title);
         } else {
-            QString t = b.text().mid(s, qMax(0, e - s));
+            QString t = links::blockSource(b, s, qMax(s, e)); // named links copy as [label](url)
             t.remove(QChar::ObjectReplacementCharacter);
             out << t;
         }
@@ -625,9 +665,356 @@ void NoteEditor::insertFromMimeData(const QMimeData *source)
     t.replace(QLatin1String("\r\n"), QLatin1String("\n"));
     t.replace(QLatin1Char('\r'), QLatin1Char('\n'));
     QTextCursor c = textCursor();
-    c.insertText(t);
+    const QTextBlock first = document()->findBlock(c.selectionStart());
+    const bool prose = roleAt(first) == LineRole::Para;
+    // Pasting an address onto selected words links them (as in Google Docs).
+    if (prose && c.hasSelection() && first == document()->findBlock(c.selectionEnd()) && links::looksLikeUrl(t)) {
+        const int end = c.selectionEnd();
+        c.setCharFormat(links::anchorFormat(links::normalizeUrl(t)));
+        c.setPosition(end);
+        setTextCursor(c);
+        setCurrentCharFormat(QTextCharFormat());
+        return;
+    }
+    if (!c.hasSelection())
+        preventLinkGrowth();
+    c = textCursor();
+    // Text keeps the format it is typed into (plain unless inside a link);
+    // never inherit a page-link object format.
+    QTextCharFormat fmt = c.charFormat();
+    if (!links::isLink(fmt) || c.hasSelection())
+        fmt = QTextCharFormat();
+    c.beginEditBlock();
+    if (c.hasSelection())
+        c.removeSelectedText();
+    // Markdown links in pasted prose become real links (unless the paste
+    // carries code or math fences, which stay verbatim).
+    if (prose && t.contains(QLatin1String("](")) && !t.contains(QLatin1String("```")) && !t.contains(QLatin1String("$$"))) {
+        const QStringList lines = t.split(QLatin1Char('\n'));
+        for (int i = 0; i < lines.size(); ++i) {
+            if (i > 0)
+                c.insertText(QStringLiteral("\n"), QTextCharFormat());
+            QVector<links::Span> spans;
+            const QString shown = links::parseMarkdown(lines[i], &spans);
+            int at = 0;
+            for (const links::Span &sp : std::as_const(spans)) {
+                if (sp.start > at)
+                    c.insertText(shown.mid(at, sp.start - at), i == 0 ? fmt : QTextCharFormat());
+                c.insertText(shown.mid(sp.start, sp.length), links::anchorFormat(sp.href));
+                at = sp.start + sp.length;
+            }
+            if (at < shown.size())
+                c.insertText(shown.mid(at), (i == 0 && spans.isEmpty()) ? fmt : QTextCharFormat());
+        }
+    } else {
+        c.insertText(t, fmt);
+    }
+    c.endEditBlock();
     setTextCursor(c);
     ensureCursorVisible();
+}
+
+// =============================================================== links ====
+NoteEditor::LinkHit NoteEditor::linkAt(int pos) const
+{
+    LinkHit h;
+    QTextDocument *d = document();
+    if (!m_session || pos < 0 || pos >= d->characterCount() - 1)
+        return h;
+    const QTextBlock b = d->findBlock(pos);
+    if (!b.isValid() || pos >= b.position() + b.length() - 1 || roleAt(b) == LineRole::PageLink)
+        return h;
+    // Named link: the contiguous run of fragments with the same address.
+    struct Frag { int s, e; QString href; };
+    QVector<Frag> frags;
+    int hit = -1;
+    for (auto it = b.begin(); !it.atEnd(); ++it) {
+        const QTextFragment f = it.fragment();
+        if (!f.isValid())
+            continue;
+        const QTextCharFormat cf = f.charFormat();
+        frags.push_back({f.position(), f.position() + f.length(), links::isLink(cf) ? cf.anchorHref() : QString()});
+        if (pos >= f.position() && pos < f.position() + f.length())
+            hit = int(frags.size()) - 1;
+    }
+    if (hit >= 0 && !frags[hit].href.isEmpty()) {
+        int a = hit, z = hit;
+        while (a > 0 && frags[a - 1].href == frags[hit].href && frags[a - 1].e == frags[a].s)
+            --a;
+        while (z + 1 < frags.size() && frags[z + 1].href == frags[hit].href && frags[z + 1].s == frags[z].e)
+            ++z;
+        h.start = frags[a].s;
+        h.end = frags[z].e;
+        h.href = frags[hit].href;
+        h.named = true;
+        return h;
+    }
+    // Bare URL: recognized by the layout (which knows code spans and math).
+    if (VirtualLayout *vl = m_session->layout())
+        vl->blockBoundingRect(b); // lays the block out if needed
+    if (QTextLayout *tl = b.layout()) {
+        const int rel = pos - b.position();
+        for (const QTextLayout::FormatRange &r : tl->formats()) {
+            if (r.format.hasProperty(kLinkHrefProperty) && rel >= r.start && rel < r.start + r.length) {
+                h.start = b.position() + r.start;
+                h.end = h.start + r.length;
+                h.href = r.format.property(kLinkHrefProperty).toString();
+                return h;
+            }
+        }
+    }
+    return h;
+}
+
+NoteEditor::LinkHit NoteEditor::linkNearCaret() const
+{
+    const QTextCursor c = textCursor();
+    if (c.hasSelection())
+        return {};
+    LinkHit h = linkAt(c.position());
+    if (!h.valid() && !c.atBlockStart())
+        h = linkAt(c.position() - 1);
+    return h;
+}
+
+NoteEditor::LinkHit NoteEditor::linkUnderPoint(const QPointF &docPt) const
+{
+    if (!m_session || !m_session->layout())
+        return {};
+    VirtualLayout *vl = m_session->layout();
+    const int pos = vl->hitTest(docPt, Qt::FuzzyHit);
+    if (pos < 0)
+        return {};
+    const QTextBlock b = document()->findBlock(pos);
+    const QRectF br = vl->blockBoundingRect(b);
+    QTextLayout *tl = b.layout();
+    if (!tl)
+        return {};
+    const qreal y = docPt.y() - br.top();
+    for (int i = 0; i < tl->lineCount(); ++i) {
+        const QTextLine l = tl->lineAt(i);
+        if (y < l.y() || y >= l.y() + l.height())
+            continue;
+        if (docPt.x() < l.x() || docPt.x() > l.x() + l.naturalTextWidth())
+            return {};
+        const int idx = l.xToCursor(docPt.x(), QTextLine::CursorOnCharacter);
+        return linkAt(b.position() + idx);
+    }
+    return {};
+}
+
+bool NoteEditor::isEditingLink() const { return m_linkEditor && m_linkEditor->isVisible(); }
+
+void NoteEditor::scheduleLinkPopups() { m_linkTimer.start(); }
+
+void NoteEditor::updateLinkBubble()
+{
+    if (isEditingLink()) {
+        placePopup(m_linkEditor, m_editStart);
+        if (m_bubble)
+            m_bubble->hide();
+        return;
+    }
+    LinkHit h;
+    if (m_session && !isReadOnly() && hasFocus() && !m_preedit)
+        h = linkNearCaret();
+    if (!h.valid()) {
+        if (m_bubble)
+            m_bubble->hide();
+        return;
+    }
+    if (!m_bubble) {
+        m_bubble = new LinkBubble(this);
+        m_bubble->applyTheme(m_ctx->theme());
+        connect(m_bubble, &LinkBubble::openRequested, this, [this] {
+            if (!m_bubble->href().isEmpty())
+                emit openUrlRequested(m_bubble->href());
+        });
+        connect(m_bubble, &LinkBubble::copyRequested, this, [this] {
+            QApplication::clipboard()->setText(m_bubble->href());
+        });
+        connect(m_bubble, &LinkBubble::editRequested, this, [this] { editLink(); });
+        connect(m_bubble, &LinkBubble::removeRequested, this, &NoteEditor::removeLink);
+    }
+    m_bubble->setLink(h.href, h.named);
+    placePopup(m_bubble, h.start);
+    m_bubble->show();
+    m_bubble->raise();
+}
+
+void NoteEditor::placePopup(QWidget *w, int start)
+{
+    if (!w)
+        return;
+    w->adjustSize();
+    QTextDocument *d = document();
+    const int maxPos = d->characterCount() - 1;
+    QTextCursor sc(d);
+    sc.setPosition(qBound(0, start, maxPos));
+    const QRect sr = cursorRect(sc);
+    const QRect cr = cursorRect(textCursor());
+    // Below the caret's line, aligned with the link (or selection) start
+    // when it is on that line.
+    const bool sameLine = qAbs(sr.center().y() - cr.center().y()) < qMax(4, cr.height() / 2);
+    const int x = (sameLine ? sr.left() : cr.left()) - 10;
+    const QPoint below = viewport()->mapTo(this, QPoint(x, cr.bottom() + 6));
+    const QPoint above = viewport()->mapTo(this, QPoint(x, (sameLine ? qMin(sr.top(), cr.top()) : cr.top()) - 6));
+    int px = qBound(4, below.x(), qMax(4, width() - w->width() - 4));
+    int py = below.y();
+    if (py + w->height() > height() - 4 && above.y() - w->height() >= 4)
+        py = above.y() - w->height();
+    w->move(px, py);
+}
+
+bool NoteEditor::editLink(QString *why)
+{
+    auto refuse = [why](const QString &m) {
+        if (why)
+            *why = m;
+        return false;
+    };
+    if (!m_session || isReadOnly())
+        return refuse(tr("no page is open"));
+    const QTextCursor c = textCursor();
+    const QTextBlock b = document()->findBlock(c.selectionStart());
+    if (roleAt(b) != LineRole::Para)
+        return refuse(tr("links can be added to text, not inside code, math or a page link"));
+    const int lineEnd = b.position() + b.length() - 1;
+    QString text, href;
+    if (c.hasSelection()) {
+        m_editStart = c.selectionStart();
+        m_editEnd = qMin(c.selectionEnd(), lineEnd); // one line at a time
+        const LinkHit h = linkAt(m_editStart);
+        if (h.valid() && h.named && m_editEnd <= h.end)
+            href = h.href;
+    } else {
+        const LinkHit h = linkNearCaret();
+        if (h.valid()) {
+            m_editStart = h.start;
+            m_editEnd = h.end;
+            href = h.href;
+        } else {
+            m_editStart = m_editEnd = c.position();
+        }
+    }
+    text = b.text().mid(m_editStart - b.position(), m_editEnd - m_editStart);
+    if (!m_linkEditor) {
+        m_linkEditor = new LinkEditor(this);
+        m_linkEditor->applyTheme(m_ctx->theme());
+        connect(m_linkEditor, &LinkEditor::applied, this, &NoteEditor::applyLink);
+        connect(m_linkEditor, &LinkEditor::cancelled, this, &NoteEditor::closeLinkEditor);
+    }
+    if (m_bubble)
+        m_bubble->hide();
+    m_linkEditor->start(text, href);
+    placePopup(m_linkEditor, m_editStart);
+    return true;
+}
+
+void NoteEditor::closeLinkEditor()
+{
+    if (!isEditingLink())
+        return;
+    QWidget *fw = QApplication::focusWidget();
+    const bool refocus = !fw || fw == this || m_linkEditor->isAncestorOf(fw);
+    m_linkEditor->hide();
+    if (refocus)
+        setFocus(Qt::OtherFocusReason);
+    scheduleLinkPopups();
+}
+
+void NoteEditor::applyLink(const QString &textIn, const QString &hrefIn)
+{
+    const QString href = links::normalizeUrl(hrefIn);
+    closeLinkEditor();
+    setFocus(Qt::OtherFocusReason);
+    if (href.isEmpty() || !m_session)
+        return;
+    QTextDocument *d = document();
+    const int maxPos = d->characterCount() - 1;
+    const int s = qBound(0, m_editStart, maxPos);
+    const QTextBlock b = d->findBlock(s);
+    if (roleAt(b) != LineRole::Para)
+        return;
+    const int e = qBound(s, m_editEnd, b.position() + b.length() - 1);
+    QString label = textIn;
+    label.remove(QChar::ObjectReplacementCharacter);
+    label.replace(QLatin1Char('\n'), QLatin1Char(' '));
+    if (label.trimmed().isEmpty())
+        label = e > s ? b.text().mid(s - b.position(), e - s) : hrefIn.trimmed();
+    QTextCursor c(d);
+    c.beginEditBlock();
+    c.setPosition(s);
+    c.setPosition(e, QTextCursor::KeepAnchor);
+    if (c.selectedText() != label)
+        c.insertText(label, links::anchorFormat(href));
+    else
+        c.setCharFormat(links::anchorFormat(href));
+    c.endEditBlock();
+    QTextCursor after(d);
+    after.setPosition(s + int(label.size()));
+    setTextCursor(after);
+    setCurrentCharFormat(QTextCharFormat()); // typing on continues as plain text
+    ensureCursorVisible();
+}
+
+void NoteEditor::removeLink()
+{
+    const LinkHit h = linkNearCaret();
+    if (!h.valid() || !h.named)
+        return;
+    QTextCursor c(document());
+    c.beginEditBlock();
+    c.setPosition(h.start);
+    c.setPosition(h.end, QTextCursor::KeepAnchor);
+    c.setCharFormat(QTextCharFormat());
+    c.endEditBlock();
+    scheduleLinkPopups();
+}
+
+void NoteEditor::preventLinkGrowth()
+{
+    const QTextCursor c = textCursor();
+    if (c.hasSelection() || !links::isLink(c.charFormat()))
+        return;
+    const LinkHit before = c.atBlockStart() ? LinkHit() : linkAt(c.position() - 1);
+    const LinkHit after = c.atBlockEnd() ? LinkHit() : linkAt(c.position());
+    const bool inside = before.valid() && after.valid() && before.named && after.named && before.start == after.start;
+    if (!inside)
+        setCurrentCharFormat(QTextCharFormat());
+}
+
+bool NoteEditor::autoLinkTypedMarkdown()
+{
+    QTextCursor c = textCursor();
+    const QTextBlock b = c.block();
+    if (c.hasSelection() || roleAt(b) != LineRole::Para)
+        return false;
+    const int rel = c.positionInBlock();
+    const QString text = b.text().left(rel);
+    // The link must end at the caret and not sit in code or math.
+    QVector<links::Span> spans;
+    const QString shown = links::parseMarkdown(text, &spans);
+    if (spans.isEmpty() || spans.last().start + spans.last().length != shown.size())
+        return false;
+    for (int k = int(text.lastIndexOf(QLatin1String("]("))) - 1; k >= 0; --k) {
+        if (text[k] != QLatin1Char('[') || (k > 0 && text[k - 1] == QLatin1Char('\\')))
+            continue;
+        QString label, href;
+        int end = 0;
+        if (!links::parseLink(text, k, &label, &href, &end) || end != rel)
+            continue;
+        QTextCursor r(document());
+        r.beginEditBlock();
+        r.setPosition(b.position() + k);
+        r.setPosition(b.position() + rel, QTextCursor::KeepAnchor);
+        r.insertText(label, links::anchorFormat(href));
+        r.endEditBlock();
+        setTextCursor(r);
+        setCurrentCharFormat(QTextCharFormat());
+        return true;
+    }
+    return false;
 }
 
 } // namespace folia

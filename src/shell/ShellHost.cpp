@@ -2,6 +2,7 @@
 
 #include "app/Platform.h"
 #include "core/Instrument.h"
+#include "core/LucideIcons.h"
 #include "editor/EditorContext.h"
 #include "editor/EditorPane.h"
 #include "editor/NoteEditor.h"
@@ -960,9 +961,14 @@ bool ShellHost::toNode(LuaRuntime &rt, int idx, UiNode &n, int depth, int &count
         return false;
     }
     // Scalars, style, handlers, source/row descriptors.
+    lua_Unsigned maxIndex = 0; // largest positive integer key (children)
     lua_pushnil(L);
     while (lua_next(L, idx) != 0) {
-        if (lua_type(L, -2) == LUA_TSTRING) {
+        if (lua_isinteger(L, -2)) {
+            const lua_Integer k = lua_tointeger(L, -2);
+            if (k > 0 && lua_Unsigned(k) > maxIndex)
+                maxIndex = lua_Unsigned(k);
+        } else if (lua_type(L, -2) == LUA_TSTRING) {
             const QString k = QString::fromUtf8(lua_tostring(L, -2));
             const int vt = lua_type(L, -1);
             if (k.startsWith(QLatin1String("on_")) && vt == LUA_TFUNCTION) {
@@ -989,7 +995,9 @@ bool ShellHost::toNode(LuaRuntime &rt, int idx, UiNode &n, int depth, int &count
         lua_pop(L, 1);
     }
     n.id = n.props.value(QStringLiteral("id")).toString();
-    const lua_Unsigned len = lua_rawlen(L, idx);
+    // `cond and node or nil` leaves holes, for which the length operator is
+    // undefined (Lua 5.5 may stop at the first nil): walk to the largest key.
+    const lua_Unsigned len = qMax(lua_rawlen(L, idx), maxIndex);
     for (lua_Unsigned i = 1; i <= len; ++i) {
         lua_rawgeti(L, idx, lua_Integer(i));
         if (lua_isnil(L, -1) || (lua_isboolean(L, -1) && !lua_toboolean(L, -1))) {
@@ -1024,6 +1032,12 @@ bool ShellHost::validate(const UiNode &root, QString *err) const
             if ((n.id == QLatin1String("editor") || n.id == QLatin1String("title")) && n.type != QLatin1String("editor"))
                 problem = QStringLiteral("id '%1' is reserved for the editor").arg(n.id);
             ids.insert(n.id);
+        }
+        if (n.type == QLatin1String("button")) {
+            const QString icon = n.props.value(QStringLiteral("icon")).toString();
+            if (!icon.isEmpty() && !icons::has(icon))
+                problem = QStringLiteral("button '%1': unknown icon '%2' (available: %3)")
+                              .arg(n.id.isEmpty() ? n.key : n.id, icon, icons::names().join(QStringLiteral(", ")));
         }
         if (n.type == QLatin1String("list")) {
             const QString k = n.source.value(QStringLiteral("kind")).toString();
@@ -1155,7 +1169,17 @@ void ShellHost::updateCommon(QWidget *w, const UiNode &n)
     if (sv("padding").isValid() && n.type != QLatin1String("row") && n.type != QLatin1String("column"))
         css << QStringLiteral("padding:%1px;").arg(sv("padding").toInt());
     const QString sel = n.type == QLatin1String("list") ? QStringLiteral("QListView#") : QStringLiteral("#");
-    w->setStyleSheet(css.isEmpty() ? QString() : sel + obj + QStringLiteral("{") + css.join(QString()) + QStringLiteral("}"));
+    QString sheet = css.isEmpty() ? QString() : sel + obj + QStringLiteral("{") + css.join(QString()) + QStringLiteral("}");
+    if (n.type == QLatin1String("button")) {
+        // Flat buttons get a soft hover/pressed background (theme "hover_bg").
+        const QString hover = m_colors.value(QStringLiteral("hover_bg"));
+        if (!sv("radius").isValid())
+            sheet += QStringLiteral("#%1{border-radius:6px;}").arg(obj);
+        if (!hover.isEmpty())
+            sheet += QStringLiteral("#%1:hover{background-color:%2;}#%1:pressed{background-color:%3;}")
+                         .arg(obj, hover, resolveColor(QStringLiteral("border")));
+    }
+    w->setStyleSheet(sheet);
     QFont f = m_d.editorCtx->theme().body;
     f.setPointSizeF(qMax(9.0, f.pointSizeF() - 2));
     if (sv("font").isValid())
@@ -1276,7 +1300,19 @@ QWidget *ShellHost::realize(const UiNode &n, QSet<QString> &seen, QWidget *paren
         auto *b = static_cast<QPushButton *>(w);
         if (!b)
             w = b = new QPushButton(parent);
-        b->setText(p.value(QStringLiteral("text"), p.value(QStringLiteral("label"))).toString());
+        b->setText(p.value(QStringLiteral("text")).toString());
+        const QString icon = p.value(QStringLiteral("icon")).toString();
+        if (!icon.isEmpty()) {
+            // Lucide icon tinted with the button's text color.
+            const QColor fg(resolveColor(p.value(QStringLiteral("style.fg")), QStringLiteral("text")));
+            const int sz = p.value(QStringLiteral("style.icon_size"), 16).toInt();
+            b->setIcon(icons::icon(icon, fg));
+            b->setIconSize(QSize(sz, sz));
+        } else {
+            b->setIcon(QIcon());
+        }
+        if (b->text().isEmpty() && icon.isEmpty())
+            b->setText(p.value(QStringLiteral("label")).toString());
         b->setFlat(p.value(QStringLiteral("flat"), true).toBool());
         b->setCursor(Qt::PointingHandCursor);
         b->disconnect(this);
