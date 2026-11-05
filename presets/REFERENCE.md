@@ -19,8 +19,8 @@ return {
 ```
 
 `view(state, ctx)` returns a tree of nodes. It runs on load, after a handler
-changes state, and when the current page changes — **never** while typing,
-scrolling or painting. The tree must contain **exactly one `ui.editor{}`**.
+changes state, when the current page changes and when the system switches
+between light and dark — **never** while typing, scrolling or painting. The tree must contain **exactly one `ui.editor{}`**.
 
 ## Nodes
 
@@ -155,7 +155,7 @@ Arguments are validated: unknown commands/arguments and wrong types fail.
 
 ```lua
 theme = {
-  mode = "light",                      -- "light" | "dark" | "system"
+  mode = "light",                      -- "light" | "dark" | "system" (follows the OS live)
   font = { family = "Georgia", size = 17 },
   mono = { family = "Menlo", size = 13 },
   editor = { max_width = 720, line_height = 1.1, paragraph_spacing = 8, margin = 48 },

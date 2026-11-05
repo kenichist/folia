@@ -153,6 +153,7 @@ private:
     QPointer<QWidget> m_editorParking;
     std::vector<QPointer<QShortcut>> m_shortcuts;
     QVariantMap m_theme;
+    Qt::ColorScheme m_systemScheme = Qt::ColorScheme::Unknown; // OS appearance, as last reported by Qt
     QColor m_accent;
     QHash<QString, QString> m_colors;
     QString m_path;

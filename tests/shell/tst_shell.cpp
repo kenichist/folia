@@ -36,6 +36,7 @@
 #include <QRegularExpression>
 #include <QShortcut>
 #include <QSignalSpy>
+#include <QStyleHints>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTextDocument>
@@ -1211,6 +1212,53 @@ private slots:
     }
 
     // -------------------------------------------------------------- theme --
+    void systemModeFollowsAppearanceChanges()
+    {
+        // The offscreen platform cannot switch its appearance, so emit the
+        // change Qt sends when the OS does (the host trusts its argument).
+        QStyleHints *hints = QGuiApplication::styleHints();
+        const auto osAppearance = [hints](Qt::ColorScheme s) { emit hints->colorSchemeChanged(s); };
+        const auto layout = [](const char *mode) {
+            return spec("return ui.column{ id = 'root', style = { bg = 'sidebar' },\n"
+                        "  ui.text{ id = 'dark', text = tostring(ctx.prefers.dark) }, ui.editor{} }",
+                        "Sys", QByteArray("  theme = { mode = '") + mode + "', material = 'glass' },");
+        };
+        const QString lightSidebar = QStringLiteral("#f6f6f8");
+        const QString darkSidebar = QStringLiteral("#26262a");
+        Harness h;
+        QString err;
+        QVERIFY2(h.load(layout("system"), &err), qPrintable(err));
+        QWidget *root = h.host->widgetById(QStringLiteral("root"));
+        QVERIFY(root);
+        QCOMPARE(h.ectx.theme().background, EditorTheme::light().background);
+        QCOMPARE(h.labelText("dark"), QStringLiteral("false"));
+        QVERIFY2(root->styleSheet().contains(lightSidebar), qPrintable(root->styleSheet()));
+        QCOMPARE(h.host->warnings().size(), 1); // the material fallback notice
+
+        // OS goes dark: editor theme, named style colors and ctx.prefers follow.
+        osAppearance(Qt::ColorScheme::Dark);
+        QTRY_COMPARE(h.ectx.theme().background, EditorTheme::dark().background);
+        QTRY_COMPARE(h.labelText("dark"), QStringLiteral("true"));
+        QVERIFY2(root->styleSheet().contains(darkSidebar), qPrintable(root->styleSheet()));
+        QCOMPARE(QApplication::palette().color(QPalette::Window), EditorTheme::dark().background);
+        QCOMPARE(h.host->widgetById(QStringLiteral("root")), root); // re-rendered, not rebuilt
+        QCOMPARE(h.host->warnings().size(), 1);                    // not duplicated by the re-apply
+
+        osAppearance(Qt::ColorScheme::Light);
+        QTRY_COMPARE(h.ectx.theme().background, EditorTheme::light().background);
+        QTRY_COMPARE(h.labelText("dark"), QStringLiteral("false"));
+        QVERIFY2(root->styleSheet().contains(lightSidebar), qPrintable(root->styleSheet()));
+
+        // A fixed mode keeps its colors, but the view still sees ctx.prefers.dark.
+        QVERIFY2(h.load(layout("light"), &err), qPrintable(err));
+        osAppearance(Qt::ColorScheme::Dark);
+        QTRY_COMPARE(h.labelText("dark"), QStringLiteral("true"));
+        QCOMPARE(h.ectx.theme().background, EditorTheme::light().background);
+        QVERIFY2(h.host->widgetById(QStringLiteral("root"))->styleSheet().contains(lightSidebar),
+                 qPrintable(h.host->widgetById(QStringLiteral("root"))->styleSheet()));
+        QVERIFY2(h.host->lastError().isEmpty(), qPrintable(h.host->lastError()));
+    }
+
     void timingDefaultPreset()
     {
         Harness h;
