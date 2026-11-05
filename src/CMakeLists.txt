@@ -40,6 +40,13 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/app/main.cpp)
     MACOSX_BUNDLE_BUNDLE_NAME Folia
     MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
+  if(APPLE)
+    # App icon; regenerate with `swift packaging/brand/make_brand.swift`.
+    set(FOLIA_ICON ${CMAKE_SOURCE_DIR}/packaging/brand/Folia.icns)
+    target_sources(folia PRIVATE ${FOLIA_ICON})
+    set_source_files_properties(${FOLIA_ICON} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    set_target_properties(folia PROPERTIES MACOSX_BUNDLE_ICON_FILE Folia.icns)
+  endif()
   # Ship presets inside the bundle / next to the executable so first run can
   # copy them into the user's editable shell folder.
   if(APPLE)

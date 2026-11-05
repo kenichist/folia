@@ -1,4 +1,4 @@
-# Folia
+<p align="center"><img src="packaging/brand/folia-banner.svg" alt="Folia: programmable, lightweight local notes" width="100%"></p>
 
 A lightweight, local notes app with nested pages, LaTeX math and code blocks.
 Its whole window layout is a Lua file you can redesign in any text editor,
@@ -123,3 +123,5 @@ proxies and open items, see [`docs/RELEASE_REPORT.md`](docs/RELEASE_REPORT.md),
 - `presets/REFERENCE.md`: shell language reference
 - `docs/BENCHMARKS.md`: fixtures and benchmark harness
 - `docs/RELEASE_REPORT.md`: results, achieved/missed/unmeasured targets, next fix
+- `packaging/brand/`: app icon and banner, drawn from hand-placed vertices;
+  `swift packaging/brand/make_brand.swift` regenerates them
