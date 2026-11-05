@@ -1,6 +1,8 @@
 #include "editor/VirtualLayout.h"
 
 #include "core/Instrument.h"
+#include "core/LucideIcons.h"
+#include "editor/Links.h"
 #ifdef FOLIA_WITH_MATH
 #include "math/MathRenderer.h"
 #endif
@@ -9,6 +11,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QTextDocument>
+#include <QTextFragment>
 #include <QTextFrame>
 #include <QTextLayout>
 #include <QTextObjectInterface>
@@ -23,6 +26,7 @@ namespace {
 constexpr qreal kBottomSlack = 160; // scroll past the end
 constexpr qreal kCodeInset = 14;
 constexpr qreal kPreviewPad = 8;
+constexpr qreal kCopyIcon = 13;
 
 LineRole roleOf(const QTextBlock &b)
 {
@@ -561,12 +565,26 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
             add(0, len, q);
             i = 2;
         }
-        // Inline markup: `code`, $math$, **bold**, *italic*, [[link]].
+        // Inline markup: `code`, $math$, **bold**, *italic*, [[link]], bare URLs.
+        QTextCharFormat linkF;
+        linkF.setForeground(t.accent);
+        linkF.setFontUnderline(true);
+        linkF.setUnderlineColor(t.accent);
         while (i < len) {
             const QChar c = text[i];
             if (c == QLatin1Char('\\')) {
                 i += 2;
                 continue;
+            }
+            if (const char16_t lc = c.unicode() | 0x20; // ASCII lower-case, no table lookup
+                (lc == u'h' || lc == u'w' || lc == u'm' || lc == u'f') && (i == 0 || !text[i - 1].isLetterOrNumber())) {
+                if (const int ul = links::bareUrlLength(text, i)) {
+                    QTextCharFormat f = linkF;
+                    f.setProperty(kLinkHrefProperty, links::bareUrlHref(QStringView(text).mid(i, ul)));
+                    add(i, ul, f);
+                    i += ul;
+                    continue;
+                }
             }
             if (c == QLatin1Char('`')) {
                 // Markdown rule: a run of N backticks is closed only by a run
@@ -633,6 +651,12 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
                 }
             }
             ++i;
+        }
+        // Named links: the label carries an anchor format in the document.
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const QTextFragment f = it.fragment();
+            if (f.isValid() && links::isLink(f.charFormat()))
+                add(f.position() - block.position(), f.length(), linkF);
         }
         break;
     }
@@ -846,8 +870,9 @@ QRectF VirtualLayout::codeCopyRect(const QTextBlock &block) const
     if (!tl || tl->lineCount() == 0)
         return QRectF();
     const QTextLine l = tl->lineAt(0);
-    const QFontMetricsF fm(m_ctx->theme().body);
-    const qreal w = fm.horizontalAdvance(QStringLiteral("Copy")) + 16;
+    QFont f = m_ctx->theme().body;
+    f.setPointSizeF(f.pointSizeF() * 0.82);
+    const qreal w = QFontMetricsF(f).horizontalAdvance(QStringLiteral("Copy")) + 16 + kCopyIcon + 5;
     const qreal right = columnLeft() + columnWidth() - 6;
     return QRectF(right - w, br.top() + l.y() + 2, w, l.height() - 4);
 }
@@ -992,7 +1017,10 @@ void VirtualLayout::draw(QPainter *painter, const PaintContext &ctx)
             f.setPointSizeF(t.body.pointSizeF() * 0.82);
             painter->setFont(f);
             painter->setPen(t.dim);
-            painter->drawText(cr, Qt::AlignCenter, QStringLiteral("Copy"));
+            const QRectF ir(cr.left() + 8, cr.center().y() - kCopyIcon / 2, kCopyIcon, kCopyIcon);
+            icons::paint(painter, QStringLiteral("copy"), ir, t.dim);
+            painter->drawText(cr.adjusted(8 + kCopyIcon + 5, 0, -8, 0), Qt::AlignVCenter | Qt::AlignLeft,
+                              QStringLiteral("Copy"));
         }
 
         // Caret (also inside an IME preedit area).
@@ -1080,7 +1108,7 @@ void VirtualLayout::resizeInlineObject(QTextInlineObject item, int pos, const QT
     const PageId target = format.property(kPageLinkTargetProperty).toLongLong();
     const QString title = m_ctx->titleOf ? m_ctx->titleOf(target) : QString();
     const QFontMetricsF fm(m_ctx->theme().body);
-    const qreal w = qMin(columnWidth(), fm.horizontalAdvance(title.isEmpty() ? QStringLiteral("Untitled") : title) + 40);
+    const qreal w = qMin(columnWidth(), fm.horizontalAdvance(title.isEmpty() ? QStringLiteral("Untitled") : title) + 38);
     item.setWidth(w);
     item.setAscent(fm.ascent() + 5);
     item.setDescent(fm.descent() + 5);
@@ -1110,17 +1138,13 @@ void VirtualLayout::drawInlineObject(QPainter *p, const QRectF &rect, QTextInlin
     p->setPen(Qt::NoPen);
     p->setBrush(t.linkBackground);
     p->drawRoundedRect(chip, 5, 5);
-    // Small page glyph.
-    QPainterPath page;
-    const qreal gx = chip.left() + 9, gy = chip.center().y() - 6;
-    page.addRoundedRect(QRectF(gx, gy, 9, 12), 1.5, 1.5);
-    p->setPen(QPen(t.accent, 1.2));
-    p->setBrush(Qt::NoBrush);
-    p->drawPath(page);
+    // Child page glyph: Lucide "file-text".
+    const qreal gs = 16;
+    icons::paint(p, QStringLiteral("file-text"), QRectF(chip.left() + 7, chip.center().y() - gs / 2, gs, gs), t.accent);
     p->setPen(t.accent);
     p->setFont(t.body);
     const QFontMetricsF fm(t.body);
-    const QRectF tr = chip.adjusted(26, 0, -8, 0);
+    const QRectF tr = chip.adjusted(29, 0, -9, 0);
     p->drawText(tr, Qt::AlignVCenter | Qt::AlignLeft, fm.elidedText(title, Qt::ElideRight, tr.width()));
     p->restore();
 }

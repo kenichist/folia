@@ -10,6 +10,7 @@ local actions = {
   { label = "New child", command = "page.new_child" },
   { label = "Back",      command = "nav.back" },
   { label = "Parent",    command = "nav.parent" },
+  { label = "Delete",    command = "page.delete", args = { confirm = true } },
 }
 
 ui.component("ActionStrip", function(p)
@@ -20,7 +21,7 @@ ui.component("ActionStrip", function(p)
       text = a.label,
       autofocus = (i == 1),
       focusable = true,
-      on_click = function(ctx) ctx.set{ actions = false }; ctx.run(a.command) end,
+      on_click = function(ctx) ctx.set{ actions = false }; ctx.run(a.command, a.args) end,
       style = { fg = "accent", size = 13 },
     }
   end
@@ -49,6 +50,7 @@ return {
     ["Mod+Shift+N"] = "page.new_child",
     ["Mod+["] = "nav.back",
     ["Mod+Shift+Up"] = "nav.parent",
+    ["Mod+K"] = "link.edit",
   },
 
   view = function(state, ctx)
@@ -65,7 +67,10 @@ return {
         id = "nav",
         style = { bg = "sidebar", width = 250 },
         ui.text{ bind = "path", wrap = true, style = { fg = "dim", size = 12, padding = 10 } },
-        ui.list{ id = "outline", source = data.tree{}, row = { height = 28, indent = true, disclosure = true },
+        ui.list{ id = "outline", source = data.tree{},
+                 row = { height = 28, indent = true, disclosure = true, actions = {
+                   { icon = "trash-2", command = "page.delete", args = { confirm = true }, tooltip = "Delete page" },
+                   { icon = "plus", command = "page.new", id_arg = "parent", tooltip = "Add a page inside" } } },
                  activate = "page.open", style = { grow = 1, bg = "sidebar", size = 14 } },
         ui.text{ bind = "status", style = { fg = "dim", size = 11, padding = 8 } },
       },

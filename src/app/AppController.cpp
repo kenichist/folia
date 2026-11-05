@@ -2,6 +2,7 @@
 
 #include "app/Platform.h"
 #include "core/Instrument.h"
+#include "core/LucideIcons.h"
 #include "editor/EditorContext.h"
 #include "editor/EditorPane.h"
 #include "editor/NoteEditor.h"
@@ -15,6 +16,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCryptographicHash>
 #include <QCloseEvent>
 #include <QDesktopServices>
 #include <QDir>
@@ -118,19 +120,48 @@ QString AppController::presetPath(const QString &name) const
 
 void AppController::installUserPresets()
 {
+    // The editable copies are installed once. When Folia ships a newer
+    // version of a file, a copy the user never edited (its contents still
+    // match what was installed) is replaced; edited copies are left alone.
+    static const QSet<QByteArray> kShippedBefore = {
+        // Folia 0.1.0: default, keyboard, right-nav, REFERENCE.md
+        "9ae2b2d91f30cbb98c934984338196229c23b364d8e2b99ed87b5f5777858539",
+        "936462a873193beb9070e12f025f36b9feef4a6e6745ccb4fb22dc3b8e210215",
+        "d90c1d7fb06d897307ba961c62c89d7b329bbd97f4d2386859bc9f56a010c2fa",
+        "26d03f8283819b25826128c1307abb023fa4d613f18cf791d3a99ba59bcee08b",
+    };
+    auto digest = [](const QString &path) {
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly))
+            return QByteArray();
+        return QCryptographicHash::hash(f.readAll(), QCryptographicHash::Sha256).toHex();
+    };
+    auto install = [&](const QString &key, const QString &src, const QString &dst) {
+        if (src.isEmpty() || !QFileInfo::exists(src))
+            return;
+        const QByteArray want = digest(src);
+        const QString settingKey = QStringLiteral("shell.installed.") + key;
+        if (QFileInfo::exists(dst)) {
+            const QByteArray have = digest(dst);
+            if (have == want)
+                return;
+            const QByteArray installed = m_store->setting(settingKey).toLatin1();
+            if (have != installed && !kShippedBefore.contains(have))
+                return; // edited by the user: keep it
+            QFile::remove(dst);
+        }
+        if (QFile::copy(src, dst)) {
+            QFile(dst).setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadGroup
+                                      | QFileDevice::ReadOther);
+            m_store->setSetting(settingKey, QString::fromLatin1(want));
+        }
+    };
     QDir().mkpath(userShellDir());
-    for (const QString &name : {QStringLiteral("default"), QStringLiteral("keyboard"), QStringLiteral("right-nav")}) {
-        const QString dst = presetPath(name);
-        const QString src = builtinPresetPath(name);
-        if (!QFileInfo::exists(dst) && !src.isEmpty())
-            QFile::copy(src, dst) && QFile(dst).setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                                                               | QFileDevice::ReadGroup | QFileDevice::ReadOther);
-    }
-    const QString ref = QDir(userShellDir()).filePath(QStringLiteral("REFERENCE.md"));
+    for (const QString &name : {QStringLiteral("default"), QStringLiteral("keyboard"), QStringLiteral("right-nav")})
+        install(name, builtinPresetPath(name), presetPath(name));
     const QString refSrc = QFileInfo(builtinPresetPath(QStringLiteral("default"))).absolutePath()
         + QStringLiteral("/../REFERENCE.md");
-    if (!QFileInfo::exists(ref) && QFileInfo::exists(refSrc))
-        QFile::copy(refSrc, ref);
+    install(QStringLiteral("REFERENCE.md"), refSrc, QDir(userShellDir()).filePath(QStringLiteral("REFERENCE.md")));
 }
 
 bool AppController::start(QString *error)
@@ -280,6 +311,13 @@ void AppController::buildWindow()
     m_shell = new ShellHost(deps, this);
     connect(m_shell, &ShellHost::resetRequested, this, &AppController::resetShell);
     connect(m_pane->editor(), &NoteEditor::openPageRequested, this, [this](PageId id) { openPage(id); });
+    connect(m_pane->editor(), &NoteEditor::openUrlRequested, this, [](const QString &href) {
+        QUrl u(href, QUrl::TolerantMode);
+        if (u.scheme().isEmpty())
+            u = QUrl::fromUserInput(href);
+        if (u.isValid())
+            QDesktopServices::openUrl(u);
+    });
     connect(m_ectx, &EditorContext::themeChanged, this, [this] {
         for (PageSession *s : std::as_const(m_cache))
             if (s->layout())
@@ -298,12 +336,13 @@ void AppController::buildWindow()
     // Shortcuts are owned by the Lua layout (so users can rebind them); the
     // menu only keeps editing keys and the recovery keys reserved by the host.
     QMenuBar *mb = w->menuBar();
-    auto act = [this](QMenu *menu, const QString &text, const QString &cmd, const QKeySequence &ks = {}) {
+    auto act = [this](QMenu *menu, const QString &text, const QString &cmd, const QKeySequence &ks = {},
+                      const QVariantMap &args = {}) {
         QAction *a = menu->addAction(text);
         if (!ks.isEmpty())
             a->setShortcut(ks);
-        connect(a, &QAction::triggered, this, [this, cmd] {
-            const CommandResult r = m_commands->dispatchCommand(cmd, {});
+        connect(a, &QAction::triggered, this, [this, cmd, args] {
+            const CommandResult r = m_commands->dispatchCommand(cmd, args);
             if (!r.ok)
                 qWarning() << r.error;
         });
@@ -319,12 +358,13 @@ void AppController::buildWindow()
     act(file, tr("Indent Page"), QStringLiteral("page.indent"));
     act(file, tr("Outdent Page"), QStringLiteral("page.outdent"));
     file->addSeparator();
-    act(file, tr("Move Page to Trash"), QStringLiteral("page.delete"));
+    act(file, tr("Delete Page…"), QStringLiteral("page.delete"), {}, {{QStringLiteral("confirm"), true}});
     QMenu *edit = mb->addMenu(tr("&Edit"));
     act(edit, tr("Undo"), QStringLiteral("editor.undo"), QKeySequence::Undo);
     act(edit, tr("Redo"), QStringLiteral("editor.redo"), QKeySequence::Redo);
     edit->addSeparator();
     act(edit, tr("Copy Code Block"), QStringLiteral("code.copy_block"));
+    act(edit, tr("Insert or Edit Link…"), QStringLiteral("link.edit"));
     QMenu *go = mb->addMenu(tr("&Go"));
     act(go, tr("Back"), QStringLiteral("nav.back"));
     act(go, tr("Forward"), QStringLiteral("nav.forward"));
@@ -624,6 +664,7 @@ void AppController::reclaimMemory(bool critical)
     }
     if (m_previews)
         m_previews->trim(critical ? 0 : (1 << 20));
+    icons::clearCache();
     if (m_active && m_active->layout())
         m_active->layout()->setLayoutCap(critical ? 150 : 300);
     instr::set(instr::DocCacheEntries, m_cache.size());
@@ -723,6 +764,38 @@ void AppController::outdent(PageId id)
     });
 }
 
+// Asks before deleting (asynchronously: commands may run inside a Lua
+// handler, which must not spin a nested event loop).
+void AppController::confirmDelete(PageId id)
+{
+    flushSaves();
+    m_store->pageMeta(id, this, [this, id](PageMeta m, bool found) {
+        if (!found)
+            return;
+        const QString title = m.title.trimmed().isEmpty() ? tr("Untitled") : m.title;
+        auto *box = new QMessageBox(QMessageBox::Warning, tr("Delete Page"), tr("Delete “%1”?").arg(title),
+                                    QMessageBox::NoButton, m_window);
+        if (m.childCount == 1)
+            box->setInformativeText(tr("Its subpage will be deleted too."));
+        else if (m.childCount > 1)
+            box->setInformativeText(tr("Its %1 subpages, and everything inside them, will be deleted too.").arg(m.childCount));
+        QPushButton *del = box->addButton(tr("Delete"), QMessageBox::DestructiveRole);
+        QPushButton *cancel = box->addButton(QMessageBox::Cancel);
+        box->setDefaultButton(cancel);
+        box->setEscapeButton(cancel);
+        box->setWindowModality(Qt::WindowModal);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        connect(box, &QMessageBox::finished, this, [this, box, del, id](int) {
+            if (box->clickedButton() == del) {
+                QVariantMap args;
+                args.insert(QStringLiteral("id"), qint64(id));
+                m_commands->dispatchCommand(QStringLiteral("page.delete"), args);
+            }
+        });
+        box->open();
+    });
+}
+
 // ------------------------------------------------------------ commands ----
 void AppController::registerCommands()
 {
@@ -784,10 +857,15 @@ void AppController::registerCommands()
                                   });
                 return okResult();
             }, {}});
-    c->add({QStringLiteral("page.delete"), tr("Move Page to Trash"), {}, {arg("id", T::LongLong)}, [this](const QVariantMap &a) {
+    c->add({QStringLiteral("page.delete"), tr("Delete Page"), {}, {arg("id", T::LongLong), arg("confirm", T::Bool)},
+            [this](const QVariantMap &a) {
                 const PageId id = argId(a);
                 if (!id)
                     return fail(tr("no page"));
+                if (a.value(QStringLiteral("confirm")).toBool()) {
+                    confirmDelete(id);
+                    return okResult();
+                }
                 flushSaves();
                 const bool wasActive = currentPage() == id;
                 m_store->trashPage(id, heldPages(), this, [this, id, wasActive](bool ok, PageId parent) {
@@ -806,6 +884,10 @@ void AppController::registerCommands()
                     }
                 });
                 return okResult();
+            }, {}});
+    c->add({QStringLiteral("link.edit"), tr("Insert or Edit Link"), {}, {}, [this](const QVariantMap &) {
+                QString why;
+                return m_pane->editor()->editLink(&why) ? okResult() : fail(why);
             }, {}});
     c->add({QStringLiteral("page.reveal"), tr("Reveal Page in Tree"), {}, {arg("id", T::LongLong)}, [this](const QVariantMap &a) {
                 emit m_data->revealRequested(argId(a));
@@ -936,6 +1018,8 @@ void AppController::seedWorkspace()
         block(BlockKind::Text, tr("- Type anywhere. Everything autosaves locally within a second.")),
         block(BlockKind::Text, tr("- Inline math like $e^{i\\pi} + 1 = 0$ shows a preview while the caret is inside it.")),
         block(BlockKind::Text, tr("- Start a line with ``` for code or $$ for a display equation, then press Enter.")),
+        block(BlockKind::Text, tr("- Links: select text and press Mod+K, or paste an address onto it. Click a link for "
+                                  "Open, Edit or Remove; Mod-click opens it, like [Lucide icons](https://lucide.dev/icons).")),
         block(BlockKind::Text, tr("- The whole window layout is a Lua file: Shell ▸ Edit Layout File. Save it to see changes.")),
         block(BlockKind::Text, tr("## Child pages")),
         block(BlockKind::PageLink, {}, {}, mathPage),

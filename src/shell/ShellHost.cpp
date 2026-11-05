@@ -2,6 +2,7 @@
 
 #include "app/Platform.h"
 #include "core/Instrument.h"
+#include "core/LucideIcons.h"
 #include "editor/EditorContext.h"
 #include "editor/EditorPane.h"
 #include "editor/NoteEditor.h"
@@ -17,11 +18,13 @@ extern "C" {
 
 #include <QApplication>
 #include <QBoxLayout>
+#include <QCursor>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
 #include <QFrame>
+#include <QHelpEvent>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -30,6 +33,7 @@ extern "C" {
 #include <QScrollBar>
 #include <QShortcut>
 #include <QStyleHints>
+#include <QToolTip>
 
 namespace folia {
 
@@ -324,7 +328,61 @@ public:
     PageRowDelegate *delegate;
     std::function<void(int)> onActivate;
     std::function<void(const QString &, PageId)> onCommand;
+    std::function<void(int row, int action)> onRowAction;
     bool clickActivates = true;
+
+    // Hover actions: the row under the mouse shows its action buttons. Only
+    // the rows whose state changed are repainted.
+    int actionAt(const QPoint &pos, int *row) const
+    {
+        const PageRowDelegate::Template &tpl = delegate->tpl;
+        if (tpl.actions.isEmpty() || tpl.horizontal || !model())
+            return -1;
+        const QModelIndex idx = indexAt(pos);
+        if (!idx.isValid() || idx.data(PageListModel::MoreRole).toBool())
+            return -1;
+        const QRect vr = visualRect(idx);
+        for (int i = 0; i < int(tpl.actions.size()); ++i) {
+            if (delegate->actionRect(vr, i).contains(pos)) {
+                *row = idx.row();
+                return i;
+            }
+        }
+        return -1;
+    }
+    void setHover(int row, int action)
+    {
+        if (row == delegate->hoverRow && action == delegate->hoverAction)
+            return;
+        const int old = delegate->hoverRow;
+        delegate->hoverRow = row;
+        delegate->hoverAction = action;
+        updateRow(old);
+        if (row != old)
+            updateRow(row);
+        const Qt::CursorShape shape = action >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor;
+        if (viewport()->cursor().shape() != shape)
+            viewport()->setCursor(shape);
+    }
+    void refreshHover()
+    {
+        if (delegate->tpl.actions.isEmpty())
+            return;
+        const QPoint pos = viewport()->mapFromGlobal(QCursor::pos());
+        if (!viewport()->rect().contains(pos) || !underMouse()) {
+            setHover(-1, -1);
+            return;
+        }
+        const QModelIndex idx = indexAt(pos);
+        int row = -1;
+        const int a = actionAt(pos, &row);
+        setHover(idx.isValid() ? idx.row() : -1, a);
+    }
+    void updateRow(int r)
+    {
+        if (r >= 0 && model() && r < model()->rowCount())
+            viewport()->update(visualRect(model()->index(r, 0)));
+    }
 
     PageListModel *pageModel() const { return static_cast<PageListModel *>(model()); }
     int current() const { return currentIndex().isValid() ? currentIndex().row() : -1; }
@@ -404,8 +462,77 @@ protected:
             return;
         QListView::keyPressEvent(e);
     }
+    void mouseMoveEvent(QMouseEvent *e) override
+    {
+        QListView::mouseMoveEvent(e);
+        if (delegate->tpl.actions.isEmpty() || e->buttons() != Qt::NoButton)
+            return;
+        const QPoint pos = e->position().toPoint();
+        const QModelIndex idx = indexAt(pos);
+        int row = -1;
+        const int a = actionAt(pos, &row);
+        setHover(idx.isValid() ? idx.row() : -1, a);
+    }
+    void leaveEvent(QEvent *e) override
+    {
+        setHover(-1, -1);
+        QListView::leaveEvent(e);
+    }
+    void scrollContentsBy(int dx, int dy) override
+    {
+        QListView::scrollContentsBy(dx, dy);
+        if (delegate->hoverRow >= 0)
+            refreshHover();
+    }
+    void rowsInserted(const QModelIndex &parent, int start, int end) override
+    {
+        QListView::rowsInserted(parent, start, end);
+        if (delegate->hoverRow >= 0)
+            refreshHover();
+    }
+    void rowsAboutToBeRemoved(const QModelIndex &parent, int start, int end) override
+    {
+        setHover(-1, -1); // rows shift; the next mouse move restores it
+        QListView::rowsAboutToBeRemoved(parent, start, end);
+    }
+    bool viewportEvent(QEvent *e) override
+    {
+        if (e->type() == QEvent::ToolTip && !delegate->tpl.actions.isEmpty()) {
+            auto *he = static_cast<QHelpEvent *>(e);
+            int row = -1;
+            const int a = actionAt(he->pos(), &row);
+            if (a >= 0) {
+                const QRect ar = delegate->actionRect(visualRect(model()->index(row, 0)), a);
+                QToolTip::showText(he->globalPos(), delegate->tpl.actions[a].tooltip, viewport(), ar);
+                return true;
+            }
+        }
+        return QListView::viewportEvent(e);
+    }
+    void mousePressEvent(QMouseEvent *e) override
+    {
+        int row = -1;
+        const int a = e->button() == Qt::LeftButton ? actionAt(e->position().toPoint(), &row) : -1;
+        if (a >= 0) {
+            m_pressAction = a;
+            m_pressRow = row;
+            e->accept(); // an action click neither selects nor opens the row
+            return;
+        }
+        m_pressAction = -1;
+        QListView::mousePressEvent(e);
+    }
     void mouseReleaseEvent(QMouseEvent *e) override
     {
+        if (m_pressAction >= 0) {
+            int row = -1;
+            const int a = actionAt(e->position().toPoint(), &row);
+            const bool same = a == m_pressAction && row == m_pressRow;
+            m_pressAction = -1;
+            if (same && e->button() == Qt::LeftButton && onRowAction)
+                onRowAction(row, a);
+            return;
+        }
         const QModelIndex idx = indexAt(e->position().toPoint());
         QListView::mouseReleaseEvent(e);
         if (!idx.isValid() || e->button() != Qt::LeftButton)
@@ -430,12 +557,21 @@ protected:
     }
     void mouseDoubleClickEvent(QMouseEvent *e) override
     {
+        int row = -1;
+        if (actionAt(e->position().toPoint(), &row) >= 0) {
+            mousePressEvent(e); // a fast second click is another click on the action
+            return;
+        }
         const QModelIndex idx = indexAt(e->position().toPoint());
         if (idx.isValid() && !clickActivates && onActivate)
             onActivate(idx.row());
         else
             QListView::mouseDoubleClickEvent(e);
     }
+
+private:
+    int m_pressAction = -1;
+    int m_pressRow = -1;
 };
 
 QString cssKey(const QString &key)
@@ -960,9 +1096,14 @@ bool ShellHost::toNode(LuaRuntime &rt, int idx, UiNode &n, int depth, int &count
         return false;
     }
     // Scalars, style, handlers, source/row descriptors.
+    lua_Unsigned maxIndex = 0; // largest positive integer key (children)
     lua_pushnil(L);
     while (lua_next(L, idx) != 0) {
-        if (lua_type(L, -2) == LUA_TSTRING) {
+        if (lua_isinteger(L, -2)) {
+            const lua_Integer k = lua_tointeger(L, -2);
+            if (k > 0 && lua_Unsigned(k) > maxIndex)
+                maxIndex = lua_Unsigned(k);
+        } else if (lua_type(L, -2) == LUA_TSTRING) {
             const QString k = QString::fromUtf8(lua_tostring(L, -2));
             const int vt = lua_type(L, -1);
             if (k.startsWith(QLatin1String("on_")) && vt == LUA_TFUNCTION) {
@@ -989,7 +1130,9 @@ bool ShellHost::toNode(LuaRuntime &rt, int idx, UiNode &n, int depth, int &count
         lua_pop(L, 1);
     }
     n.id = n.props.value(QStringLiteral("id")).toString();
-    const lua_Unsigned len = lua_rawlen(L, idx);
+    // `cond and node or nil` leaves holes, for which the length operator is
+    // undefined (Lua 5.5 may stop at the first nil): walk to the largest key.
+    const lua_Unsigned len = qMax(lua_rawlen(L, idx), maxIndex);
     for (lua_Unsigned i = 1; i <= len; ++i) {
         lua_rawgeti(L, idx, lua_Integer(i));
         if (lua_isnil(L, -1) || (lua_isboolean(L, -1) && !lua_toboolean(L, -1))) {
@@ -1025,7 +1168,25 @@ bool ShellHost::validate(const UiNode &root, QString *err) const
                 problem = QStringLiteral("id '%1' is reserved for the editor").arg(n.id);
             ids.insert(n.id);
         }
+        if (n.type == QLatin1String("button")) {
+            const QString icon = n.props.value(QStringLiteral("icon")).toString();
+            if (!icon.isEmpty() && !icons::has(icon))
+                problem = QStringLiteral("button '%1': unknown icon '%2' (available: %3)")
+                              .arg(n.id.isEmpty() ? n.key : n.id, icon, icons::names().join(QStringLiteral(", ")));
+        }
         if (n.type == QLatin1String("list")) {
+            for (const QVariant &v : n.row.value(QStringLiteral("actions")).toList()) {
+                const QVariantMap a = v.toMap();
+                const QString icon = a.value(QStringLiteral("icon")).toString();
+                const QString cmd = a.value(QStringLiteral("command")).toString();
+                QVariantMap args = a.value(QStringLiteral("args")).toMap();
+                args.insert(a.value(QStringLiteral("id_arg"), QStringLiteral("id")).toString(), qint64(1));
+                if (!icons::has(icon))
+                    problem = QStringLiteral("list '%1': row action needs a known icon, got '%2' (available: %3)")
+                                  .arg(n.id, icon, icons::names().join(QStringLiteral(", ")));
+                else if (const CommandResult r = m_d.commands->validate(cmd, args); !r.ok)
+                    problem = QStringLiteral("list '%1': row action '%2': %3").arg(n.id, cmd, r.error);
+            }
             const QString k = n.source.value(QStringLiteral("kind")).toString();
             static const QSet<QString> kinds = {QStringLiteral("tree"), QStringLiteral("search"), QStringLiteral("recent"),
                                                 QStringLiteral("children"), QStringLiteral("ancestors")};
@@ -1155,7 +1316,17 @@ void ShellHost::updateCommon(QWidget *w, const UiNode &n)
     if (sv("padding").isValid() && n.type != QLatin1String("row") && n.type != QLatin1String("column"))
         css << QStringLiteral("padding:%1px;").arg(sv("padding").toInt());
     const QString sel = n.type == QLatin1String("list") ? QStringLiteral("QListView#") : QStringLiteral("#");
-    w->setStyleSheet(css.isEmpty() ? QString() : sel + obj + QStringLiteral("{") + css.join(QString()) + QStringLiteral("}"));
+    QString sheet = css.isEmpty() ? QString() : sel + obj + QStringLiteral("{") + css.join(QString()) + QStringLiteral("}");
+    if (n.type == QLatin1String("button")) {
+        // Flat buttons get a soft hover/pressed background (theme "hover_bg").
+        const QString hover = m_colors.value(QStringLiteral("hover_bg"));
+        if (!sv("radius").isValid())
+            sheet += QStringLiteral("#%1{border-radius:6px;}").arg(obj);
+        if (!hover.isEmpty())
+            sheet += QStringLiteral("#%1:hover{background-color:%2;}#%1:pressed{background-color:%3;}")
+                         .arg(obj, hover, resolveColor(QStringLiteral("border")));
+    }
+    w->setStyleSheet(sheet);
     QFont f = m_d.editorCtx->theme().body;
     f.setPointSizeF(qMax(9.0, f.pointSizeF() - 2));
     if (sv("font").isValid())
@@ -1276,7 +1447,19 @@ QWidget *ShellHost::realize(const UiNode &n, QSet<QString> &seen, QWidget *paren
         auto *b = static_cast<QPushButton *>(w);
         if (!b)
             w = b = new QPushButton(parent);
-        b->setText(p.value(QStringLiteral("text"), p.value(QStringLiteral("label"))).toString());
+        b->setText(p.value(QStringLiteral("text")).toString());
+        const QString icon = p.value(QStringLiteral("icon")).toString();
+        if (!icon.isEmpty()) {
+            // Lucide icon tinted with the button's text color.
+            const QColor fg(resolveColor(p.value(QStringLiteral("style.fg")), QStringLiteral("text")));
+            const int sz = p.value(QStringLiteral("style.icon_size"), 16).toInt();
+            b->setIcon(icons::icon(icon, fg));
+            b->setIconSize(QSize(sz, sz));
+        } else {
+            b->setIcon(QIcon());
+        }
+        if (b->text().isEmpty() && icon.isEmpty())
+            b->setText(p.value(QStringLiteral("label")).toString());
         b->setFlat(p.value(QStringLiteral("flat"), true).toBool());
         b->setCursor(Qt::PointingHandCursor);
         b->disconnect(this);
@@ -1397,6 +1580,26 @@ QWidget *ShellHost::realize(const UiNode &n, QSet<QString> &seen, QWidget *paren
         tpl.selectedText = QColor(resolveColor(row.value(QStringLiteral("selected_fg")), QStringLiteral("selection_text")));
         tpl.hoverBg = QColor(resolveColor(row.value(QStringLiteral("hover_bg")), QStringLiteral("hover_bg")));
         tpl.font = lw->font();
+        tpl.actions.clear();
+        for (const QVariant &v : row.value(QStringLiteral("actions")).toList()) {
+            const QVariantMap a = v.toMap();
+            tpl.actions.push_back({a.value(QStringLiteral("icon")).toString(), a.value(QStringLiteral("command")).toString(),
+                                   a.value(QStringLiteral("id_arg"), QStringLiteral("id")).toString(),
+                                   a.value(QStringLiteral("args")).toMap(), a.value(QStringLiteral("tooltip")).toString()});
+        }
+        if (tpl.actions.isEmpty())
+            lw->setHover(-1, -1);
+        lw->onRowAction = [this, lw](int r, int a) {
+            const PageRowDelegate::Template &t = lw->delegate->tpl;
+            if (!lw->pageModel() || a < 0 || a >= int(t.actions.size()))
+                return;
+            const PageRowDelegate::Action act = t.actions[a]; // the handler may re-render the shell
+            QVariantMap args = act.args;
+            args.insert(act.idArg, qint64(lw->pageModel()->idAt(r)));
+            const CommandResult res = m_d.commands->dispatchCommand(act.command, args);
+            if (!res.ok)
+                showBanner(res.error, true);
+        };
         lw->clickActivates = p.value(QStringLiteral("click_activates"), true).toBool();
         const int onActivate = n.handlers.value(QStringLiteral("on_activate"), -1);
         const QString activateCmd = p.value(QStringLiteral("activate"), QStringLiteral("page.open")).toString();

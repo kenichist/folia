@@ -43,7 +43,15 @@ ui.component("Sidebar", function(p)
       id = "outline",
       visible = not searching,
       source = data.tree{},                  -- lazily paged, expand with Right/click
-      row = { height = 27, indent = true, disclosure = true, icon = false, detail = "count" },
+      row = {
+        height = 27, indent = true, disclosure = true, icon = false, detail = "count",
+        -- Shown on the row under the mouse (drawn natively, no Lua per row).
+        -- The row's page id is passed as `id_arg` (default "id").
+        actions = {
+          { icon = "trash-2", command = "page.delete", args = { confirm = true }, tooltip = "Delete page" },
+          { icon = "plus", command = "page.new", id_arg = "parent", tooltip = "Add a page inside" },
+        },
+      },
       activate = "page.open",
       style = { bg = "sidebar", grow = 1, size = 13 },
     },
@@ -51,19 +59,31 @@ ui.component("Sidebar", function(p)
     ui.divider{},
     ui.row{
       style = { padding = 6, gap = 2 },
-      ui.button{ text = "＋ New page", command = "page.new", tooltip = "Mod+N", style = { fg = "dim", size = 12 } },
+      ui.button{ icon = "plus", text = "New page", command = "page.new", tooltip = "New page (Mod+N)",
+                 style = { fg = "dim", size = 12, icon_size = 14, padding = 5 } },
       ui.spacer{},
-      ui.button{ text = "＋ Child", command = "page.new_child", tooltip = "Mod+Shift+N", style = { fg = "dim", size = 12 } },
     },
   }
 end)
 
+-- Icons are Lucide names (https://lucide.dev/icons); see REFERENCE.md.
+local icon_button = { fg = "dim", width = 30, height = 28 }
+
 ui.component("TopBar", function(p)
+  local hidden = p.state.hide_sidebar
   return ui.row{
     id = "topbar",
-    style = { padding = 6, gap = 4, height = 40 },
-    ui.button{ text = "‹", command = "nav.back", tooltip = "Back (Mod+[)", style = { fg = "dim", size = 16, width = 28 } },
-    ui.button{ text = "›", command = "nav.forward", tooltip = "Forward (Mod+])", style = { fg = "dim", size = 16, width = 28 } },
+    style = { padding = 6, gap = 2, height = 40 },
+    ui.button{
+      id = "toggle_sidebar",
+      icon = hidden and "panel-left-open" or "panel-left-close",
+      label = hidden and "Show sidebar" or "Hide sidebar",
+      tooltip = (hidden and "Show sidebar" or "Hide sidebar") .. " (Mod+\\)",
+      on_click = function(ctx) ctx.toggle("hide_sidebar") end,
+      style = icon_button,
+    },
+    ui.button{ icon = "chevron-left", label = "Back", command = "nav.back", tooltip = "Back (Mod+[)", style = icon_button },
+    ui.button{ icon = "chevron-right", label = "Forward", command = "nav.forward", tooltip = "Forward (Mod+])", style = icon_button },
     ui.list{
       id = "breadcrumbs",
       orientation = "horizontal",
@@ -72,7 +92,7 @@ ui.component("TopBar", function(p)
       activate = "page.open",
       style = { grow = 1, size = 13 },
     },
-    ui.text{ id = "status", bind = "status", style = { fg = "dim", size = 12 } },
+    ui.text{ id = "status", bind = "status", style = { fg = "dim", size = 12, padding = 6 } },
   }
 end)
 
@@ -100,6 +120,7 @@ return {
     ["Mod+]"]        = "nav.forward",
     ["Mod+Shift+Up"] = "nav.parent",
     ["Mod+L"]        = "title.focus",
+    ["Mod+K"]        = "link.edit",                -- insert/edit a link (Text + Link)
     ["Mod+Shift+C"]  = "code.copy_block",
     ["Mod+Alt+Up"]   = "page.move_up",
     ["Mod+Alt+Down"] = "page.move_down",
@@ -114,11 +135,11 @@ return {
     return ui.row{
       id = "root",
       ui.Sidebar{ state = state, visible = not state.hide_sidebar },
-      not state.hide_sidebar and ui.divider{ vertical = true } or nil,
+      ui.divider{ vertical = true, visible = not state.hide_sidebar },
       ui.column{
         id = "main",
         style = { grow = 1, bg = "background" },
-        ui.TopBar{},
+        ui.TopBar{ state = state },
         ui.editor{},
       },
     }
