@@ -598,7 +598,20 @@ void PdfView::resizeEvent(QResizeEvent *e)
     if (m_fitOnShow && pageCount() > 0) {
         const int page = currentPage();
         const qreal into = (contentPos().y() - pageRect(page).top()) / m_zoom;
-        m_zoom = fitWidthZoom();
+        const qreal zoom = fitWidthZoom();
+        // A live resize (not the first layout): no renders until it settles.
+        if (m_cfg.settleResize && m_paints > 0 && isVisible() && e->oldSize().width() > 0
+            && !qFuzzyCompare(zoom, m_zoom)) {
+            if (!m_zooming) {
+                m_zooming = true;
+                if (m_media)
+                    m_media->setWanted(this, {});
+                m_lastWants.clear();
+                instr::add(instr::PdfResizeSettles);
+            }
+            m_zoomSettle.start(m_cfg.zoomSettleMs);
+        }
+        m_zoom = zoom;
         updateScrollBars();
         verticalScrollBar()->setValue(qRound(pageRect(page).top() + into * m_zoom));
         emit zoomChanged(m_zoom);

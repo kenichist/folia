@@ -35,7 +35,7 @@ skipped, so `cond and ui.text{...} or nil` works.
 | `ui.button{}` | push button | `text` and/or `icon` (a Lucide name, see Icons), `command = "page.new"` or `on_click = function(ctx) end` |
 | `ui.input{}` | single-line text field | `placeholder`, `value`, `list = "<list id>"`, `on_change(ctx, text)`, `on_submit(ctx, text)`, `on_cancel(ctx)` |
 | `ui.list{}` | virtualized page list | `source`, `row`, `activate = "page.open"` or `on_activate(ctx, item)`, `orientation = "horizontal"`, `click_activates`, `select_first`, `follow_current` |
-| `ui.editor{}` | the page title + body editor (one instance, re-parented, never recreated) | `style` |
+| `ui.editor{}` | the page title + body editor (one instance, re-parented, never recreated); while a PDF is open it shares this slot with the PDF tab, side by side | `style` |
 | `ui.spacer{}` | flexible space | |
 | `ui.divider{}` | 1 px line | `vertical = true` |
 
@@ -148,6 +148,8 @@ same shortcut are reported; the first one wins.
 `page.reveal{id?}`, `nav.back`, `nav.forward`, `nav.parent`, `title.focus`,
 `editor.focus`, `editor.undo`, `editor.redo`, `code.copy_block`, `link.edit`
 (the Text + Link form for the selection or the link at the caret),
+`pdf.close` (the PDF tab), `pane.swap` (the PDF tab to the other side of the
+note), `pane.focus_other` (between the note and the PDF tab),
 `shell.reload`, `shell.reset`,
 `shell.use{name}`, `shell.edit`, `shell.open_folder`, `app.settings` (shows
 Settings in the main window).

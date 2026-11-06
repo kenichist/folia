@@ -122,6 +122,9 @@ VirtualLayout::VirtualLayout(QTextDocument *doc, EditorContext *ctx)
     });
     if (QScreen *sc = QGuiApplication::primaryScreen())
         m_dpr = sc->devicePixelRatio();
+    m_widthSettle.setSingleShot(true);
+    m_widthSettle.setInterval(kResizeSettleMs);
+    connect(&m_widthSettle, &QTimer::timeout, this, &VirtualLayout::reestimate);
     m_mediaSettle.setSingleShot(true);
     connect(&m_mediaSettle, &QTimer::timeout, this, [this] {
         m_mediaDirty = true;
@@ -423,6 +426,8 @@ qint64 VirtualLayout::estimatedLayoutBytes() const
 void VirtualLayout::fullInvalidate()
 {
     m_mediaDirty = true;
+    m_estimatesStale = false; // every height is estimated now
+    m_widthSettle.stop();
     QTextDocument *doc = document();
     const int n = doc->blockCount();
     // QTextBlock::layout() allocates a QTextLayout on first use, so asking
@@ -446,6 +451,52 @@ void VirtualLayout::fullInvalidate()
         m_h[size_t(i)] = h;
         m_sumH += h;
     }
+    emit documentSizeChanged(documentSize());
+    emit update(QRectF(0, 0, 1e9, 1e9));
+}
+
+void VirtualLayout::resizeInvalidate(bool columnChanged)
+{
+    m_mediaDirty = true;
+    QTextDocument *doc = document();
+    const size_t n = m_st.size();
+    for (size_t i = 0; i < n && m_laidOut > 0; ++i) {
+        if (!(m_st[i] & StLaidOut))
+            continue;
+        QTextBlock b = doc->findBlockByNumber(int(i));
+        if (b.isValid() && b.layout()->lineCount() > 0)
+            b.layout()->clearLayout(); // lines (and x positions) for the old width
+        m_st[i] &= uint8_t(~StLaidOut);
+        --m_laidOut;
+    }
+    if (columnChanged) {
+        m_estimatesStale = true;
+        m_widthSettle.start(); // restarted by every step of a live resize
+    }
+    emit documentSizeChanged(documentSize());
+    emit update(QRectF(0, 0, 1e9, 1e9));
+}
+
+void VirtualLayout::reestimate()
+{
+    if (!m_estimatesStale)
+        return;
+    m_estimatesStale = false;
+    QTextDocument *doc = document();
+    const int n = doc->blockCount();
+    if (n != int(m_h.size())) {
+        fullInvalidate();
+        return;
+    }
+    double sum = 0;
+    int i = 0;
+    for (QTextBlock b = doc->begin(); b.isValid() && i < n; b = b.next(), ++i) {
+        if (!(m_st[size_t(i)] & StLaidOut))
+            m_h[size_t(i)] = estimateHeight(b);
+        sum += m_h[size_t(i)];
+    }
+    m_sumH = sum;
+    m_topValid = 0;
     emit documentSizeChanged(documentSize());
     emit update(QRectF(0, 0, 1e9, 1e9));
 }
@@ -483,8 +534,15 @@ void VirtualLayout::documentChanged(int from, int charsRemoved, int charsAdded)
     const int n = doc->blockCount();
     m_mediaDirty = true;
     if (w != m_width || m_h.empty()) {
-        if (!m_h.empty())
+        if (!m_h.empty() && int(m_h.size()) == n) {
             m_widthChanged.start(); // a resize: coalesce image decodes
+            const qreal column = columnWidth();
+            m_width = w;
+            resizeInvalidate(columnWidth() != column);
+            return;
+        }
+        if (!m_h.empty())
+            m_widthChanged.start();
         m_width = w;
         fullInvalidate();
         return;

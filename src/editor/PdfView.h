@@ -65,6 +65,12 @@ public:
         // ~7 per second apart (a busy machine, a dragged scroll bar) still
         // counts as one.
         int flingSettleMs = 150;
+        // While the view's width changes at fit width (the split's divider
+        // dragged, the window resized), each step is drawn from the cached
+        // pixels scaled, like a zoom gesture, and the new width is rendered
+        // once it has not changed for zoomSettleMs. Off: every step requests
+        // renders at its own zoom (each superseded by the next).
+        bool settleResize = true;
         int closeHiddenAfterMs = 30000;          // hidden this long: the document closes
         qreal margin = 16;                       // logical px around the pages
         qreal gap = 12;                          // between pages
@@ -86,6 +92,7 @@ public:
     ~PdfView() override;
 
     const Config &config() const { return m_cfg; }
+    void setSettleResize(bool on) { m_cfg.settleResize = on; } // benchmarks (A/B)
     QString hash() const { return m_hash; }
     int pageCount() const { return int(m_pages.size()); }
     const QVector<PdfPageGeom> &pages() const { return m_pages; }

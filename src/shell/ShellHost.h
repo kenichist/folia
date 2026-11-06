@@ -55,6 +55,10 @@ public:
         DataContext *data = nullptr;
         QWidget *window = nullptr;   // shortcuts live here
         QWidget *container = nullptr; // shell root is placed inside
+        // The widget placed where the layout says ui.editor{} (default: the
+        // editor itself). The app passes the split that holds the editor and
+        // the PDF tab; focus, IME and title handling still target `editor`.
+        QWidget *editorSlot = nullptr;
     };
     struct Limits {
         int maxNodes = 2000;
@@ -155,6 +159,7 @@ private:
     void fileChanged();
     void maybeReloadPending();
     void applyPendingFocus();
+    QWidget *slot() const; // m_d.editorSlot, or the editor
 
     Deps m_d;
     Limits m_lim;

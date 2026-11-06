@@ -60,6 +60,7 @@ private:
     void scenarioSettings();
     void scenarioImages(); // BenchImages.cpp
     void scenarioPdf();    // BenchPdf.cpp
+    void scenarioSplit();  // BenchSplit.cpp
     void finish();
 
     AppController *m_app;

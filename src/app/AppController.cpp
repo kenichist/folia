@@ -10,6 +10,7 @@
 #include "editor/NoteEditor.h"
 #include "editor/PageSession.h"
 #include "editor/MediaService.h"
+#include "app/PaneSplitter.h"
 #include "app/PdfViewerPage.h"
 #include "editor/PdfView.h"
 #include "editor/PreviewService.h"
@@ -348,7 +349,18 @@ void AppController::buildWindow()
     w->setCentralWidget(m_stack);
     m_shellContainer = new QWidget(m_stack);
     m_stack->addWidget(m_shellContainer);
-    m_pane = new EditorPane(m_ectx, m_shellContainer);
+    m_pane = new EditorPane(m_ectx);
+    // The layout's editor slot holds the split: the note, and the PDF tab
+    // beside it while one is open (one tab: no handle, nothing drawn).
+    m_split = new PaneSplitter(m_pane, m_shellContainer);
+    m_split->setSide(m_store->setting(QStringLiteral("split.side")) == QLatin1String("left") ? PaneSplitter::Side::Left
+                                                                                            : PaneSplitter::Side::Right);
+    bool ratioOk = false;
+    const double ratio = m_store->setting(QStringLiteral("split.ratio")).toDouble(&ratioOk);
+    m_split->setRatio(ratioOk ? ratio : 0.5);
+    connect(m_split, &PaneSplitter::ratioCommitted, this, [this](double r) {
+        m_store->setSetting(QStringLiteral("split.ratio"), QString::number(r, 'f', 3));
+    });
 
     ShellHost::Deps deps;
     deps.editor = m_pane;
@@ -357,6 +369,7 @@ void AppController::buildWindow()
     deps.data = m_data;
     deps.window = w;
     deps.container = m_shellContainer;
+    deps.editorSlot = m_split;
     m_shell = new ShellHost(deps, this);
     connect(m_shell, &ShellHost::resetRequested, this, &AppController::resetShell);
     connect(m_pane->editor(), &NoteEditor::openPageRequested, this, [this](PageId id) { openPage(id); });
@@ -373,6 +386,7 @@ void AppController::buildWindow()
         for (PageSession *s : std::as_const(m_cache))
             if (s->layout())
                 s->layout()->relayoutAll();
+        m_split->setLineColor(QColor(m_shell->namedColor(QStringLiteral("border"))));
     });
     connect(m_pane->editor(), &NoteEditor::painted, this, [this] {
         if (m_awaitPaint && m_active && m_active->pageId() == m_openTarget) {
@@ -431,6 +445,10 @@ void AppController::buildWindow()
     act(go, tr("Parent Page"), QStringLiteral("nav.parent"));
     act(go, tr("Focus Title"), QStringLiteral("title.focus"));
     act(go, tr("Focus Editor"), QStringLiteral("editor.focus"));
+    QMenu *view = mb->addMenu(tr("&View"));
+    act(view, tr("Focus Other Pane"), QStringLiteral("pane.focus_other"));
+    act(view, tr("Swap Panes"), QStringLiteral("pane.swap"));
+    act(view, tr("Close PDF"), QStringLiteral("pdf.close"));
     QMenu *shell = mb->addMenu(tr("&Shell"));
     act(shell, tr("Reload Layout"), QStringLiteral("shell.reload"), QKeySequence(QStringLiteral("Ctrl+Alt+R")));
     act(shell, tr("Reset to Default Layout"), QStringLiteral("shell.reset"), QKeySequence(QStringLiteral("Ctrl+Alt+Shift+R")));
@@ -481,8 +499,8 @@ void AppController::resetShell()
 // ------------------------------------------------------------ settings ----
 void AppController::showSettings()
 {
-    if (pdfOpen())
-        closePdf();
+    // A PDF tab stays open under Settings (hidden: it renders nothing, and
+    // its document closes after a while like any hidden viewer).
     if (!m_settings) {
         QElapsedTimer t;
         t.start();
@@ -534,16 +552,23 @@ bool AppController::showPdf(const QString &hash, const QString &name)
         m_pdf->setFocus(Qt::OtherFocusReason);
         return true;
     }
-    if (m_pdf)
-        closePdf();
+    QElapsedTimer t;
+    t.start();
     if (m_active)
         m_pane->editor()->storeViewState();
-    m_pdf = new PdfViewerPage(this, *info, name.isEmpty() ? tr("Document.pdf") : name, m_stack);
-    m_stack->addWidget(m_pdf);
-    m_shell->setShortcutsEnabled(false); // Mod+N etc. would act on the hidden page
-    m_stack->setCurrentWidget(m_pdf);
+    // At most two tabs: another PDF takes this one's place (its renders,
+    // bitmaps and document are released before the new one starts).
+    PdfViewerPage *old = m_pdf;
+    m_pdf = new PdfViewerPage(this, *info, name.isEmpty() ? tr("Document.pdf") : name, nullptr);
+    m_split->setSecondary(m_pdf);
+    if (old) {
+        old->release();
+        old->deleteLater();
+    }
+    m_pdf->show();
     m_pdf->setFocus(Qt::OtherFocusReason);
     updateWindowTitle();
+    instr::record("pdf_tab_open_us", t.nsecsElapsed() / 1000);
     return true;
 }
 
@@ -551,20 +576,45 @@ void AppController::closePdf()
 {
     if (!m_pdf)
         return;
+    const bool hadFocus = pdfHasFocus();
     PdfViewerPage *page = m_pdf;
     m_pdf = nullptr;
-    m_stack->setCurrentWidget(m_shellContainer);
-    m_stack->removeWidget(page);
-    delete page; // now: its render requests and its document go with it
-    m_shell->setShortcutsEnabled(true);
+    m_split->takeSecondary();
+    // Now: its render requests, bitmaps and document. The widget goes on
+    // the next turn, since this may run from its own key or button handler.
+    page->release();
+    page->deleteLater();
     updateWindowTitle();
-    if (m_active)
+    if (m_active && !settingsOpen() && (hadFocus || !QApplication::focusWidget()))
         m_pane->focusBody();
 }
 
 bool AppController::pdfOpen() const
 {
-    return m_pdf && m_stack->currentWidget() == m_pdf;
+    return m_pdf != nullptr;
+}
+
+bool AppController::pdfHasFocus() const
+{
+    const QWidget *f = QApplication::focusWidget();
+    return m_pdf && f && (f == m_pdf || m_pdf->isAncestorOf(f));
+}
+
+void AppController::swapPanes()
+{
+    m_split->swapSides();
+    m_store->setSetting(QStringLiteral("split.side"),
+                        m_split->side() == PaneSplitter::Side::Left ? QStringLiteral("left") : QStringLiteral("right"));
+}
+
+void AppController::focusOtherPane()
+{
+    if (!m_pdf || settingsOpen())
+        return;
+    if (pdfHasFocus())
+        m_pane->focusBody();
+    else
+        m_pdf->setFocus(Qt::OtherFocusReason);
 }
 
 PdfViewerPage *AppController::pdfViewer() const
@@ -581,8 +631,6 @@ void AppController::updateWindowTitle()
 {
     if (settingsOpen())
         m_window->setWindowTitle(tr("Settings — Folia"));
-    else if (pdfOpen())
-        m_window->setWindowTitle(m_pdf->name() + QStringLiteral(" — Folia"));
     else if (m_active)
         m_window->setWindowTitle((m_active->title().isEmpty() ? tr("Untitled") : m_active->title())
                                  + QStringLiteral(" — Folia"));
@@ -700,10 +748,9 @@ void AppController::openPage(PageId id, bool focusEditor)
         return;
     // Going to a page (menu, command, link) leaves Settings; the first page
     // opened at startup, which arrives asynchronously, does not.
+    // A PDF tab stays open beside the note: reading and note taking go on.
     if (m_active && settingsOpen())
         closeSettings();
-    if (m_active && pdfOpen())
-        closePdf();
     if (m_active && m_active->pageId() == id) {
         if (focusEditor)
             m_pane->focusBody();
@@ -773,8 +820,6 @@ PageId AppController::newPage(PageId parent, int index, const QString &title, bo
     instr::Scope scope("page_new_us");
     if (settingsOpen())
         closeSettings();
-    if (pdfOpen())
-        closePdf();
     QElapsedTimer t;
     t.start();
     const bool parentHeld = parent != 0 && m_cache.contains(parent);
@@ -1143,6 +1188,20 @@ void AppController::registerCommands()
                 closePdf();
                 return okResult();
             }, {}});
+    c->add({QStringLiteral("pane.swap"), tr("Swap Panes"), {}, {}, [this](const QVariantMap &) {
+                if (!m_pdf)
+                    return fail(tr("only one tab is open"));
+                swapPanes();
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("pane.focus_other"), tr("Focus Other Pane"), {}, {}, [this](const QVariantMap &) {
+                if (!m_pdf)
+                    return fail(tr("only one tab is open"));
+                if (settingsOpen())
+                    return fail(tr("Settings are open"));
+                focusOtherPane();
+                return okResult();
+            }, {}});
     c->add({QStringLiteral("page.reveal"), tr("Reveal Page in Tree"), {}, {arg("id", T::LongLong)}, [this](const QVariantMap &a) {
                 emit m_data->revealRequested(argId(a));
                 return okResult();
@@ -1187,8 +1246,8 @@ void AppController::registerCommands()
     c->add({QStringLiteral("editor.undo"), tr("Undo"), {}, {}, [this](const QVariantMap &) {
                 if (settingsOpen())
                     return fail(tr("Settings are open"));
-                if (pdfOpen())
-                    return fail(tr("a PDF is open"));
+                if (pdfHasFocus())
+                    return fail(tr("the PDF has focus"));
                 if (m_pane->titleField()->hasFocus())
                     m_pane->titleField()->undo();
                 else
@@ -1198,8 +1257,8 @@ void AppController::registerCommands()
     c->add({QStringLiteral("editor.redo"), tr("Redo"), {}, {}, [this](const QVariantMap &) {
                 if (settingsOpen())
                     return fail(tr("Settings are open"));
-                if (pdfOpen())
-                    return fail(tr("a PDF is open"));
+                if (pdfHasFocus())
+                    return fail(tr("the PDF has focus"));
                 if (m_pane->titleField()->hasFocus())
                     m_pane->titleField()->redo();
                 else
