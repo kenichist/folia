@@ -1,4 +1,13 @@
 # Integrator-owned. Module owners add tests under tests/<module>/CMakeLists.txt.
+
+# Qt platform for headless test runs. Qt's "offscreen" platform has no font
+# database on Windows (every formula measures as empty), so Windows runs the
+# native platform instead; CI runners there have a desktop session.
+if(WIN32)
+  set(FOLIA_TEST_QPA windows CACHE STRING "QT_QPA_PLATFORM for tests")
+else()
+  set(FOLIA_TEST_QPA offscreen CACHE STRING "QT_QPA_PLATFORM for tests")
+endif()
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/code/CMakeLists.txt)
   add_subdirectory(code)
 endif()

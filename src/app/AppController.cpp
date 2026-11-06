@@ -88,6 +88,15 @@ AppController::~AppController()
     delete m_shell; // references widgets owned by the window
     m_shell = nullptr;
     delete m_window;
+    // Page sessions (and the VirtualLayouts their documents own) call into
+    // the editor context, attachment store and media service as they go.
+    // Those are children created before any session, so ~QObject would free
+    // them first: delete every session now, including any already handed to
+    // deleteLater.
+    m_active = nullptr;
+    m_cache.clear();
+    m_lru.clear();
+    qDeleteAll(findChildren<PageSession *>(Qt::FindDirectChildrenOnly));
 }
 
 PageId AppController::currentPage() const
