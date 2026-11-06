@@ -865,6 +865,59 @@ private slots:
         QCOMPARE(query->text(), QStringLiteral("typed by user"));
     }
 
+    void rerenderDoesNotRepolish()
+    {
+        // Every render re-applies each node's style sheet. QWidget::setStyleSheet
+        // has no same-string check: it re-polishes the widget and all of its
+        // descendants (a StyleChange event each, relayout, repaint), and a
+        // styled container reaches the editor. An unchanged render must not
+        // touch a single widget's style; a changed one still must.
+        Harness h;
+        const QByteArray code = spec(R"LUA(
+    return ui.row{
+      id = "root", style = { bg = "white" },
+      ui.column{
+        id = "side", style = { bg = state.side or "gainsboro", padding = 4 },
+        ui.text{ id = "count", text = "n=" .. tostring(state.n or 0) },
+        ui.button{ id = "inc", text = "+", icon = "plus",
+                   on_click = function(ctx) ctx.set{ n = (state.n or 0) + 1 } end },
+        ui.button{ id = "paint", text = "paint", on_click = function(ctx) ctx.set{ side = "silver" } end },
+        ui.divider{},
+      },
+      ui.editor{},
+    })LUA", "Polish");
+        QString err;
+        QVERIFY2(h.load(code, &err), qPrintable(err));
+        struct Counter : QObject {
+            int styleChanges = 0;
+            bool eventFilter(QObject *, QEvent *e) override
+            {
+                if (e->type() == QEvent::StyleChange)
+                    ++styleChanges;
+                return false;
+            }
+        } counter;
+        QList<QWidget *> watched = h.window->findChildren<QWidget *>();
+        watched << h.window.get();
+        for (QWidget *w : std::as_const(watched))
+            w->installEventFilter(&counter);
+        const QIcon before = qobject_cast<QPushButton *>(h.host->widgetById(QStringLiteral("inc")))->icon();
+        // State changes that leave every style untouched: no re-polish anywhere.
+        for (int i = 0; i < 5; ++i)
+            qobject_cast<QPushButton *>(h.host->widgetById(QStringLiteral("inc")))->click();
+        QTRY_COMPARE(h.labelText("count"), QStringLiteral("n=5"));
+        for (int i = 0; i < 3; ++i)
+            QVERIFY(h.host->renderNow(&err));
+        QCOMPARE(counter.styleChanges, 0);
+        // The icon is rebuilt only when its name, colour or size changes.
+        QCOMPARE(qobject_cast<QPushButton *>(h.host->widgetById(QStringLiteral("inc")))->icon().cacheKey(),
+                 before.cacheKey());
+        // A style that does change is still applied.
+        qobject_cast<QPushButton *>(h.host->widgetById(QStringLiteral("paint")))->click();
+        QTRY_VERIFY(h.host->widgetById(QStringLiteral("side"))->styleSheet().contains(QStringLiteral("silver")));
+        QVERIFY(counter.styleChanges > 0);
+    }
+
     void reservedEditorId()
     {
         // A non-editor node with id "editor" collides with the editor slot's

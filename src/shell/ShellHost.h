@@ -130,6 +130,7 @@ private:
         QString type;
         PageListModel *model = nullptr;
         QString sourceKind;
+        QString iconKey; // button icon name/color/size last applied
         bool wasVisible = false;
     };
 
