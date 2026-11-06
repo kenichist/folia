@@ -1344,7 +1344,12 @@ void ShellHost::updateCommon(QWidget *w, const UiNode &n)
             sheet += QStringLiteral("#%1:hover{background-color:%2;}#%1:pressed{background-color:%3;}")
                          .arg(obj, hover, resolveColor(QStringLiteral("border")));
     }
-    w->setStyleSheet(sheet);
+    // QWidget::setStyleSheet has no same-string check: it re-polishes the
+    // widget and every descendant (style-change events, relayout, repaint)
+    // even for an identical sheet. Containers reach the editor, so an
+    // unchanged render used to repaint the whole window.
+    if (w->styleSheet() != sheet)
+        w->setStyleSheet(sheet);
     QFont f = m_d.editorCtx->theme().body;
     f.setPointSizeF(qMax(9.0, f.pointSizeF() - 2));
     if (sv("font").isValid())
@@ -1467,15 +1472,24 @@ QWidget *ShellHost::realize(const UiNode &n, QSet<QString> &seen, QWidget *paren
             w = b = new QPushButton(parent);
         b->setText(p.value(QStringLiteral("text")).toString());
         const QString icon = p.value(QStringLiteral("icon")).toString();
+        // Lucide icon tinted with the button's text color. QAbstractButton::
+        // setIcon always updates and relayouts, so rebuild only on change
+        // (a leaf: the Live reference is still valid here).
+        QString iconKey;
+        if (!reuse)
+            lv.iconKey.clear(); // a fresh widget has no icon yet
         if (!icon.isEmpty()) {
-            // Lucide icon tinted with the button's text color.
             const QColor fg(resolveColor(p.value(QStringLiteral("style.fg")), QStringLiteral("text")));
             const int sz = p.value(QStringLiteral("style.icon_size"), 16).toInt();
-            b->setIcon(icons::icon(icon, fg));
-            b->setIconSize(QSize(sz, sz));
-        } else {
+            iconKey = icon + QLatin1Char('/') + fg.name(QColor::HexArgb) + QLatin1Char('/') + QString::number(sz);
+            if (lv.iconKey != iconKey) {
+                b->setIcon(icons::icon(icon, fg));
+                b->setIconSize(QSize(sz, sz));
+            }
+        } else if (!lv.iconKey.isEmpty() || !reuse) {
             b->setIcon(QIcon());
         }
+        lv.iconKey = iconKey;
         if (b->text().isEmpty() && icon.isEmpty())
             b->setText(p.value(QStringLiteral("label")).toString());
         b->setFlat(p.value(QStringLiteral("flat"), true).toBool());
@@ -1666,8 +1680,12 @@ QWidget *ShellHost::realize(const UiNode &n, QSet<QString> &seen, QWidget *paren
             f->setFixedWidth(1);
         else
             f->setFixedHeight(1);
-        if (!p.contains(QStringLiteral("style.bg")))
-            f->setStyleSheet(QStringLiteral("background-color:%1;").arg(m_colors.value(QStringLiteral("border"), QStringLiteral("#d8d8dc"))));
+        if (!p.contains(QStringLiteral("style.bg"))) {
+            const QString sheet = QStringLiteral("background-color:%1;")
+                                      .arg(m_colors.value(QStringLiteral("border"), QStringLiteral("#d8d8dc")));
+            if (f->styleSheet() != sheet)
+                f->setStyleSheet(sheet);
+        }
     }
     // Children were realized above and may have rehashed m_live: never keep
     // the reference taken at the top across that recursion.
