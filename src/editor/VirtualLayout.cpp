@@ -425,6 +425,13 @@ void VirtualLayout::fullInvalidate()
     m_mediaDirty = true;
     QTextDocument *doc = document();
     const int n = doc->blockCount();
+    // QTextBlock::layout() allocates a QTextLayout on first use, so asking
+    // every block for one costs ~280 bytes per line that is never drawn.
+    // Only layoutBlock() creates lines and it always sets StLaidOut, so the
+    // old flags say which blocks hold lines — when they still line up with
+    // the document. If the block count moved under us, check every block.
+    const std::vector<uint8_t> was = std::move(m_st);
+    const bool trustFlags = int(was.size()) == n;
     m_h.assign(size_t(n), 0.f);
     m_st.assign(size_t(n), 0);
     m_top.assign(size_t(n), 0.0);
@@ -433,7 +440,7 @@ void VirtualLayout::fullInvalidate()
     m_laidOut = 0;
     int i = 0;
     for (QTextBlock b = doc->begin(); b.isValid() && i < n; b = b.next(), ++i) {
-        if (b.layout()->lineCount() > 0)
+        if ((!trustFlags || (was[size_t(i)] & StLaidOut)) && b.layout()->lineCount() > 0)
             b.layout()->clearLayout();
         const float h = estimateHeight(b);
         m_h[size_t(i)] = h;
@@ -503,10 +510,16 @@ void VirtualLayout::documentChanged(int from, int charsRemoved, int charsAdded)
         return;
     }
     // Splice per-block vectors: [first, lastOld] -> [first, lastNew].
+    // Lines can only survive in blocks that were laid out before (newly
+    // inserted blocks start without a QTextLayout), so if none were, the
+    // estimate path below need not touch — and allocate — any layout.
+    bool anyWasLaidOut = false;
     for (int i = first; i <= lastOld; ++i) {
         m_sumH -= m_h[size_t(i)];
-        if (m_st[size_t(i)] & StLaidOut)
+        if (m_st[size_t(i)] & StLaidOut) {
             --m_laidOut;
+            anyWasLaidOut = true;
+        }
     }
     const int oldCount = lastOld - first + 1;
     const int newCount = lastNew - first + 1;
@@ -532,7 +545,7 @@ void VirtualLayout::documentChanged(int from, int charsRemoved, int charsAdded)
             const float h = estimateHeight(b);
             m_h[size_t(i)] = h;
             m_sumH += h;
-            if (b.layout()->lineCount() > 0)
+            if (anyWasLaidOut && b.layout()->lineCount() > 0)
                 b.layout()->clearLayout();
         }
     }
