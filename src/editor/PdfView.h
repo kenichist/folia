@@ -165,7 +165,7 @@ private:
     QTimer m_zoomSettle;
     QTimer m_flingSettle;
     QElapsedTimer m_scrollClock;
-    QVector<QPair<qint64, int>> m_scrollTrail; // (ms, scroll value) over the last 100 ms
+    QVector<QPair<qint64, int>> m_scrollTrail; // (ms, scroll value): the last 100 ms and one sample before
     QTimer m_hiddenClose;
     std::shared_ptr<platform::PdfDocument> m_doc;
     // Per page, the last two plans drawn in full (newest first): drawn

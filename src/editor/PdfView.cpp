@@ -556,13 +556,18 @@ void PdfView::scrollContentsBy(int dx, int dy)
         m_scrollDir = -1;
     Q_UNUSED(dx);
     if (dy != 0) {
-        // Speed over the last 100 ms: a fling defers heavy pages.
+        // Speed over about the last 100 ms (from the last sample before that
+        // window, so slow frames still measure): a fling defers heavy pages.
+        // A jump after a pause (a single Page Down, go to page) is not one.
         const qint64 now = m_scrollClock.elapsed();
         const int y = verticalScrollBar()->value();
         m_scrollTrail.push_back({now, y});
-        while (!m_scrollTrail.isEmpty() && now - m_scrollTrail.first().first > 100)
+        while (m_scrollTrail.size() > 2 && now - m_scrollTrail[1].first > 100)
             m_scrollTrail.removeFirst();
-        if (qAbs(y - m_scrollTrail.first().second) > viewport()->height() / 4)
+        const QPair<qint64, int> &from = m_scrollTrail.first();
+        const qint64 dt = qMax<qint64>(16, now - from.first);
+        if (m_scrollTrail.size() > 1 && now - from.first <= 250
+            && qint64(qAbs(y - from.second)) * 100 > qint64(viewport()->height() / 4) * dt)
             m_flingSettle.start(m_cfg.flingSettleMs);
     }
     markDirty();

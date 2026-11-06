@@ -784,12 +784,22 @@ private slots:
         for (const MediaService::Request &r : v.lastWants())
             heavyWanted = heavyWanted || pages[r.key.page].heavy();
         QVERIFY(heavyWanted);
-        // Reading-speed scrolling never counts as a fling.
+        // Reading-speed scrolling never counts as a fling, nor does one jump
+        // after a pause (Page Down).
         for (int i = 0; i < 6; ++i) {
             v.verticalScrollBar()->setValue(v.verticalScrollBar()->value() + 15);
             QTest::qWait(25);
         }
         QVERIFY(!v.flinging());
+        QTest::qWait(300);
+        v.verticalScrollBar()->setValue(v.verticalScrollBar()->value() + v.viewport()->height());
+        QVERIFY(!v.flinging());
+        // Slow frames (> 100 ms apart) still measure a fast scroll.
+        for (int i = 0; i < 3; ++i) {
+            QTest::qWait(110);
+            v.verticalScrollBar()->setValue(v.verticalScrollBar()->value() + v.viewport()->height() / 2);
+        }
+        QVERIFY(v.flinging());
     }
 
     void documentClosesWhenViewerCloses()
