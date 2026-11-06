@@ -70,9 +70,7 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFOLIA_BUILD_TOOLS=OFF
           cmake --build build
       - name: Test
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure -V
       - name: Package
         shell: bash
         run: |
