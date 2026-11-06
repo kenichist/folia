@@ -42,6 +42,7 @@ enum Counter : int {
     ImageCacheHits,
     PdfRenders,
     PdfTiles,
+    PdfCacheHits,           // a viewer or thumbnail newly wants a bitmap already cached
     MediaJobsDroppedQueued, // removed from the queue before they started
     MediaJobsDiscarded,     // finished, but nobody wanted the result any more
     MediaCpuUsDiscarded,    // worker CPU time spent on those

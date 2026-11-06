@@ -14,7 +14,73 @@ namespace folia {
 
 size_t qHash(const MediaKey &k, size_t seed)
 {
-    return qHashMulti(seed, k.hash, k.width, k.height, k.orientation, k.color, k.kind);
+    return qHashMulti(seed, k.hash, k.width, k.height, k.orientation, k.color, k.kind, k.page, k.level, k.tx, k.ty);
+}
+
+namespace {
+
+// Entries `keep` may be drawn from while its own bitmap is missing.
+bool sameFamily(const MediaKey &k, const MediaKey &keep)
+{
+    if (k.hash != keep.hash)
+        return false;
+    return !keep.isPdf() || (k.isPdf() && k.page == keep.page);
+}
+
+// Entries that count toward the "at most N resolutions" rule together.
+bool sameSlot(const MediaKey &k, const MediaKey &o)
+{
+    return k.hash == o.hash && k.kind == o.kind && k.page == o.page;
+}
+
+QImage renderPdf(const MediaService::Request &r, QString *error)
+{
+    std::shared_ptr<platform::PdfDocument> doc = r.pdf;
+    if (!doc)
+        doc = std::make_shared<platform::PdfDocument>(r.path); // one job: closed when it returns
+    const int pageWidth = r.key.kind == MediaKey::PdfTile ? r.key.level : r.key.width;
+    const QRect region = r.region.isEmpty() ? QRect(0, 0, r.key.width, r.key.height) : r.region;
+    return platform::renderPdfPage(doc.get(), r.key.page, pageWidth, region, error);
+}
+
+} // namespace
+
+qint64 MediaService::pdfEstimate(const PdfPageGeom &g, int pageWidthPx, int w, int h)
+{
+    const double out = 4.0 * double(w) * double(h);
+    double est = out * ((g.flags & PdfPageGeom::Layers) ? kPdfLayerFactor : kPdfOutputFactor) + double(kPdfFixedBytes);
+    if (g.imagePixels > 0 && g.w > 0 && g.h > 0) {
+        // Assume the image spans the page (a scan): its native width, and
+        // the largest power-of-two reduction that still covers the page.
+        const double imgW = std::sqrt(double(g.imagePixels) * g.w / g.h);
+        int k = 0;
+        if (g.flags & PdfPageGeom::ReducibleImage)
+            while (k < 3 && pageWidthPx > 0 && (imgW / double(1 << (k + 1))) >= pageWidthPx)
+                ++k;
+        est += 4.0 * double(g.imagePixels) / double(1 << (2 * k)) * kPdfImageFactor + double(kPdfImageFixedBytes);
+    }
+    return qint64(est);
+}
+
+MediaService::Request MediaService::pdfRequest(const QString &hash, const QString &path, MediaKey::Kind kind, int page,
+                                               const PdfPageGeom &geom, int w, int h, int level, int tx, int ty,
+                                               const QRect &region)
+{
+    Request r;
+    r.path = path;
+    r.mime = QStringLiteral("application/pdf");
+    r.lane = Lane::Pdf;
+    r.key.hash = hash;
+    r.key.kind = kind;
+    r.key.page = page;
+    r.key.width = w;
+    r.key.height = h;
+    r.key.level = level;
+    r.key.tx = tx;
+    r.key.ty = ty;
+    r.region = region;
+    r.estimate = pdfEstimate(geom, kind == MediaKey::PdfTile ? level : w, w, h);
+    return r;
 }
 
 MediaService::DecodeCost MediaService::costFor(const QString &mime)
@@ -53,6 +119,8 @@ MediaService::MediaService(const Config &cfg, QObject *parent)
     m_pool.setMaxThreadCount(kLanes); // one worker per lane
     m_pool.setExpiryTimeout(cfg.workerExpiryMs);
     m_decoder = [](const Request &r, QString *error) {
+        if (r.key.isPdf())
+            return renderPdf(r, error);
         return platform::decodeImage(r.path, qMax(r.key.width, r.key.height), error);
     };
     m_coolDown.setSingleShot(true);
@@ -122,6 +190,8 @@ const QImage *MediaService::nearest(const QString &hash, int width, double toler
     const MediaKey *best = nullptr;
     int bestDiff = 0;
     for (const MediaKey &k : *it) {
+        if (k.kind != MediaKey::Image)
+            continue;
         const int diff = qAbs(k.width - width);
         if (tolerance >= 0 && diff > tolerance * width)
             continue;
@@ -141,12 +211,18 @@ void MediaService::insert(const MediaKey &key, QImage image, bool asLeastRecent)
 {
     if (m_cache.contains(key))
         evict(key);
-    // At most N resolutions per attachment: drop the least recent other one
-    // that nothing shows.
-    while (m_byHash.value(key.hash).size() >= m_cfg.maxResolutionsPerHash) {
+    // At most N resolutions per image (per PDF page, per thumbnail): drop
+    // the least recent other one that nothing shows. PDF tiles are many keys
+    // of one resolution and are left to the LRU.
+    while (key.kind != MediaKey::PdfTile) {
+        int same = 0;
+        for (const MediaKey &k : m_byHash.value(key.hash))
+            same += sameSlot(k, key) ? 1 : 0;
+        if (same < m_cfg.maxResolutionsPerHash)
+            break;
         MediaKey victim;
         for (auto l = m_lru.rbegin(); l != m_lru.rend(); ++l)
-            if (l->hash == key.hash && !m_want.contains(*l)) {
+            if (sameSlot(*l, key) && !m_want.contains(*l)) {
                 victim = *l;
                 break;
             }
@@ -197,12 +273,12 @@ qint64 MediaService::evictableBytes() const
     return n;
 }
 
-qint64 MediaService::evictUnwanted(qint64 bytes, const QString &except)
+qint64 MediaService::evictUnwanted(qint64 bytes, const MediaKey *keep)
 {
     qint64 freed = 0;
     for (auto l = m_lru.end(); l != m_lru.begin() && freed < bytes;) {
         --l;
-        if (m_want.contains(*l) || (!except.isEmpty() && l->hash == except))
+        if (m_want.contains(*l) || (keep && sameFamily(*l, *keep)))
             continue;
         const MediaKey k = *l;
         const qint64 b = m_cache.value(k).bytes;
@@ -217,6 +293,26 @@ void MediaService::trim(qint64 target)
 {
     while (m_budget.cached() > target && !m_lru.empty())
         evict(m_lru.back());
+}
+
+bool MediaService::viewerWants(const QString &hash) const
+{
+    for (auto it = m_want.cbegin(); it != m_want.cend(); ++it)
+        if (it.key().hash == hash && (it.key().kind == MediaKey::PdfPage || it.key().kind == MediaKey::PdfTile))
+            return true;
+    return false;
+}
+
+qint64 MediaService::dropViewerBitmaps(const QString &hash)
+{
+    qint64 freed = 0;
+    const QVector<MediaKey> keys = m_byHash.value(hash);
+    for (const MediaKey &k : keys)
+        if ((k.kind == MediaKey::PdfPage || k.kind == MediaKey::PdfTile) && !m_want.contains(k)) {
+            freed += m_cache.value(k).bytes;
+            evict(k);
+        }
+    return freed;
 }
 
 void MediaService::memoryPressure(bool critical)
@@ -254,14 +350,14 @@ void MediaService::setWanted(const void *owner, const QVector<Request> &wants)
         before.insert(r.key);
     for (const Request &r : wants)
         if (!before.contains(r.key) && m_cache.contains(r.key))
-            instr::add(instr::ImageCacheHits);
+            instr::add(r.key.isPdf() ? instr::PdfCacheHits : instr::ImageCacheHits);
     mine = wants;
     if (mine.isEmpty())
         m_owners.remove(owner);
     recomputeWants();
     // New jobs: one per key, for keys neither cached nor already pending.
     for (const Request &r : wants) {
-        if (r.key.isNull() || m_cache.contains(r.key) || m_tooLarge.contains(r.key) || m_failed.contains(r.key.hash))
+        if (r.key.isNull() || m_cache.contains(r.key) || m_tooLarge.contains(r.key) || failed(r.key))
             continue;
         auto j = m_jobs.find(r.key);
         if (j == m_jobs.end()) {
@@ -399,26 +495,38 @@ void MediaService::finished(const MediaKey &key, QImage image, const QString &er
     }
     if (m_running[int(lane)] == key)
         m_running[int(lane)] = MediaKey();
-    if (lane == Lane::Image)
+    if (lane == Lane::Image) {
         instr::add(instr::ImageDecodes);
-    else
+    } else {
         instr::add(instr::PdfRenders);
+        if (key.kind == MediaKey::PdfTile)
+            instr::add(instr::PdfTiles);
+    }
     instr::record(lane == Lane::Image ? "image_decode_us" : "pdf_render_us", wallUs);
     instr::record(lane == Lane::Image ? "image_decode_cpu_us" : "pdf_render_cpu_us", cpuUs);
     if (image.isNull()) {
-        m_failed.insert(key.hash);
-        Q_UNUSED(error);
+        // An image, or a PDF that cannot be opened (its thumbnail), cannot be
+        // shown at all; a failed PDF page or tile is only that one.
+        if (key.kind == MediaKey::PdfPage || key.kind == MediaKey::PdfTile)
+            m_failedKeys.insert(key);
+        else
+            m_failed.insert(key.hash);
+        if (!error.isEmpty())
+            qWarning("folia: cannot render %s: %s", key.isPdf() ? "PDF" : "image", qPrintable(error));
         emit refused(key);
     } else if (!m_want.contains(key)) {
-        // Finished but unwanted: never shown. Kept only if it fits as is.
+        // Finished but unwanted: never shown. Kept only if it fits as is,
+        // and never for a PDF viewer that has closed (nothing wants any page
+        // or tile of that document): closing frees its bitmaps.
         instr::add(instr::MediaJobsDiscarded);
         instr::add(instr::MediaCpuUsDiscarded, cpuUs);
-        if (m_budget.used() + image.sizeInBytes() <= m_budget.limit())
+        const bool orphan = (key.kind == MediaKey::PdfPage || key.kind == MediaKey::PdfTile) && !viewerWants(key.hash);
+        if (!orphan && m_budget.used() + image.sizeInBytes() <= m_budget.limit())
             insert(key, std::move(image), /*asLeastRecent=*/true);
     } else {
         const qint64 bytes = image.sizeInBytes();
         if (const qint64 over = m_budget.overBy(bytes))
-            evictUnwanted(over, key.hash);
+            evictUnwanted(over, &key);
         insert(key, std::move(image), false);
         emit arrived(key);
     }

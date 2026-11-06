@@ -1,6 +1,7 @@
 // Deterministic image fixtures for the image benchmarks and the decode-cost
 // probe (tools/mediaprobe.cpp): camera-like photos (JPEG, HEIC, WebP), UI
-// screenshots, a very tall scrolling screenshot and a huge PNG.
+// screenshots, a very tall scrolling screenshot and a huge PNG; and the PDF
+// fixtures for the PDF benchmarks.
 #pragma once
 
 #include <QString>
@@ -20,5 +21,16 @@ struct MediaSet {
 // Writes the set into `dir` (reusing files already there). `photos` JPEGs;
 // the huge PNG only when `huge` is set (it takes seconds to encode).
 MediaSet makeMediaSet(const QString &dir, int photos, bool huge);
+
+// PDF fixtures (docs/ATTACHMENTS.md §6), written with CoreGraphics; empty
+// paths where this platform cannot write PDFs.
+struct PdfSet {
+    QString long200;      // 200 Letter pages of body text, a vector figure every 5th page
+    QString scanned;      // 24 pages, one 300 dpi JPEG scan each (2550×3300)
+    QString vector;       // 16 pages, 3000 curves and 400 polygons each
+    QString transparency; // 16 pages of text under 24 nested transparency groups with blend modes and soft masks
+    QString mixed;        // 8 pages: Letter, A4, landscape, receipt, with corner markers
+};
+PdfSet makePdfSet(const QString &dir);
 
 } // namespace folia::fixtures

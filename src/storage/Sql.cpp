@@ -48,6 +48,19 @@ Stmt &Stmt::bind(int i, const QString &v)
     return *this;
 }
 
+Stmt &Stmt::bind(int i, const QByteArray &v)
+{
+    sqlite3_bind_blob(m_stmt, i, v.constData(), int(v.size()), SQLITE_TRANSIENT);
+    return *this;
+}
+
+QByteArray Stmt::blob(int col) const
+{
+    const void *p = sqlite3_column_blob(m_stmt, col);
+    const int n = sqlite3_column_bytes(m_stmt, col);
+    return p && n > 0 ? QByteArray(static_cast<const char *>(p), n) : QByteArray();
+}
+
 Stmt &Stmt::bindNull(int i)
 {
     sqlite3_bind_null(m_stmt, i);

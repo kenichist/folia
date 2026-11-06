@@ -3,6 +3,7 @@
 #include "app/Platform.h"
 
 #include <QColorSpace>
+#include <QFile>
 #include <QFileInfo>
 #include <QImageReader>
 #include <QImageWriter>
@@ -131,6 +132,14 @@ QImage decodeImageQt(const QString &path, int maxPixelSize, QString *error)
     return out;
 }
 
+bool looksLikePdf(const QString &path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+    return f.read(1024).contains("%PDF-");
+}
+
 qint64 threadCpuMicros()
 {
 #if defined(Q_OS_WIN)
@@ -206,7 +215,9 @@ QString powerSource() { return QStringLiteral("unknown"); }
 bool reducedMotion() { return false; }
 bool reducedTransparency() { return false; }
 void onMemoryPressure(std::function<void(bool)>) {}
+void setAppNapAllowed(bool) {}
 qint64 intervalPeakFootprint() { return sampleSelf().footprintBytes; }
+qint64 releaseFreedMemory() { return 0; }
 
 ImageInfo imageInfo(const QString &path) { return imageInfoQt(path); }
 QImage decodeImage(const QString &path, int maxPixelSize, QString *error) { return decodeImageQt(path, maxPixelSize, error); }
@@ -217,6 +228,33 @@ bool encodeImage(const QImage &image, const QString &path, const QString &format
     w.setQuality(int(quality * 100));
     return w.write(image);
 }
+
+// PDFs need the QtPdf backend (docs/ATTACHMENTS.md §7, step 5).
+PdfInfo pdfInfo(const QString &)
+{
+    PdfInfo i;
+    i.error = QStringLiteral("PDF support is not available on this platform yet");
+    return i;
+}
+
+PdfDocument::PdfDocument(QString path) : m_path(std::move(path)) {}
+PdfDocument::~PdfDocument() = default;
+int PdfDocument::liveCount() { return 0; }
+void *PdfDocument::handle(QString *error)
+{
+    if (error)
+        *error = QStringLiteral("PDF support is not available on this platform yet");
+    return nullptr;
+}
+
+QImage renderPdfPage(PdfDocument *, int, int, const QRect &, QString *error)
+{
+    if (error)
+        *error = QStringLiteral("PDF support is not available on this platform yet");
+    return QImage();
+}
+
+bool writeFixturePdf(const QString &, const QString &, int) { return false; }
 
 } // namespace folia::platform
 #endif

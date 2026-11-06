@@ -10,6 +10,8 @@
 #include "editor/NoteEditor.h"
 #include "editor/PageSession.h"
 #include "editor/MediaService.h"
+#include "app/PdfViewerPage.h"
+#include "editor/PdfView.h"
 #include "editor/PreviewService.h"
 #include "storage/AttachmentStore.h"
 #include "editor/VirtualLayout.h"
@@ -356,6 +358,8 @@ void AppController::buildWindow()
     m_shell = new ShellHost(deps, this);
     connect(m_shell, &ShellHost::resetRequested, this, &AppController::resetShell);
     connect(m_pane->editor(), &NoteEditor::openPageRequested, this, [this](PageId id) { openPage(id); });
+    connect(m_pane->editor(), &NoteEditor::openPdfRequested, this,
+            [this](const QString &hash, const QString &name) { showPdf(hash, name); });
     connect(m_pane->editor(), &NoteEditor::openUrlRequested, this, [](const QString &href) {
         QUrl u(href, QUrl::TolerantMode);
         if (u.scheme().isEmpty())
@@ -418,6 +422,7 @@ void AppController::buildWindow()
     act(edit, tr("Copy Code Block"), QStringLiteral("code.copy_block"));
     act(edit, tr("Insert or Edit Link…"), QStringLiteral("link.edit"));
     act(edit, tr("Insert Image…"), QStringLiteral("image.insert"));
+    act(edit, tr("Insert PDF…"), QStringLiteral("pdf.insert"));
     QMenu *go = mb->addMenu(tr("&Go"));
     act(go, tr("Back"), QStringLiteral("nav.back"));
     act(go, tr("Forward"), QStringLiteral("nav.forward"));
@@ -474,6 +479,8 @@ void AppController::resetShell()
 // ------------------------------------------------------------ settings ----
 void AppController::showSettings()
 {
+    if (pdfOpen())
+        closePdf();
     if (!m_settings) {
         QElapsedTimer t;
         t.start();
@@ -513,6 +520,56 @@ bool AppController::settingsOpen() const
     return m_settings && m_stack->currentWidget() == m_settings;
 }
 
+// ----------------------------------------------------------------- PDF ----
+bool AppController::showPdf(const QString &hash, const QString &name)
+{
+    const AttachmentInfo *info = m_attachments ? m_attachments->info(hash) : nullptr;
+    if (!info || !info->isPdf() || info->pages <= 0)
+        return false; // not known (yet), or not a PDF
+    if (settingsOpen())
+        closeSettings();
+    if (m_pdf && m_pdf->hash() == hash) {
+        m_pdf->setFocus(Qt::OtherFocusReason);
+        return true;
+    }
+    if (m_pdf)
+        closePdf();
+    if (m_active)
+        m_pane->editor()->storeViewState();
+    m_pdf = new PdfViewerPage(this, *info, name.isEmpty() ? tr("Document.pdf") : name, m_stack);
+    m_stack->addWidget(m_pdf);
+    m_shell->setShortcutsEnabled(false); // Mod+N etc. would act on the hidden page
+    m_stack->setCurrentWidget(m_pdf);
+    m_pdf->setFocus(Qt::OtherFocusReason);
+    updateWindowTitle();
+    return true;
+}
+
+void AppController::closePdf()
+{
+    if (!m_pdf)
+        return;
+    PdfViewerPage *page = m_pdf;
+    m_pdf = nullptr;
+    m_stack->setCurrentWidget(m_shellContainer);
+    m_stack->removeWidget(page);
+    delete page; // now: its render requests and its document go with it
+    m_shell->setShortcutsEnabled(true);
+    updateWindowTitle();
+    if (m_active)
+        m_pane->focusBody();
+}
+
+bool AppController::pdfOpen() const
+{
+    return m_pdf && m_stack->currentWidget() == m_pdf;
+}
+
+PdfViewerPage *AppController::pdfViewer() const
+{
+    return m_pdf.data();
+}
+
 SettingsPage *AppController::settingsPage() const
 {
     return m_settings.data();
@@ -522,6 +579,8 @@ void AppController::updateWindowTitle()
 {
     if (settingsOpen())
         m_window->setWindowTitle(tr("Settings — Folia"));
+    else if (pdfOpen())
+        m_window->setWindowTitle(m_pdf->name() + QStringLiteral(" — Folia"));
     else if (m_active)
         m_window->setWindowTitle((m_active->title().isEmpty() ? tr("Untitled") : m_active->title())
                                  + QStringLiteral(" — Folia"));
@@ -641,6 +700,8 @@ void AppController::openPage(PageId id, bool focusEditor)
     // opened at startup, which arrives asynchronously, does not.
     if (m_active && settingsOpen())
         closeSettings();
+    if (m_active && pdfOpen())
+        closePdf();
     if (m_active && m_active->pageId() == id) {
         if (focusEditor)
             m_pane->focusBody();
@@ -710,6 +771,8 @@ PageId AppController::newPage(PageId parent, int index, const QString &title, bo
     instr::Scope scope("page_new_us");
     if (settingsOpen())
         closeSettings();
+    if (pdfOpen())
+        closePdf();
     QElapsedTimer t;
     t.start();
     const bool parentHeld = parent != 0 && m_cache.contains(parent);
@@ -1069,6 +1132,15 @@ void AppController::registerCommands()
     c->add({QStringLiteral("image.insert"), tr("Insert Image"), {}, {}, [this](const QVariantMap &) {
                 return m_pane->editor()->chooseImages() ? okResult() : fail(tr("no image chosen"));
             }, {}});
+    c->add({QStringLiteral("pdf.insert"), tr("Insert PDF"), {}, {}, [this](const QVariantMap &) {
+                return m_pane->editor()->choosePdfs() ? okResult() : fail(tr("no PDF chosen"));
+            }, {}});
+    c->add({QStringLiteral("pdf.close"), tr("Close PDF"), {}, {}, [this](const QVariantMap &) {
+                if (!m_pdf)
+                    return fail(tr("no PDF is open"));
+                closePdf();
+                return okResult();
+            }, {}});
     c->add({QStringLiteral("page.reveal"), tr("Reveal Page in Tree"), {}, {arg("id", T::LongLong)}, [this](const QVariantMap &a) {
                 emit m_data->revealRequested(argId(a));
                 return okResult();
@@ -1113,6 +1185,8 @@ void AppController::registerCommands()
     c->add({QStringLiteral("editor.undo"), tr("Undo"), {}, {}, [this](const QVariantMap &) {
                 if (settingsOpen())
                     return fail(tr("Settings are open"));
+                if (pdfOpen())
+                    return fail(tr("a PDF is open"));
                 if (m_pane->titleField()->hasFocus())
                     m_pane->titleField()->undo();
                 else
@@ -1122,6 +1196,8 @@ void AppController::registerCommands()
     c->add({QStringLiteral("editor.redo"), tr("Redo"), {}, {}, [this](const QVariantMap &) {
                 if (settingsOpen())
                     return fail(tr("Settings are open"));
+                if (pdfOpen())
+                    return fail(tr("a PDF is open"));
                 if (m_pane->titleField()->hasFocus())
                     m_pane->titleField()->redo();
                 else

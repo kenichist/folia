@@ -23,6 +23,7 @@ public:
     Stmt &bind(int i, qint64 v);
     Stmt &bind(int i, int v) { return bind(i, qint64(v)); }
     Stmt &bind(int i, const QString &v);
+    Stmt &bind(int i, const QByteArray &v); // BLOB
     Stmt &bindNull(int i);
     // SQLITE_ROW / SQLITE_DONE / error code
     int step();
@@ -34,6 +35,7 @@ public:
     int i32(int col) const { return sqlite3_column_int(m_stmt, col); }
     bool isNull(int col) const { return sqlite3_column_type(m_stmt, col) == SQLITE_NULL; }
     QString text(int col) const;
+    QByteArray blob(int col) const;
 
 private:
     sqlite3 *m_db = nullptr;

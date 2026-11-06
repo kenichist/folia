@@ -203,13 +203,13 @@ See `presets/REFERENCE.md` (the language reference shipped with the presets).
 | reader | queries; superseded title searches are skipped |
 | math worker | `QThreadPool` with 1 thread; exits after 2 s idle |
 | attachment import | `QThreadPool` with 1 thread (copy + hash + fsync + header read); exits after 30 s idle |
-| media lanes | `QThreadPool` with 2 threads: at most one image decode and one PDF render; exits after 30 s idle |
+| media lanes | `QThreadPool` with 2 threads: at most one image decode and one PDF render (so CoreGraphics calls on a document are serialized); exits after 30 s idle |
 
 | Cache | Cap |
 |---|---|
 | Document cache (open pages) | 16 pages / 48 MB (estimated). Pages not yet committed are pinned. LRU eviction. |
 | Preview display lists | 4 MiB LRU (byte-sized by `MathDisplayList::byteSize`). |
-| Decoded images | One 128 MiB media budget for cached bitmaps plus reserved in-flight decodes; LRU, at most 2 resolutions per attachment (`docs/ATTACHMENTS.md`). |
+| Decoded images and PDF pages | One 128 MiB media budget for cached bitmaps plus reserved in-flight decodes and renders; LRU, at most 2 resolutions per image (per PDF page, per thumbnail); PDF tiles (512×512) are left to the LRU. A closed PDF viewer frees its pages and tiles and its document (`docs/ATTACHMENTS.md`). |
 | Laid-out blocks per document | 600 (evicts glyph data far from the viewport). |
 | Title cache | 20 000 entries. |
 | SQLite | 2 MiB per connection. |

@@ -37,7 +37,10 @@ constexpr qreal kCopyIcon = 13;
 constexpr qreal kInlinePad = 1.5; // space on each side of a formula drawn in place
 constexpr qreal kImageTop = 6;     // above an image line
 constexpr qreal kImageBelow = 6;   // below it, before the paragraph spacing
-constexpr qreal kImportH = 56;     // placeholder of images being imported
+constexpr qreal kImportH = 56;     // placeholder of attachments being imported
+constexpr qreal kPdfCardH = 132;   // a PDF line: first-page thumbnail, name, page count
+constexpr qreal kPdfPad = 10;
+constexpr qreal kPdfCardMaxW = 460;
 constexpr int kResizeSettleMs = 150; // decodes at a new width wait this long
 
 LineRole roleOf(const QTextBlock &b)
@@ -51,6 +54,13 @@ BlockData *dataOf(const QTextBlock &b) { return static_cast<BlockData *>(b.userD
 QString imageHashOf(const QTextBlock &b)
 {
     return b.begin().fragment().charFormat().property(kAttachmentHashProperty).toString();
+}
+
+QString formatSize(qint64 bytes)
+{
+    if (bytes >= (1ll << 20))
+        return QStringLiteral("%1 MB").arg(double(bytes) / (1 << 20), 0, 'f', 1);
+    return QStringLiteral("%1 KB").arg(qMax<qint64>(1, (bytes + 1023) / 1024));
 }
 
 int headingLevel(QStringView t)
@@ -102,6 +112,7 @@ VirtualLayout::VirtualLayout(QTextDocument *doc, EditorContext *ctx)
     setPaintDevice(nullptr);
     registerHandler(kPageLinkObjectType, new PageLinkHandler(this));
     registerHandler(kImageObjectType, new PageLinkHandler(this)); // sized/painted below too
+    registerHandler(kPdfObjectType, new PageLinkHandler(this));
     // Formulas rendered on the worker are shown in one repaint per burst,
     // a couple of frames later, never right after the frame that asked.
     m_inlineRepaint.setSingleShot(true);
@@ -117,8 +128,10 @@ VirtualLayout::VirtualLayout(QTextDocument *doc, EditorContext *ctx)
         updateMediaWants();
     });
     if (MediaService *media = m_ctx->media) {
-        connect(media, &MediaService::arrived, this, [this](const MediaKey &k) { mediaArrived(k.hash); });
-        connect(media, &MediaService::refused, this, [this](const MediaKey &k) { mediaArrived(k.hash); });
+        // Only what lines here show: images and PDF thumbnails, never a
+        // viewer's pages or tiles.
+        connect(media, &MediaService::arrived, this, [this](const MediaKey &k) { mediaArrived(k); });
+        connect(media, &MediaService::refused, this, [this](const MediaKey &k) { mediaArrived(k); });
         connect(media, &MediaService::budgetChanged, this, [this] {
             m_mediaDirty = true; // request sizes follow the budget
             emit update(QRectF(0, m_viewTop, 1e9, qMax<qreal>(1, m_viewBottom - m_viewTop)));
@@ -129,7 +142,7 @@ VirtualLayout::VirtualLayout(QTextDocument *doc, EditorContext *ctx)
             // Sizes are known now: lay out the lines showing it again.
             QTextDocument *d = document();
             for (QTextBlock b = d->firstBlock(); b.isValid(); b = b.next())
-                if (roleOf(b) == LineRole::Image && imageHashOf(b) == hash) {
+                if (roleIsAttachment(roleOf(b)) && imageHashOf(b) == hash) {
                     b.layout()->clearLayout();
                     relayoutBlock(b);
                 }
@@ -183,6 +196,7 @@ qreal VirtualLayout::topPadFor(const QTextBlock &block, LineRole role) const
     case LineRole::MathSingle:
         return 10;
     case LineRole::Image:
+    case LineRole::Pdf:
         return kImageTop;
     case LineRole::Para: {
         const int h = headingLevel(block.text());
@@ -207,6 +221,7 @@ qreal VirtualLayout::bottomPadFor(LineRole role) const
     case LineRole::MathSingle:
         return 10 + ps;
     case LineRole::Image:
+    case LineRole::Pdf:
         return kImageBelow + ps;
     default:
         return ps;
@@ -217,6 +232,11 @@ qreal VirtualLayout::extraBelow(const QTextBlock &block) const
 {
     const BlockData *d = dataOf(block);
     return d && d->pendingImports > 0 ? kImportH : 0;
+}
+
+qreal VirtualLayout::objectHeight(const QTextBlock &block, LineRole role) const
+{
+    return role == LineRole::Pdf ? pdfCardSize().height() : imageDisplaySize(imageHashOf(block)).height();
 }
 
 QSizeF VirtualLayout::imageDisplaySize(const QString &hash) const
@@ -235,11 +255,39 @@ QSizeF VirtualLayout::imageDisplaySize(const QString &hash) const
 
 QRectF VirtualLayout::imageRect(const QTextBlock &block) const
 {
-    if (roleOf(block) != LineRole::Image)
+    const LineRole role = roleOf(block);
+    if (!roleIsAttachment(role))
         return QRectF();
     const QRectF br = blockBoundingRect(block);
-    const QSizeF sz = imageDisplaySize(imageHashOf(block));
+    const QSizeF sz = role == LineRole::Pdf ? pdfCardSize() : imageDisplaySize(imageHashOf(block));
     return QRectF(QPointF(columnLeft(), br.top() + kImageTop), sz);
+}
+
+QSizeF VirtualLayout::pdfCardSize() const
+{
+    return QSizeF(qMin<qreal>(columnWidth(), kPdfCardMaxW), kPdfCardH);
+}
+
+QRectF VirtualLayout::pdfThumbRect(const QRectF &card, const QString &hash) const
+{
+    // Width from the stored first-page geometry (rotation applied): layout
+    // never waits for a render.
+    const AttachmentInfo *info = m_ctx->attachments ? m_ctx->attachments->info(hash) : nullptr;
+    const qreal aspect = info && info->width > 0 && info->height > 0 ? qreal(info->width) / info->height : 612.0 / 792.0;
+    const qreal th = card.height() - 2 * kPdfPad;
+    const qreal maxW = qMax<qreal>(th * 0.4, qMin<qreal>(th * 1.6, card.width() * 0.45));
+    const qreal tw = qBound<qreal>(th * 0.4, std::round(th * aspect), maxW);
+    return QRectF(card.left() + kPdfPad, card.top() + kPdfPad, tw, th);
+}
+
+MediaService::Request VirtualLayout::pdfThumbRequest(const QString &hash, const QRectF &thumb) const
+{
+    const AttachmentStore *as = m_ctx->attachments;
+    const AttachmentInfo *info = as ? as->info(hash) : nullptr;
+    const int w = qMax(1, int(std::round(thumb.width() * m_dpr)));
+    const int h = qMax(1, int(std::round(thumb.height() * m_dpr)));
+    const PdfPageGeom first = info ? attachments::firstPageGeom(info->pageGeom) : PdfPageGeom();
+    return MediaService::pdfRequest(hash, as ? as->pathFor(hash) : QString(), MediaKey::PdfThumb, 0, first, w, h);
 }
 
 QFont VirtualLayout::roleFont(const QTextBlock &block, LineRole role) const
@@ -273,9 +321,8 @@ float VirtualLayout::estimateHeight(const QTextBlock &block) const
 {
     instr::add(instr::BlockHeightEstimates);
     const LineRole role = roleOf(block);
-    if (role == LineRole::Image) // exact: the same arithmetic as layoutBlock()
-        return float(std::ceil(topPadFor(block, role) + imageDisplaySize(imageHashOf(block)).height()
-                               + extraBelow(block) + bottomPadFor(role)));
+    if (roleIsAttachment(role)) // exact: the same arithmetic as layoutBlock()
+        return float(std::ceil(topPadFor(block, role) + objectHeight(block, role) + extraBelow(block) + bottomPadFor(role)));
     const QFont f = roleFont(block, role);
     const QFontMetricsF fm(f);
     const qreal lw = qMax<qreal>(40, columnWidth() - 2 * indentFor(role));
@@ -899,10 +946,11 @@ void VirtualLayout::layoutBlock(const QTextBlock &block, int number) const
                 break;
             }
 #endif
-    if (role == LineRole::Image) {
-        // One line holding the image object; its height comes from the stored
-        // dimensions (the same arithmetic as estimateHeight), never a decode.
-        const qreal ih = imageDisplaySize(imageHashOf(block)).height();
+    if (roleIsAttachment(role)) {
+        // One line holding the image or PDF object; its height comes from the
+        // stored dimensions (the same arithmetic as estimateHeight), never a
+        // decode or a render.
+        const qreal ih = objectHeight(block, role);
         tl->beginLayout();
         QTextLine line = tl->createLine();
         if (line.isValid()) {
@@ -1392,8 +1440,8 @@ void VirtualLayout::draw(QPainter *painter, const PaintContext &ctx)
                 }
             }
         }
-        // Selected image: tinted, since the object hides the selection background.
-        if (role == LineRole::Image) {
+        // Selected image or PDF: tinted, since the object hides the selection background.
+        if (roleIsAttachment(role)) {
             for (const Selection &s : ctx.selections)
                 if (s.cursor.selectionStart() <= bpos && s.cursor.selectionEnd() > bpos) {
                     QColor c = s.format.background().color();
@@ -1407,8 +1455,8 @@ void VirtualLayout::draw(QPainter *painter, const PaintContext &ctx)
             const QRectF pr(columnLeft(), r.bottom() - bottomPadFor(role) - kImportH + 6, qMin<qreal>(columnWidth(), 360),
                             kImportH - 12);
             paintImagePlaceholder(painter, pr,
-                                  pd->pendingImports > 1 ? tr("Importing %1 images…").arg(pd->pendingImports)
-                                                         : tr("Importing image…"));
+                                  pd->pendingImports > 1 ? tr("Importing %1 files…").arg(pd->pendingImports)
+                                                         : tr("Importing…"));
         }
         // Copy affordance on code openers.
         if (role == LineRole::CodeOpen && tl->lineCount() > 0) {
@@ -1515,8 +1563,9 @@ int VirtualLayout::hitTest(const QPointF &point, Qt::HitTestAccuracy accuracy) c
 // ----------------------------------------------------- inline objects -----
 void VirtualLayout::resizeInlineObject(QTextInlineObject item, int pos, const QTextFormat &format)
 {
-    if (format.objectType() == kImageObjectType) {
-        const QSizeF sz = imageDisplaySize(format.property(kAttachmentHashProperty).toString());
+    if (format.objectType() == kImageObjectType || format.objectType() == kPdfObjectType) {
+        const QSizeF sz = format.objectType() == kPdfObjectType
+            ? pdfCardSize() : imageDisplaySize(format.property(kAttachmentHashProperty).toString());
         item.setWidth(sz.width());
         item.setAscent(sz.height());
         item.setDescent(0);
@@ -1537,7 +1586,8 @@ void VirtualLayout::resizeInlineObject(QTextInlineObject item, int pos, const QT
 
 void VirtualLayout::positionInlineObject(QTextInlineObject item, int pos, const QTextFormat &format)
 {
-    if (format.objectType() != kPageLinkObjectType && format.objectType() != kImageObjectType)
+    const int ot = format.objectType();
+    if (ot != kPageLinkObjectType && ot != kImageObjectType && ot != kPdfObjectType)
         QAbstractTextDocumentLayout::positionInlineObject(item, pos, format);
 }
 
@@ -1546,6 +1596,10 @@ void VirtualLayout::drawInlineObject(QPainter *p, const QRectF &rect, QTextInlin
 {
     if (format.objectType() == kImageObjectType) {
         drawImageObject(p, rect, pos, format);
+        return;
+    }
+    if (format.objectType() == kPdfObjectType) {
+        drawPdfObject(p, rect, pos, format);
         return;
     }
     if (format.objectType() != kPageLinkObjectType) {
@@ -1645,8 +1699,82 @@ void VirtualLayout::drawImageObject(QPainter *p, const QRectF &rect, int pos, co
     p->restore();
 }
 
-void VirtualLayout::mediaArrived(const QString &hash)
+void VirtualLayout::drawPdfObject(QPainter *p, const QRectF &rect, int pos, const QTextFormat &format)
 {
+    // The card: first-page thumbnail (a cache key, never a copy), file name,
+    // page count and size. No file I/O or rendering here.
+    const EditorTheme &t = m_ctx->theme();
+    const QString hash = format.property(kAttachmentHashProperty).toString();
+    const QString name = format.property(kImageAltProperty).toString();
+    if (const QPaintDevice *dev = p->device()) {
+        const qreal dpr = dev->devicePixelRatioF();
+        if (dpr > 0 && dpr != m_dpr) {
+            m_dpr = dpr;
+            m_mediaDirty = true;
+        }
+    }
+    AttachmentStore *as = m_ctx->attachments;
+    MediaService *media = m_ctx->media;
+    const AttachmentInfo *info = as ? as->info(hash) : nullptr;
+    p->save();
+    p->setRenderHint(QPainter::Antialiasing, true);
+    QColor border = t.dim;
+    border.setAlpha(90);
+    p->setPen(QPen(border, 1));
+    p->setBrush(t.codeBackground);
+    p->drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
+    const QRectF thumb = pdfThumbRect(rect, hash);
+    const MediaService::Request req = pdfThumbRequest(hash, thumb);
+    const QImage *img = media ? media->lookup(req.key) : nullptr;
+    if (BlockData *d = dataOf(document()->findBlock(pos)))
+        d->mediaKey = req.key;
+    p->setRenderHint(QPainter::Antialiasing, false);
+    if (img) {
+        p->drawImage(thumb, *img);
+    } else {
+        p->fillRect(thumb, QColor(255, 255, 255)); // a blank page until it renders
+    }
+    p->setPen(QPen(border, 1));
+    p->setBrush(Qt::NoBrush);
+    p->drawRect(thumb.adjusted(-0.5, -0.5, 0.5, 0.5));
+    // Text column.
+    const qreal tx = thumb.right() + 14;
+    const QRectF text(tx, rect.top() + kPdfPad + 4, qMax<qreal>(10, rect.right() - kPdfPad - tx), rect.height() - 2 * kPdfPad);
+    QFont nf = t.body;
+    nf.setWeight(QFont::DemiBold);
+    p->setFont(nf);
+    p->setPen(t.text);
+    const QFontMetricsF nfm(nf);
+    p->drawText(QPointF(text.left(), text.top() + nfm.ascent()),
+                nfm.elidedText(name.isEmpty() ? tr("Document.pdf") : name, Qt::ElideMiddle, text.width()));
+    QFont df = t.body;
+    df.setPointSizeF(t.body.pointSizeF() * 0.86);
+    p->setFont(df);
+    const QFontMetricsF dfm(df);
+    QString detail;
+    if (info && info->pages > 0)
+        detail = (info->pages == 1 ? tr("1 page") : tr("%1 pages").arg(info->pages)) + QStringLiteral(" · ")
+            + formatSize(info->bytes);
+    else if (as && as->isMissing(hash))
+        detail = tr("Missing attachment");
+    if (media && media->failed(hash))
+        detail = tr("Cannot show this PDF");
+    p->setPen(t.dim);
+    const qreal dy = text.top() + nfm.lineSpacing() + 4 + dfm.ascent();
+    p->drawText(QPointF(text.left(), dy), dfm.elidedText(detail, Qt::ElideRight, text.width()));
+    p->drawText(QPointF(text.left(), text.bottom() - dfm.descent() - 4), dfm.elidedText(tr("Click to open"), Qt::ElideRight, text.width()));
+    p->restore();
+}
+
+void VirtualLayout::mediaArrived(const MediaKey &key)
+{
+    LineRole want;
+    if (key.kind == MediaKey::Image)
+        want = LineRole::Image;
+    else if (key.kind == MediaKey::PdfThumb)
+        want = LineRole::Pdf;
+    else
+        return; // a viewer's page or tile: nothing here shows it
     // Repaint only the visible lines showing it.
     const int first = blockAtY(m_viewTop);
     const int last = blockAtY(m_viewBottom);
@@ -1654,7 +1782,7 @@ void VirtualLayout::mediaArrived(const QString &hash)
         return;
     QTextBlock b = document()->findBlockByNumber(first);
     for (int i = first; i <= last && b.isValid(); ++i, b = b.next())
-        if (roleOf(b) == LineRole::Image && imageHashOf(b) == hash)
+        if (roleOf(b) == want && imageHashOf(b) == key.hash)
             emit update(QRectF(0, topOf(i), 1e9, m_h[size_t(i)]));
 }
 
@@ -1684,12 +1812,23 @@ void VirtualLayout::updateMediaWants()
     const int last = blockAtY(keepBottom);
     QTextBlock b = document()->findBlockByNumber(first);
     for (int i = first; i <= last && b.isValid(); ++i, b = b.next()) {
-        if (roleOf(b) != LineRole::Image)
+        const LineRole role = roleOf(b);
+        if (!roleIsAttachment(role))
             continue;
         const QString hash = imageHashOf(b);
         const AttachmentInfo *info = as->info(hash);
         if (!info) {
             as->fetchInfo(hash);
+            continue;
+        }
+        if (role == LineRole::Pdf) {
+            // The first-page thumbnail, through the PDF lane and the budget.
+            const QRectF card(QPointF(columnLeft(), topOf(i) + kImageTop), pdfCardSize());
+            MediaService::Request r = pdfThumbRequest(hash, pdfThumbRect(card, hash));
+            const qreal top = topOf(i);
+            const bool isVisible = top + m_h[size_t(i)] > m_viewTop && top < m_viewBottom;
+            r.priority = isVisible ? 0 : 1;
+            (isVisible ? visible : ahead).push_back(r);
             continue;
         }
         MediaService::Request r = media->imageRequest(*info, as->pathFor(hash), imageDisplaySize(hash).width(), m_dpr);

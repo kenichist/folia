@@ -42,6 +42,17 @@ bool isImageFile(const QString &path)
     return ext.contains(QFileInfo(path).suffix().toLower());
 }
 
+bool isPdfFile(const QString &path) { return QFileInfo(path).suffix().compare(QLatin1String("pdf"), Qt::CaseInsensitive) == 0; }
+
+AttachmentStore::Source fileSource(const QString &path)
+{
+    AttachmentStore::Source s;
+    s.path = path;
+    // Images: alt text without the extension; PDFs: the file name, as shown.
+    s.name = isPdfFile(path) ? QFileInfo(path).fileName() : QFileInfo(path).completeBaseName();
+    return s;
+}
+
 PageId linkTarget(const QTextBlock &b)
 {
     return b.begin().fragment().charFormat().property(kPageLinkTargetProperty).toLongLong();
@@ -249,6 +260,11 @@ bool NoteEditor::handleSmartKeys(QKeyEvent *e)
             emit openPageRequested(linkTarget(b));
             return true;
         }
+        if (role == LineRole::Pdf) {
+            const QTextCharFormat f = b.begin().fragment().charFormat();
+            emit openPdfRequested(f.property(kAttachmentHashProperty).toString(), f.property(kImageAltProperty).toString());
+            return true;
+        }
         return false;
     }
     if ((key == Qt::Key_C) && mods == (Qt::ControlModifier | Qt::ShiftModifier))
@@ -451,6 +467,11 @@ void NoteEditor::mouseReleaseEvent(QMouseEvent *e)
             if (chip.contains(docPt))
                 emit openPageRequested(linkTarget(b));
         }
+    } else if (r == LineRole::Pdf) {
+        if (vl->imageRect(b).contains(docPt)) {
+            const QTextCharFormat f = b.begin().fragment().charFormat();
+            emit openPdfRequested(f.property(kAttachmentHashProperty).toString(), f.property(kImageAltProperty).toString());
+        }
     } else if (r == LineRole::CodeOpen) {
         if (vl->codeCopyRect(b).contains(docPt)) {
             QTextCursor c(b);
@@ -482,6 +503,8 @@ void NoteEditor::mouseMoveEvent(QMouseEvent *e)
                     shape = Qt::PointingHandCursor;
             }
         } else if (r == LineRole::CodeOpen && vl->codeCopyRect(b).contains(docPt)) {
+            shape = Qt::PointingHandCursor;
+        } else if (r == LineRole::Pdf && vl->imageRect(b).contains(docPt)) {
             shape = Qt::PointingHandCursor;
         } else if ((e->modifiers() & Qt::ControlModifier) && linkUnderPoint(docPt).valid()) {
             shape = Qt::PointingHandCursor;
@@ -664,10 +687,8 @@ QString NoteEditor::plainTextForRange(int from, int to) const
         if (roleAt(b) == LineRole::PageLink) {
             const QString title = m_ctx->titleOf ? m_ctx->titleOf(linkTarget(b)) : QString();
             out << QStringLiteral("[[%1]]").arg(title.isEmpty() ? QStringLiteral("Untitled") : title);
-        } else if (roleAt(b) == LineRole::Image) {
-            const QTextCharFormat f = b.begin().fragment().charFormat();
-            out << attachments::imageMarkdown(f.property(kAttachmentHashProperty).toString(),
-                                              f.property(kImageAltProperty).toString());
+        } else if (roleIsAttachment(roleAt(b))) {
+            out << PageSession::attachmentMarkdown(b);
         } else {
             QString t = links::blockSource(b, s, qMax(s, e)); // named links copy as [label](url)
             t.remove(QChar::ObjectReplacementCharacter);
@@ -700,12 +721,8 @@ QList<AttachmentStore::Source> NoteEditor::imageSources(const QMimeData *m)
     // Files (Finder copy, drag-and-drop): streamed from disk by the worker.
     if (m->hasUrls()) {
         for (const QUrl &u : m->urls())
-            if (u.isLocalFile() && isImageFile(u.toLocalFile())) {
-                AttachmentStore::Source s;
-                s.path = u.toLocalFile();
-                s.name = QFileInfo(s.path).completeBaseName();
-                out << s;
-            }
+            if (u.isLocalFile() && (isImageFile(u.toLocalFile()) || isPdfFile(u.toLocalFile())))
+                out << fileSource(u.toLocalFile());
         if (!out.isEmpty())
             return out;
     }
@@ -749,8 +766,10 @@ bool NoteEditor::importImages(const QList<AttachmentStore::Source> &sources)
             if (!guard)
                 return;
             if (!r.ok)
-                qWarning("folia: image import failed: %s", qPrintable(r.error));
-            guard->finishImport(batch, r.ok, r.info, r.alt.isEmpty() ? QStringLiteral("image") : r.alt);
+                qWarning("folia: import failed: %s", qPrintable(r.error));
+            const QString label = !r.alt.isEmpty() ? r.alt
+                : r.info.isPdf() ? QStringLiteral("Document.pdf") : QStringLiteral("image");
+            guard->finishImport(batch, r.ok, r.info, label);
         });
     }
     return true;
@@ -762,14 +781,24 @@ bool NoteEditor::chooseImages()
         return false;
     const QStringList files = QFileDialog::getOpenFileNames(
         this, tr("Insert Image"), QStandardPaths::writableLocation(QStandardPaths::PicturesLocation),
-        tr("Images (*.png *.jpg *.jpeg *.heic *.heif *.webp *.gif *.tif *.tiff *.bmp)"));
+        tr("Images (*.png *.jpg *.jpeg *.heic *.heif *.webp *.gif *.tif *.tiff *.bmp);;Images and PDFs "
+           "(*.png *.jpg *.jpeg *.heic *.heif *.webp *.gif *.tif *.tiff *.bmp *.pdf)"));
     QList<AttachmentStore::Source> srcs;
-    for (const QString &f : files) {
-        AttachmentStore::Source s;
-        s.path = f;
-        s.name = QFileInfo(f).completeBaseName();
-        srcs << s;
-    }
+    for (const QString &f : files)
+        srcs << fileSource(f);
+    return importImages(srcs);
+}
+
+bool NoteEditor::choosePdfs()
+{
+    if (!m_session || !m_ctx->attachments)
+        return false;
+    const QStringList files = QFileDialog::getOpenFileNames(
+        this, tr("Insert PDF"), QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation),
+        tr("PDF documents (*.pdf)"));
+    QList<AttachmentStore::Source> srcs;
+    for (const QString &f : files)
+        srcs << fileSource(f);
     return importImages(srcs);
 }
 
@@ -816,13 +845,13 @@ void NoteEditor::insertFromMimeData(const QMimeData *source)
         for (int i = 0; i < lines.size(); ++i) {
             if (i > 0)
                 c.insertText(QStringLiteral("\n"), QTextCharFormat());
-            QString imgHash, imgAlt;
-            if (attachments::parseImageMarkdown(lines[i], &imgHash, &imgAlt)) {
-                // A copied image line comes back as an image, always on a line
-                // of its own (a reference is never part of a paragraph).
+            QTextCharFormat objFormat;
+            if (PageSession::attachmentFormatFor(lines[i], &objFormat)) {
+                // A copied image or PDF line comes back as one, always on a
+                // line of its own (a reference is never part of a paragraph).
                 if (!c.atBlockStart())
                     c.insertText(QStringLiteral("\n"), QTextCharFormat());
-                c.insertText(QString(QChar::ObjectReplacementCharacter), PageSession::imageFormat(imgHash, imgAlt));
+                c.insertText(QString(QChar::ObjectReplacementCharacter), objFormat);
                 if (i + 1 == lines.size() && !c.atBlockEnd())
                     c.insertText(QStringLiteral("\n"), QTextCharFormat());
                 continue;

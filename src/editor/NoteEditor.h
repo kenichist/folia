@@ -65,11 +65,15 @@ public:
     bool importImages(const QList<AttachmentStore::Source> &sources);
     // Edit ▸ Insert Image…: a file picker. False when nothing was chosen.
     bool chooseImages();
+    // Edit ▸ Insert PDF…: the same import, for PDF files.
+    bool choosePdfs();
     // The image sources a clipboard or drop carries (empty: treat as text).
     static QList<AttachmentStore::Source> imageSources(const QMimeData *data);
 
 signals:
     void openPageRequested(folia::PageId id);
+    // A PDF card was clicked (or Mod+Enter on its line).
+    void openPdfRequested(const QString &hash, const QString &name);
     void openUrlRequested(const QString &href);
     void preeditChanged(bool active);
     void escapePressed();

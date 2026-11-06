@@ -77,7 +77,7 @@ qint64 nowMs() { return QDateTime::currentMSecsSinceEpoch(); }
 
 AttachmentInfo readAttachment(const sql::Stmt &s)
 {
-    // Column order: hash, mime, bytes, width, height, orientation, pages
+    // Column order: hash, mime, bytes, width, height, orientation, pages, page_geom
     AttachmentInfo a;
     a.hash = s.text(0);
     a.mime = s.text(1);
@@ -86,6 +86,7 @@ AttachmentInfo readAttachment(const sql::Stmt &s)
     a.height = s.i32(4);
     a.orientation = s.i32(5);
     a.pages = s.i32(6);
+    a.pageGeom = s.blob(7);
     return a;
 }
 
@@ -94,7 +95,7 @@ QVector<AttachmentInfo> queryAttachments(sqlite3 *db, const QStringList &hashes)
     QVector<AttachmentInfo> out;
     if (hashes.isEmpty())
         return out;
-    sql::Stmt s(db, "SELECT hash, mime, bytes, width, height, orientation, pages FROM attachments WHERE hash=?1");
+    sql::Stmt s(db, "SELECT hash, mime, bytes, width, height, orientation, pages, page_geom FROM attachments WHERE hash=?1");
     for (const QString &h : hashes) {
         s.bind(1, h);
         if (s.step() == SQLITE_ROW)
@@ -1003,7 +1004,7 @@ void Store::openPage(PageId id, QObject *ctx, std::function<void(PageContent)> d
                 r.text = b.text(3);
                 r.target = b.i64(4);
                 QString hash;
-                if (r.kind == BlockKind::Text && attachments::parseImageMarkdown(r.text, &hash, nullptr))
+                if (r.kind == BlockKind::Text && attachments::parseAnyMarkdown(r.text, &hash))
                     hashes << hash;
                 pc.blocks.push_back(std::move(r));
             }
@@ -1216,12 +1217,16 @@ void Store::writeJob(std::function<int(sqlite3 *)> fn, QObject *ctx, std::functi
 void Store::putAttachment(const AttachmentInfo &a)
 {
     writeJob([a](sqlite3 *db) {
-        sql::Stmt s(db, "INSERT INTO attachments(hash, mime, bytes, width, height, orientation, pages, created_at) "
-                        "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(hash) DO UPDATE SET "
+        sql::Stmt s(db, "INSERT INTO attachments(hash, mime, bytes, width, height, orientation, pages, page_geom, "
+                        "created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT(hash) DO UPDATE SET "
                         "mime=excluded.mime, bytes=excluded.bytes, width=excluded.width, height=excluded.height, "
-                        "orientation=excluded.orientation, pages=excluded.pages");
+                        "orientation=excluded.orientation, pages=excluded.pages, page_geom=excluded.page_geom");
         s.bind(1, a.hash).bind(2, a.mime).bind(3, a.bytes).bind(4, a.width).bind(5, a.height)
-            .bind(6, a.orientation).bind(7, a.pages).bind(8, nowMs());
+            .bind(6, a.orientation).bind(7, a.pages).bind(9, nowMs());
+        if (a.pageGeom.isEmpty())
+            s.bindNull(8);
+        else
+            s.bind(8, a.pageGeom);
         return s.exec() ? SQLITE_OK : s.lastError();
     });
 }
