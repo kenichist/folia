@@ -20,7 +20,8 @@ const char *counterName(Counter c)
         "doc_cache_bytes", "doc_cache_entries", "highlight_lines", "highlight_state_steps",
         "lua_invocations", "lua_errors", "lua_renders", "widgets_created", "widgets_reused",
         "paint_events", "media_budget_bytes", "media_reserved_bytes", "media_cache_bytes",
-        "image_decodes", "image_cache_hits", "pdf_renders", "pdf_tiles", "media_jobs_dropped_queued",
+        "image_decodes", "image_cache_hits", "pdf_renders", "pdf_tiles", "pdf_cache_hits",
+        "media_jobs_dropped_queued",
         "media_jobs_discarded", "media_cpu_us_discarded", "media_budget_waits", "media_too_large",
         "attachment_imports", "attachment_gc_deleted",
     };

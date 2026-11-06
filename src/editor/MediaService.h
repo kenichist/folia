@@ -23,6 +23,7 @@
 #include <QHash>
 #include <QImage>
 #include <QObject>
+#include <QRect>
 #include <QSet>
 #include <QSize>
 #include <QThreadPool>
@@ -31,9 +32,13 @@
 
 #include <functional>
 #include <list>
+#include <memory>
 
 namespace folia {
 
+namespace platform {
+class PdfDocument;
+}
 
 
 class MediaService : public QObject {
@@ -49,6 +54,12 @@ public:
         Lane lane = Lane::Image;
         int priority = 0;     // 0 visible, 1 prefetch
         qint64 estimate = 0;  // working set to reserve (bytes)
+        // PDFs: the open document shared by a viewer's jobs (null: `path` is
+        // opened for this one job, as thumbnails are), and the part of the
+        // page to draw, in pixels of the page drawn key.level (tiles) or
+        // key.width (pages, thumbnails) wide. Empty: the whole page.
+        std::shared_ptr<platform::PdfDocument> pdf;
+        QRect region;
     };
     // Runs on a worker. Returns a null image (and sets *error) on failure.
     using Decoder = std::function<QImage(const Request &, QString *error)>;
@@ -82,6 +93,29 @@ public:
     static constexpr double kMaxDecodeShare = 0.75;
     static DecodeCost costFor(const QString &mime);
 
+    // CoreGraphics renders a PDF page straight into our bitmap; its own
+    // working set follows the page's content more than the output size
+    // (measured, docs/BENCHMARKS.md §6 "PDF render cost"):
+    //   plain pages   output × 2.5
+    //   with layers   output × 13 (each transparency group or soft mask is a
+    //                 device-resolution layer, clipped to the bitmap)
+    //   images        the largest embedded image decoded at native/2^k
+    //                 (k ≤ 3, JPEG/JPX only) for the page's drawn width,
+    //                 × 2.4, plus 6 MiB of stream and decoder state
+    // plus a small fixed part. `pageWidthPx` is the width of the whole page
+    // as drawn (a tile's level), `outW`×`outH` the bitmap.
+    static constexpr double kPdfOutputFactor = 2.5;
+    static constexpr double kPdfLayerFactor = 13.0;
+    static constexpr double kPdfImageFactor = 2.4;
+    static constexpr qint64 kPdfImageFixedBytes = 6ll << 20;
+    static constexpr qint64 kPdfFixedBytes = 2ll << 20;
+    static qint64 pdfEstimate(const PdfPageGeom &page, int pageWidthPx, int outW, int outH);
+    // A PDF request: the first page `w`×`h` pixels (thumbnail), a whole page,
+    // or one tile (`region` of the page drawn `level` wide).
+    static Request pdfRequest(const QString &hash, const QString &path, MediaKey::Kind kind, int page,
+                              const PdfPageGeom &geom, int w, int h, int level = 0, int tx = 0, int ty = 0,
+                              const QRect &region = QRect());
+
     explicit MediaService(const Config &cfg, QObject *parent = nullptr);
     MediaService() : MediaService(Config{}) {}
     ~MediaService() override;
@@ -104,9 +138,13 @@ public:
     bool contains(const MediaKey &key) const { return m_cache.contains(key); }
     // The cached resolution of `hash` nearest to `width`; only within
     // ±tolerance (fraction) unless tolerance < 0.
+    // Images only.
     const QImage *nearest(const QString &hash, int width, double tolerance, MediaKey *found = nullptr);
     bool tooLarge(const MediaKey &key) const { return m_tooLarge.contains(key); }
+    // The attachment cannot be shown at all (an image or a PDF's first page
+    // failed), or this one PDF page/tile failed.
     bool failed(const QString &hash) const { return m_failed.contains(hash); }
+    bool failed(const MediaKey &key) const { return m_failed.contains(key.hash) || m_failedKeys.contains(key); }
     qint64 cacheBytes() const { return m_budget.cached(); }
     int cacheEntries() const { return int(m_cache.size()); }
 
@@ -121,6 +159,9 @@ public:
 
     // ---- memory
     void trim(qint64 targetBytes);
+    // Frees a closed viewer's pages and tiles of `hash` (what nobody wants
+    // any more); its thumbnail and anything still wanted stay.
+    qint64 dropViewerBitmaps(const QString &hash);
     // Trim toward 0 (critical) or a floor (warning) and lower the budget for
     // the cool-down period.
     void memoryPressure(bool critical);
@@ -155,7 +196,9 @@ private:
     void finished(const MediaKey &key, QImage image, const QString &error, qint64 cpuUs, qint64 wallUs);
     void insert(const MediaKey &key, QImage image, bool asLeastRecent);
     void evict(const MediaKey &key);
-    qint64 evictUnwanted(qint64 bytes, const QString &except = QString());
+    // Least recent first, never what is wanted, nor what `keep` may draw
+    // in its place (other resolutions of an image, other levels of a page).
+    qint64 evictUnwanted(qint64 bytes, const MediaKey *keep = nullptr);
     qint64 evictableBytes() const;
 
     Config m_cfg;
@@ -171,6 +214,7 @@ private:
     QHash<MediaKey, Want> m_want;
     QSet<MediaKey> m_tooLarge;
     QSet<QString> m_failed;
+    QSet<MediaKey> m_failedKeys;
     QTimer m_coolDown;
     int m_inFlight = 0; // results not yet delivered back (incl. abandoned)
 };

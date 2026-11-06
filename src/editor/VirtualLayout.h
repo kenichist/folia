@@ -15,6 +15,7 @@
 
 #include "editor/BlockData.h"
 #include "editor/EditorContext.h"
+#include "editor/MediaService.h"
 
 #include <QAbstractTextDocumentLayout>
 #include <QElapsedTimer>
@@ -69,7 +70,12 @@ public:
     // Images (docs/ATTACHMENTS.md §3). Display size comes from the stored
     // dimensions (no decode needed for layout): min(column, native) wide.
     QSizeF imageDisplaySize(const QString &hash) const;
+    // The drawn object of an Image or Pdf line (the PDF card).
     QRectF imageRect(const QTextBlock &block) const;
+    // PDF lines: a fixed-height card; the thumbnail's width follows the
+    // stored first-page geometry.
+    QSizeF pdfCardSize() const;
+    QRectF pdfThumbRect(const QRectF &card, const QString &hash) const;
     // This layout is no longer shown: withdraw its decode requests.
     void releaseMedia();
     // Recompute which bitmaps this layout wants (visible first, then one
@@ -102,9 +108,12 @@ private:
     void paintBlockDecorations(QPainter *p, const QTextBlock &block, LineRole role,
                                const QRectF &rect, const PaintContext &ctx) const;
     void drawImageObject(QPainter *p, const QRectF &rect, int pos, const QTextFormat &format);
+    void drawPdfObject(QPainter *p, const QRectF &rect, int pos, const QTextFormat &format);
+    MediaService::Request pdfThumbRequest(const QString &hash, const QRectF &thumb) const;
+    qreal objectHeight(const QTextBlock &block, LineRole role) const;
     void paintImagePlaceholder(QPainter *p, const QRectF &rect, const QString &label) const;
     qreal extraBelow(const QTextBlock &block) const; // import placeholder
-    void mediaArrived(const QString &hash);
+    void mediaArrived(const MediaKey &key);
     QFont roleFont(const QTextBlock &block, LineRole role) const;
     qreal indentFor(LineRole role) const;
     qreal topPadFor(const QTextBlock &block, LineRole role) const;

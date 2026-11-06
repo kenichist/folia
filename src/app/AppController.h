@@ -25,6 +25,7 @@ class EditorContext;
 class EditorPane;
 class PageSession;
 class PreviewService;
+class PdfViewerPage;
 class SettingsPage;
 class ShellHost;
 class Store;
@@ -92,6 +93,12 @@ public:
     void closeSettings();
     bool settingsOpen() const;
     SettingsPage *settingsPage() const;
+    // The PDF viewer (docs/ATTACHMENTS.md §4): takes the editor's place like
+    // Settings; closing it destroys it, which closes the document.
+    bool showPdf(const QString &hash, const QString &name);
+    void closePdf();
+    bool pdfOpen() const;
+    PdfViewerPage *pdfViewer() const;
     // Appearance overrides layered over the layout theme: applied now,
     // written to the workspace shortly after (coalesced).
     void setThemeOverrides(const QVariantMap &overrides);
@@ -148,6 +155,7 @@ private:
     QWidget *m_shellContainer = nullptr;
     QStackedWidget *m_stack = nullptr; // the layout, or the Settings page
     QPointer<SettingsPage> m_settings;
+    QPointer<PdfViewerPage> m_pdf;
     QTimer m_prefsTimer;         // coalesces settings writes
     bool m_themeDirty = false;
 

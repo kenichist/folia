@@ -494,8 +494,177 @@ docs/ATTACHMENTS.md):
 - **PNG decodes cost more inside the app than in the probe.** PNG's
   factors are set from the in-app peaks.
 
-Not covered yet: `QImageReader` as the main decoder (other platforms) and
-everything PDF.
+Not covered yet: `QImageReader` as the main decoder (other platforms).
+PDFs are in §6b.
+
+## 6b. PDFs (attachments)
+
+What docs/ATTACHMENTS.md §6 asks for, for step 4 (PDFs on CoreGraphics).
+Three tools:
+
+```sh
+build/tools/folia_mediaprobe --make-pdf /tmp/bench/pdf        # fixtures, out of process
+python3 -I bench/scripts/pdfprobe_matrix.py --probe build/tools/folia_mediaprobe \
+    --pdfs /tmp/bench/pdf --out pdfprobe.json                  # render cost: whole page vs tiles
+APP=build/src/Folia.app/Contents/MacOS/Folia
+$APP --home /tmp/bench/pdf-home --no-watch --bench pdf --bench-out pdf.json \
+    --bench-arg pdf_dir=/tmp/bench/pdf [--bench-arg idle_seconds=20] [--bench-arg step=300]
+```
+
+`bench/run_suite.py` writes the PDF fixtures and runs `pdf` too. The
+fixtures (CoreGraphics `CGPDFContext`, deterministic):
+
+| File | Pages | What |
+|---|---:|---|
+| `long-200.pdf` | 200 | Letter, nine paragraphs of Times body text each, a 40-curve figure every 5th page (0.35 MB) |
+| `scanned-24.pdf` | 24 | one 2550×3300 (300 dpi) photo-like JPEG per page, kept as DCT (48 MB) |
+| `vector-16.pdf` | 16 | 3000 stroked Béziers and 400 filled polygons per page (6.2 MB) |
+| `transparency-16.pdf` | 16 | text under 24 transparency groups, each with 6 nested groups, blend modes and an alpha-gradient soft mask (4.5 MB) |
+| `mixed-8.pdf` | 8 | Letter, A4, landscape and a 226×600 receipt in turn, red/blue corner markers (tests) |
+
+`folia_mediaprobe --pdf <file> <page> <pageWidthPx> [tile]` renders one
+page in a fresh process: the whole page as one bitmap, or the N×N tiles
+covering a 2200×1600 px viewport (a 1100×800 pt window at 2×) at the page's
+top left, each drawn straight into its own bitmap. It renders twice (cold:
+the document just opened; warm: CG's per-document caches filled), and
+reports the worst single bitmap's peak (`ri_interval_max_phys_footprint`,
+read before and after) and the footprint left after the document closes.
+
+`--bench pdf` measures, in one process:
+
+0. in-app render cost per document kind (thumbnail and one viewer tile);
+1. idle on a text page (baseline);
+2. a note with the five PDFs as cards, through the real import path;
+3. typing 300 characters in that note while a PDF view in a window beside
+   it renders vector tiles at 3× (input latency; repaints each side
+   caused the other);
+4. the 200-page document in the viewer: scrolled to the end, back up, and
+   down again (plateau); zoomed in and out 6 times around page 100
+   (renders during gestures, time to sharp after settling); scrolled at
+   4×; closed (footprint, cache and documents released);
+5. scanned, vector and transparency documents: first viewport, a scroll
+   through every page, last viewport, closed;
+6. idle with the 200-page viewer open and settled; critical memory
+   pressure, then 150 scroll frames during the cool-down;
+7. closed, idle again.
+
+Results are top-level "extra" keys (`down_renders`, `up_cache_hit_rate`,
+`zoom_renders_started_during_gestures`, `long_close_footprint_after`,
+`<kind>_first_viewport_ms`, `beside_editor_paints_after_typing`, …) and
+metrics (`pdf_scroll_*_frame_ms`, `pdf_zoom_settle_to_sharp_ms`,
+`pdf_render_ms_<kind>`, `pdf_beside_typing_input_to_paint_us`, …). Frames
+the system did not paint are painted offscreen through the same code, as
+in `images` (`*_unpainted_frames`).
+
+### PDF render cost (M1 MacBook Air 8 GB, macOS 26.6.2, Release, 2026-11-06)
+
+Raw files: `bench/results/pdf-2026-11-06/` (`pdfprobe-tiles.json`,
+`pdfprobe-estimate.json`). Page 3 of each fixture. Each cell: cold render
+time (all bitmaps of the point), worst single-bitmap peak (MiB), footprint
+left after the document closed (MiB). Tiles cover one 2200×1600 px
+viewport, the whole page covers the whole page, so compare peaks and what
+is left, and compare time per area with care.
+
+| Document | Page px | Whole page: ms / peak / left | 1024 px tiles: ms / peak / left | 512 px tiles: ms / peak / left |
+|---|---:|---|---|---|
+| text | 600 | 10 / 3.4 / 1.7 | 6 / 3.4 / 1.7 | 8 / 2.2 / 1.7 |
+| text | 1200 | 27 / 9.1 / 2.5 | 11 / 5.0 / 2.1 | 27 / 3.1 / 2.2 |
+| text | 2000 | 13 / 22.4 / 2.6 | 10 / 5.4 / 1.4 | 16 / 2.4 / 1.4 |
+| text | 3000 | 21 / 48.0 / 3.5 | 23 / 5.2 / 1.3 | 20 / 2.3 / 1.3 |
+| text | 4000 | 46 / 83.8 / 5.3 | 11 / 5.2 / 1.3 | 23 / 2.3 / 1.3 |
+| text | 6000 | 97 / 185.8 / 8.0 | 11 / 5.3 / 1.4 | 22 / 2.4 / 1.4 |
+| scanned | 600 | 45 / 10.5 / 5.4 | 26 / 12.0 / 5.4 | 43 / 11.0 / 5.2 |
+| scanned | 1200 | 143 / 35.5 / 15.9 | 96 / 32.4 / 6.8 | 111 / 28.2 / 6.6 |
+| scanned | 2000 | 146 / 92.0 / 12.9 | 181 / 76.4 / 8.3 | 181 / 73.4 / 8.2 |
+| scanned | 3000 | 202 / 116.5 / 18.9 | 112 / 76.2 / 7.9 | 138 / 73.3 / 7.9 |
+| scanned | 4000 | 251 / 151.1 / 27.5 | 95 / 76.2 / 7.8 | 135 / 73.4 / 8.2 |
+| scanned | 6000 | 415 / 262.3 / 52.4 | 98 / 76.1 / 7.8 | 140 / 73.3 / 7.9 |
+| vector | 600 | 493 / 2.9 / 1.2 | 489 / 2.9 / 1.1 | 626 / 2.3 / 1.5 |
+| vector | 1200 | 1366 / 10.8 / 2.9 | 1520 / 6.9 / 3.1 | 1952 / 2.5 / 1.7 |
+| vector | 2000 | 4160 / 54.6 / 26.7 | 2342 / 6.9 / 1.6 | 3956 / 2.7 / 1.7 |
+| vector | 3000 | 7343 / 122.3 / 75.1 | 2940 / 7.2 / 2.3 | 4579 / 2.5 / 1.4 |
+| vector | 4000 | 12154 / 216.1 / 147.4 | 2345 / 7.0 / 3.1 | 3875 / 2.5 / 1.5 |
+| vector | 6000 | 21726 / 602.3 / 424.5 | 1496 / 6.0 / 2.8 | 3260 / 2.6 / 1.5 |
+| transparency | 600 | 202 / 12.7 / 10.9 | 191 / 12.6 / 10.9 | 208 / 8.6 / 8.0 |
+| transparency | 1200 | 695 / 55.0 / 48.0 | 884 / 33.7 / 32.1 | 744 / 10.3 / 10.8 |
+| transparency | 2000 | 2061 / 157.2 / 98.0 | 1605 / 44.9 / 29.8 | 1665 / 11.4 / 10.4 |
+| transparency | 3000 | 4416 / 328.9 / 227.9 | 2284 / 45.2 / 28.4 | 2232 / 11.1 / 10.0 |
+| transparency | 4000 | 7515 / 634.9 / 556.1 | 2321 / 44.9 / 41.6 | 2076 / 12.4 / 11.4 |
+| transparency | 6000 | 23446 / 1200.0 / 742.8 | 1797 / 41.7 / 28.7 | 1590 / 13.3 / 9.2 |
+
+- **CoreGraphics' working set follows content.** Plain text peaks at
+  ~1.1× its bitmap, vector pages at ~2.7×, transparency at ~8× (one
+  device-resolution layer per group, clipped to the bitmap). A scan costs
+  the decoded size of its JPEG (~73 MiB for 2550×3300) at any output from
+  about 1200 px up, reduced by a power of two below that.
+- **What it frees stays.** The "left" column is live `MALLOC_LARGE`
+  memory the allocator keeps for reuse (`footprint -p`; 132 MB after one
+  2000 px transparency page). `malloc_zone_pressure_relief` returns none
+  of it, and the warm render adds nothing: the footprint plateaus at the
+  largest single render's working set. Tiles of 512 px leave ≤ 11.4 MiB on
+  every fixture; whole pages up to 742.8 MiB.
+- **Tile size.** 512 px against 1024 px: 4× lower peaks with
+  transparency (11–13 vs 42–45 MiB), 2.7× lower on vector pages, the same
+  for text and scans (the decoded image dominates). Time: equal within
+  noise on text and transparency; 512 px tiles cost up to 1.4× on scans at
+  3000 px and more, and up to 1.7× on vector pages (each tile walks the
+  whole content stream again). Chosen: **512**, for the bounded memory.
+- **Whole-page threshold.** A whole page is faster on vector pages up to
+  ~1200 px, but its peak grows with its area: at 600 px (1.8 MiB) it is
+  ~1.5× a 512 px tile's (transparency 12.7 vs 8.6 MiB), at 1200 px (7 MiB)
+  5×. Chosen: **one bitmap up to 2 MiB**, tiles above.
+
+**The reservation against these peaks** (`pdfprobe-estimate.json`, final
+`MediaService::pdfEstimate`, using the hints `pdfInfo` reads from each
+page's resources):
+
+| Document | Page px | Bitmap | Worst peak MiB | Estimate MiB | Estimate ÷ peak |
+|---|---:|---|---:|---:|---:|
+| text | 300 | whole page | 1.6 | 3.1 | 1.95 |
+| text | 300 | 512 px tile | 1.6 | 3.1 | 1.92 |
+| text | 600 | whole page | 3.5 | 6.4 | 1.85 |
+| text | 600 | 512 px tile | 2.3 | 4.5 | 2.00 |
+| text | 1200 | whole page | 9.2 | 19.8 | 2.14 |
+| text | 1200 | 512 px tile | 2.8 | 4.5 | 1.60 |
+| text | 2000 | whole page | 22.4 | 51.4 | 2.29 |
+| text | 2000 | 512 px tile | 2.6 | 4.5 | 1.76 |
+| text | 4000 | whole page | 83.9 | 199.5 | 2.38 |
+| text | 4000 | 512 px tile | 2.4 | 4.5 | 1.88 |
+| scanned | 300 | whole page | 7.8 | 10.3 | 1.33 |
+| scanned | 300 | 512 px tile | 8.2 | 10.3 | 1.25 |
+| scanned | 600 | whole page | 10.5 | 17.3 | 1.64 |
+| scanned | 600 | 512 px tile | 10.5 | 15.3 | 1.45 |
+| scanned | 1200 | whole page | 35.5 | 45.0 | 1.27 |
+| scanned | 1200 | 512 px tile | 30.1 | 29.8 | 0.99 |
+| scanned | 2000 | whole page | 91.9 | 134.4 | 1.46 |
+| scanned | 2000 | 512 px tile | 76.9 | 87.5 | 1.14 |
+| scanned | 4000 | whole page | 151.1 | 282.5 | 1.87 |
+| scanned | 4000 | 512 px tile | 73.2 | 87.5 | 1.20 |
+| vector | 300 | whole page | 1.5 | 3.1 | 2.14 |
+| vector | 300 | 512 px tile | 1.6 | 3.1 | 1.93 |
+| vector | 600 | whole page | 3.3 | 6.4 | 1.95 |
+| vector | 600 | 512 px tile | 2.2 | 4.5 | 2.03 |
+| vector | 1200 | whole page | 10.4 | 19.8 | 1.90 |
+| vector | 1200 | 512 px tile | 2.7 | 4.5 | 1.66 |
+| vector | 2000 | whole page | 61.5 | 51.4 | 0.83 |
+| vector | 2000 | 512 px tile | 2.7 | 4.5 | 1.65 |
+| vector | 4000 | whole page | 265.1 | 199.5 | 0.75 |
+| vector | 4000 | 512 px tile | 2.7 | 4.5 | 1.68 |
+| transparency | 300 | whole page | 4.7 | 7.8 | 1.66 |
+| transparency | 300 | 512 px tile | 4.7 | 7.8 | 1.67 |
+| transparency | 600 | whole page | 11.3 | 25.1 | 2.23 |
+| transparency | 600 | 512 px tile | 8.7 | 15.0 | 1.73 |
+| transparency | 1200 | whole page | 55.1 | 94.4 | 1.71 |
+| transparency | 1200 | 512 px tile | 9.1 | 15.0 | 1.65 |
+| transparency | 2000 | whole page | 158.3 | 258.8 | 1.63 |
+| transparency | 2000 | 512 px tile | 10.6 | 15.0 | 1.42 |
+| transparency | 4000 | whole page | 633.5 | 1028.9 | 1.62 |
+| transparency | 4000 | 512 px tile | 10.9 | 15.0 | 1.38 |
+
+Every bitmap the viewer asks for (512 px tiles, whole pages ≤ 2 MiB) is
+covered (0.99–2.14×). Whole vector pages of 2000 px and more are not
+(0.75–0.83), and are never requested: they are above the threshold, and the
+reduced-density fallback under pressure stays within 75 % of the budget.
 
 ## 7. Caveats
 

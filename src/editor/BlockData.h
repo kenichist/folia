@@ -33,9 +33,11 @@ enum class LineRole : int {
     MathSingle = 7,
     PageLink = 8,
     Image = 9, // one U+FFFC carrying an attachment reference (docs/ATTACHMENTS.md)
+    Pdf = 10,  // one U+FFFC carrying a PDF reference: a first-page card
 };
 
-inline bool roleIsObjectLine(LineRole r) { return r == LineRole::PageLink || r == LineRole::Image; }
+inline bool roleIsObjectLine(LineRole r) { return r == LineRole::PageLink || r == LineRole::Image || r == LineRole::Pdf; }
+inline bool roleIsAttachment(LineRole r) { return r == LineRole::Image || r == LineRole::Pdf; }
 
 inline bool roleInCode(LineRole r) { return r == LineRole::CodeOpen || r == LineRole::CodeLine; }
 inline bool roleInMath(LineRole r) { return r == LineRole::MathOpen || r == LineRole::MathLine; }
@@ -60,6 +62,9 @@ constexpr int kLinkHrefProperty = QTextFormat::UserProperty + 3;
 constexpr int kImageObjectType = QTextFormat::UserObject + 2;
 constexpr int kAttachmentHashProperty = QTextFormat::UserProperty + 4;
 constexpr int kImageAltProperty = QTextFormat::UserProperty + 5;
+// PDFs: the same, with the file name as the label (kImageAltProperty).
+// Stored as `[name.pdf](attachment:<hash>)`.
+constexpr int kPdfObjectType = QTextFormat::UserObject + 3;
 
 struct BlockTracker; // per-document bookkeeping, see PageSession
 
@@ -105,11 +110,11 @@ public:
     // Inline formulas (paragraph lines with $…$ only).
     std::unique_ptr<InlineMathState> inlineMath;
 
-    // Image lines: the cache key last drawn (a key, never a bitmap copy;
-    // cleared when the layout is evicted, the cache entry stays).
+    // Image and PDF lines: the cache key last drawn (a key, never a bitmap
+    // copy; cleared when the layout is evicted, the cache entry stays).
     MediaKey mediaKey;
-    // Images being imported to go after this line: a placeholder is drawn
-    // under it. Presentation only, never serialized.
+    // Attachments being imported to go after this line: a placeholder is
+    // drawn under it. Presentation only, never serialized.
     quint8 pendingImports = 0;
 
     BlockTracker *tracker = nullptr;

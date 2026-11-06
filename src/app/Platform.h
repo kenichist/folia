@@ -2,9 +2,14 @@
 // fallbacks elsewhere). Counter names are reported verbatim in benchmarks.
 #pragma once
 
+#include "core/Attachments.h"
+
 #include <QImage>
+#include <QRect>
 #include <QString>
+#include <QVector>
 #include <functional>
+#include <memory>
 
 namespace folia::platform {
 
@@ -70,5 +75,59 @@ qint64 intervalPeakFootprint();
 // stay in the footprint (and malloc_zone_pressure_relief releases none of
 // them), so cache eviction would free nothing. Null on allocation failure.
 QImage allocateImage(int width, int height, QImage::Format format);
+// Asks the allocator to return free pages to the system (macOS:
+// malloc_zone_pressure_relief on every zone). Returns bytes released.
+qint64 releaseFreedMemory();
+
+// ---- PDF (docs/ATTACHMENTS.md §4). macOS: CoreGraphics (CGPDFDocument);
+// elsewhere unavailable until the QtPdf backend (step 5).
+struct PdfInfo {
+    bool ok = false;
+    int pages = 0;
+    QVector<PdfPageGeom> geom; // one per page
+    QString error;
+};
+// True when the file starts like a PDF ("%PDF-" within the first 1 KiB).
+bool looksLikePdf(const QString &path);
+// Page count and per-page crop-box geometry. Parses the cross-reference
+// table and each page dictionary; no page content is drawn.
+PdfInfo pdfInfo(const QString &path);
+
+// An open document, shared by every render job of one viewer. Opened on
+// first use, on the worker that renders (never on the main thread), and
+// closed when the last reference goes. Not safe for concurrent drawing:
+// callers serialize renders per document (the PDF lane runs one at a time).
+class PdfDocument {
+public:
+    explicit PdfDocument(QString path);
+    ~PdfDocument();
+    PdfDocument(const PdfDocument &) = delete;
+    PdfDocument &operator=(const PdfDocument &) = delete;
+    const QString &path() const { return m_path; }
+    bool isOpen() const { return m_handle != nullptr; }
+    void *handle(QString *error); // opens on first call (worker)
+    // Live documents in this process (tests: handles must not leak).
+    static int liveCount();
+
+private:
+    QString m_path;
+    void *m_handle = nullptr;
+    bool m_failed = false;
+};
+using PdfDocumentPtr = std::shared_ptr<PdfDocument>;
+
+// Renders the part `region` (physical pixels, in the coordinate space of the
+// whole page drawn `pageWidthPx` wide in display orientation) of page
+// `page` (0-based) straight into a region-sized bitmap: the transform and
+// clip select the region, so a tile never allocates the whole page. White
+// background, sRGB, RGB32, in allocateImage() memory. Null on failure.
+QImage renderPdfPage(PdfDocument *doc, int page, int pageWidthPx, const QRect &region, QString *error = nullptr);
+
+// Fixtures for tests and benchmarks (macOS: written with CGPDFContext):
+// "text" (paragraphs of body text), "vector" (thousands of stroked and
+// filled curves per page), "transparency" (nested transparency layers,
+// blend modes, soft shadows), "scanned" (one 300 dpi photo-like JPEG per
+// page), "mixed" (sizes vary: Letter, A4, landscape, a small receipt).
+bool writeFixturePdf(const QString &path, const QString &style, int pages);
 
 } // namespace folia::platform

@@ -83,6 +83,40 @@ QTextCharFormat PageSession::imageFormat(const QString &hash, const QString &alt
     return f;
 }
 
+QTextCharFormat PageSession::pdfFormat(const QString &hash, const QString &name)
+{
+    QTextCharFormat f;
+    f.setObjectType(kPdfObjectType);
+    f.setProperty(kAttachmentHashProperty, hash);
+    f.setProperty(kImageAltProperty, name);
+    return f;
+}
+
+bool PageSession::attachmentFormatFor(QStringView text, QTextCharFormat *format)
+{
+    QString hash, label;
+    if (attachments::parseImageMarkdown(text, &hash, &label)) {
+        if (format)
+            *format = imageFormat(hash, label);
+        return true;
+    }
+    if (attachments::parseFileMarkdown(text, &hash, &label)) {
+        if (format)
+            *format = pdfFormat(hash, label);
+        return true;
+    }
+    return false;
+}
+
+QString PageSession::attachmentMarkdown(const QTextBlock &b)
+{
+    const QTextCharFormat f = b.begin().fragment().charFormat();
+    const QString hash = f.property(kAttachmentHashProperty).toString();
+    const QString label = f.property(kImageAltProperty).toString();
+    return f.objectType() == kPdfObjectType ? attachments::fileMarkdown(hash, label)
+                                            : attachments::imageMarkdown(hash, label);
+}
+
 QString PageSession::imageHash(const QTextBlock &b)
 {
     return b.begin().fragment().charFormat().property(kAttachmentHashProperty).toString();
@@ -117,6 +151,8 @@ LineRole PageSession::classify(const QTextBlock &b, int carry) const
                 return LineRole::PageLink;
             if (ot == kImageObjectType)
                 return LineRole::Image;
+            if (ot == kPdfObjectType)
+                return LineRole::Pdf;
         }
     }
     return LineRole::Para;
@@ -179,9 +215,10 @@ void PageSession::load(const PageContent &pc)
         m_savedIds.insert(r.id);
         switch (r.kind) {
         case BlockKind::Text: {
-            QString hash, alt;
-            if (attachments::parseImageMarkdown(r.text, &hash, &alt)) {
-                objects.push_back({int(lines.size()), imageFormat(hash, alt)});
+            QTextCharFormat af;
+            if (attachmentFormatFor(r.text, &af)) {
+                const QString hash = af.property(kAttachmentHashProperty).toString();
+                objects.push_back({int(lines.size()), af});
                 lines.push_back(QString(kObj));
                 ids.push_back(r.id);
                 if (m_ctx->attachments && !m_pinned.contains(hash)) {
@@ -336,17 +373,17 @@ void PageSession::onContentsChange(int pos, int removed, int added)
             break;
     }
     propagateRoles(first, last);
-    pinImages(first, last);
+    pinAttachments(first, last);
     ++m_rev;
     emit revisionChanged(m_rev);
 }
 
-void PageSession::pinImages(QTextBlock first, QTextBlock last)
+void PageSession::pinAttachments(QTextBlock first, QTextBlock last)
 {
     if (!m_ctx->attachments)
         return;
     for (QTextBlock b = first; b.isValid(); b = b.next()) {
-        if (roleOf(b) == LineRole::Image) {
+        if (roleIsAttachment(roleOf(b))) {
             const QString h = imageHash(b);
             if (!h.isEmpty() && !m_pinned.contains(h)) {
                 m_ctx->attachments->pin(h);
@@ -555,11 +592,9 @@ SaveBatch PageSession::takeSaveBatch()
                 if (role == LineRole::PageLink) {
                     r.kind = BlockKind::PageLink;
                     r.target = b.begin().fragment().charFormat().property(kPageLinkTargetProperty).toLongLong();
-                } else if (role == LineRole::Image) {
-                    const QTextCharFormat f = b.begin().fragment().charFormat();
+                } else if (roleIsAttachment(role)) {
                     r.kind = BlockKind::Text;
-                    r.text = attachments::imageMarkdown(f.property(kAttachmentHashProperty).toString(),
-                                                        f.property(kImageAltProperty).toString());
+                    r.text = attachmentMarkdown(b);
                 } else if (role == LineRole::MathSingle) {
                     r.kind = BlockKind::Math;
                     r.lang = QStringLiteral("single");
@@ -615,9 +650,9 @@ Revision PageSession::applyEdit(const Edit &e)
     case Edit::Op::ReplaceBlockText: {
         c.setPosition(b.position());
         c.setPosition(b.position() + b.length() - 1, QTextCursor::KeepAnchor);
-        QString hash, alt;
-        if (attachments::parseImageMarkdown(e.text, &hash, &alt))
-            c.insertText(QString(kObj), imageFormat(hash, alt));
+        QTextCharFormat af;
+        if (attachmentFormatFor(e.text, &af))
+            c.insertText(QString(kObj), af);
         else
             c.insertText(e.text, QTextCharFormat()); // never inherit an object format
         break;
@@ -636,9 +671,9 @@ Revision PageSession::applyEdit(const Edit &e)
         const BlockRecord &r = e.record;
         switch (r.kind) {
         case BlockKind::Text: {
-            QString hash, alt;
-            if (attachments::parseImageMarkdown(r.text, &hash, &alt))
-                c.insertText(QString(kObj), imageFormat(hash, alt));
+            QTextCharFormat af;
+            if (attachmentFormatFor(r.text, &af))
+                c.insertText(QString(kObj), af);
             else
                 c.insertText(r.text, QTextCharFormat());
             break;
@@ -720,7 +755,7 @@ void PageSession::finishImport(int id, bool ok, const AttachmentInfo &info, cons
             m_layout->relayoutBlock(a);
     }
     if (ok) {
-        const QString md = attachments::imageMarkdown(info.hash, alt);
+        const QString md = info.isPdf() ? attachments::fileMarkdown(info.hash, alt) : attachments::imageMarkdown(info.hash, alt);
         Edit e;
         e.block = batch.anchor;
         e.text = md;

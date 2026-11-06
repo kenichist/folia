@@ -5,7 +5,8 @@
 //    so they are ordered with page saves).
 //  * Import runs on one worker thread and never reads a file whole: it
 //    streams the source into a temp file while hashing, fsyncs, renames the
-//    file to its hash (fsyncing the folder), reads the header metadata, and
+//    file to its hash (fsyncing the folder), reads the header metadata (for
+//    a PDF: the page count and every page's size and rotation), and
 //    only then reports back, so the caller inserts the reference after the
 //    file is durable (file first, reference second). A pasted in-memory image
 //    is encoded to PNG on the worker.
@@ -48,7 +49,7 @@ public:
         QString path;      // a file to copy (streamed), or
         QByteArray bytes;  // encoded image data (clipboard PNG/JPEG/...), or
         QImage image;      // pixels, encoded to PNG on the worker
-        QString name;      // suggested alt text (file name without extension)
+        QString name;      // image alt text (file name without extension), or PDF label (file name)
     };
 
     struct ImportResult {
@@ -89,6 +90,9 @@ public:
     void scheduleGc();
     // Sweep now (on the writer thread); done(deleted) on the main thread.
     void collectGarbage(std::function<void(int deleted)> done = {});
+
+    // Image header or PDF page geometry of a stored file (worker thread).
+    static bool readMetadata(const QString &path, AttachmentInfo *info, QString *error);
 
 signals:
     void infoArrived(const QString &hash);

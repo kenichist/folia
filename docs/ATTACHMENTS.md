@@ -1,13 +1,14 @@
-# Images and PDFs: design (revision 3)
+# Images and PDFs: design (revision 4)
 
-Status: steps 1–3 of §7 are implemented (the attachment store, `MediaBudget`
-with the two-lane scheduler, and the image block on ImageIO); PDFs (steps 4–5)
-are not. Revision 2 took in an outside review of the first draft and added
-facts checked against this repository on 2026-11-06. Revision 3 replaces
-estimates with measurements where the image benchmarks contradicted them;
-those places are marked **Measured** and the numbers are in
-`docs/BENCHMARKS.md` §6. Numbers not marked that way are still
-targets.
+Status: steps 1–4 of §7 are implemented (the attachment store, `MediaBudget`
+with the two-lane scheduler, the image block on ImageIO, and PDFs on
+CoreGraphics: the in-note card and the viewer). Step 5 (QtPdf and
+`QImageReader` backends for other platforms) is not. Revision 2 took in an
+outside review of the first draft and added facts checked against this
+repository on 2026-11-06. Revision 3 replaced estimates with measurements
+where the image benchmarks contradicted them; revision 4 does the same for
+PDFs. Those places are marked **Measured** and the numbers are in
+`docs/BENCHMARKS.md` §6. Numbers not marked that way are still targets.
 
 ## 0. Facts that constrain the design
 
@@ -43,6 +44,15 @@ question the first draft left open.
     rotation never causes a layout change later.
   - `page_geom` is a compact blob: one `(w, h, rotation)` per PDF page, since
     pages differ in size.
+    - **Implemented:** w and h are the crop box in points *after* the
+      rotation, so layout never needs the rotation. Identical pages are
+      stored as one run, so a uniform document of any length is 21 bytes.
+      Each page also carries two render-cost hints read from its resources
+      at import (dictionary lookups, nothing drawn): the largest embedded
+      image's pixel count (and whether it is JPEG/JPX), and whether the page
+      uses transparency groups or soft masks. §4 says why.
+    - The `width`/`height` columns of a PDF hold its first page's size in
+      points (rotated), so the card's thumbnail is laid out like an image.
   - All metadata is collected on a worker during import, never on the UI
     thread.
 - **Import never blocks typing and never reads the whole file into RAM.**
@@ -72,7 +82,9 @@ question the first draft left open.
     10 minutes. It runs 60 s after the last pin is released, and 120 s
     after launch if the folder is not empty.
 - Markdown forms: `![alt](attachment:hash)` and `[file.pdf](attachment:hash)`.
-  In the document, each is one U+FFFC line, like page links.
+  In the document, each is one U+FFFC line, like page links. **Implemented**
+  for both; the GC sweep and page loads read both forms (a sweep that only
+  knew the image form would delete every PDF).
 
 ## 2. One media budget, not one cap per cache
 
@@ -214,12 +226,26 @@ reservation covers that; the plateau benchmark shows it.
 
 - **In the note**: a first-page thumbnail (one small bitmap through the same
   scheduler and budget), plus the filename and page count.
+  - **Implemented:** a fixed-height card (132 pt) with the thumbnail's width
+    from the stored first-page geometry, so the estimated height equals the
+    laid-out height and nothing is rendered to lay it out. The thumbnail is
+    a `PdfThumb` request on the PDF lane; the document is opened for that
+    one job and closed after it. Clicking the card (or Mod+Enter on its
+    line) opens the viewer. Paste and drag-and-drop of `.pdf` files and
+    Edit ▸ Insert PDF… go through the same import as images.
 - **The viewer** takes over the editor slot, like Settings. It is one custom
   viewport, not a widget per page:
   - Page offsets come from `page_geom`, with a prefix sum and a binary search
     for the visible pages.
   - Invalidation is kept separate from the note editor, so typing or the caret
     blink never repaints the PDF.
+  - **Implemented** (`PdfView` in a `PdfViewerPage`, shown in place of the
+    layout like Settings; Esc, Mod+W or the back button return to the note).
+    The viewer reacts only to results for its own document's pages and
+    tiles, and repaints only the rect they cover; the note's layout reacts
+    only to image and thumbnail results. It opens at fit width and keeps
+    fitting while the window resizes until the user zooms (pinch,
+    Mod+wheel, Mod+=/−/0, the header buttons).
 - **Render strategy by output size:**
 
   | Output needed | Strategy |
@@ -238,9 +264,50 @@ reservation covers that; the plateau benchmark shows it.
     and clip, never as a full page that is then cropped.
   - Tiles bound the destination bitmap only. Renderer-internal memory is
     covered by the §2 overhead factor.
+  - **Measured: CoreGraphics' working set follows the page's content, not
+    the output, and transparency layers follow the clip.** On the fixtures
+    (`docs/BENCHMARKS.md` §6, "PDF render cost"): a plain page peaks at
+    ~1.1–2.7× its bitmap; a page with transparency groups or soft masks at
+    ~8–13× (one device-resolution layer per group, clipped to the bitmap);
+    a 300 dpi scan at the decoded size of its embedded JPEG (2550×3300:
+    ~73 MiB at full density, whatever the tile size), reduced by a power of
+    two when the page is drawn small, like ImageIO. A whole 2000 px page
+    with transparency peaked at 157 MiB; one 512 px tile of it at 11 MiB.
+    A single output factor could not fit both, so the reservation uses the
+    page's cost hints from `page_geom` (§1):
+    `output × (2.5, or 13 with layers) + image(native/2^k) × 2.4 + 6 MiB
+    (with an image) + 2 MiB` (`MediaService::pdfEstimate`).
+  - **Measured: what CoreGraphics frees stays in the footprint.** After a
+    render, the allocator keeps CG's freed large blocks (live
+    `MALLOC_LARGE` regions; `malloc_zone_pressure_relief` returns none) and
+    reuses them for the next render, so the footprint plateaus at the
+    largest single render's working set, and closing the document does not
+    lower it. One whole 2000 px transparency page left 148 MB; 512 px
+    tiles leave ≤ 10 MB on every fixture.
+  - **Chosen from those measurements:** tiles are **512×512**, and a page is
+    drawn as **one bitmap only up to 2 MiB** (about a Letter page 360 pt
+    wide at 2×: thumbnails-sized and zoomed-out views). 512 px tiles cut the
+    worst per-render peak 4× against 1024 px tiles (11 vs 45 MiB with
+    transparency) and the memory left behind 3×; they cost the same time on
+    text and transparency, and up to 1.4× on scans and 1.7× on a page of
+    3000 stroked curves (each tile walks the content stream again). A whole page beats tiles on CPU
+    only while small: at 1.8 MiB it peaks at ~1.5× a tile's working set,
+    at 7 MiB already ~5×. So at fit width on a 2× display, pages are tiled.
+  - One render never reserves more than 75 % of the current budget, as for
+    images: when even a tile does not fit (a pressure cool-down, a huge
+    scan), the page is drawn whole at a lower density and scaled up rather
+    than not at all.
 - **Release**: the document handle closes when the viewer closes, or after it
   has been hidden for a while. Text extraction (search, selection) is a later
   milestone, done lazily per page.
+  - **Implemented:** the handle is shared by the viewer's render jobs and
+    opened lazily by the first one, on the worker (never on the main
+    thread). Closing the viewer drops its queued requests, frees its pages
+    and tiles from the cache, and releases the handle (a job already
+    running keeps its own reference until it returns). Hidden for 30 s
+    (window minimized, app hidden), the handle closes and is reopened by
+    the next render when shown again. While open, the viewer pins the
+    attachment, so a sweep cannot remove the file under it.
 
 ## 5. Workers and cancellation
 
@@ -250,12 +317,18 @@ reservation covers that; the plateau benchmark shows it.
 - PDF calls are serialized per document: CGPDFDocument is not documented as
   safe for concurrent drawing, and PDFium requires single-threaded access.
   Adding PDF threads would not add safe parallelism.
+  - **Implemented:** every CoreGraphics PDF call (thumbnails, pages, tiles)
+    runs on the PDF lane, which runs one job at a time, so calls on a
+    document are serialized by construction. Imports read page geometry on
+    the import worker, on a document object of their own.
 - **Cancellation is layered**, because neither ImageIO, `QImageReader` nor
   `CGContextDrawPDFPage` can be interrupted mid-call:
   1. Stale requests are dropped from the queue before they start. This is the
      main mechanism.
   2. Between steps of a job (tile N → tile N+1), the job checks whether it is
-     still wanted.
+     still wanted. **Implemented** by making each tile its own job: the
+     queue is re-examined between tiles, so a tile that scrolled away is
+     dropped before it starts.
   3. Obsolete results are thrown away: no repaint, no caching beyond the LRU
      rules.
   4. Cooperative interruption is used only where a backend offers it. PDFium's
@@ -282,7 +355,8 @@ reservation covers that; the plateau benchmark shows it.
 New `Instrument` counters and gauges:
 
 - `media_budget_bytes`, `media_reserved_bytes`, `media_cache_bytes`
-- `image_decodes`, `image_cache_hits`, `pdf_renders`, `pdf_tiles`
+- `image_decodes`, `image_cache_hits`, `pdf_renders`, `pdf_tiles`,
+  `pdf_cache_hits`
 - `media_jobs_dropped_queued` (cancelled before start)
 - `media_jobs_discarded` and `media_cpu_us_discarded` (finished but unwanted)
 - `media_budget_waits`, `media_too_large`
@@ -297,7 +371,9 @@ Each scenario records:
 - extra wakeups caused by attachments after the work settles
 
 The `images` bench scenario and `folia_mediaprobe` cover the image rows
-below; the measured results are in `docs/BENCHMARKS.md` §6.
+below; the `pdf` scenario, `folia_mediaprobe --pdf` and
+`bench/scripts/pdfprobe_matrix.py` cover the PDF rows. The measured
+results are in `docs/BENCHMARKS.md` §6.
 
 | Scenario | What it shows |
 |---|---|
@@ -333,4 +409,5 @@ Corrections to the first draft's figures:
    the overhead factors.
 4. PDF thumbnail, then the viewer with the CoreGraphics backend. Run the PDF
    benchmarks and choose the tile size and the whole-page threshold.
+   **Done:** 512×512 tiles, whole pages up to 2 MiB (§4).
 5. QtPdf and `QImageReader` backends for other platforms.

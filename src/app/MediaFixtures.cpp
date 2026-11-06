@@ -105,4 +105,19 @@ MediaSet makeMediaSet(const QString &dir, int photos, bool huge)
     return set;
 }
 
+PdfSet makePdfSet(const QString &dir)
+{
+    QDir().mkpath(dir);
+    PdfSet set;
+    auto pdf = [&](const QString &name, const QString &style, int pages) {
+        return ensure(QDir(dir).filePath(name), [&](const QString &p) { return platform::writeFixturePdf(p, style, pages); });
+    };
+    set.long200 = pdf(QStringLiteral("long-200.pdf"), QStringLiteral("text"), 200);
+    set.scanned = pdf(QStringLiteral("scanned-24.pdf"), QStringLiteral("scanned"), 24);
+    set.vector = pdf(QStringLiteral("vector-16.pdf"), QStringLiteral("vector"), 16);
+    set.transparency = pdf(QStringLiteral("transparency-16.pdf"), QStringLiteral("transparency"), 16);
+    set.mixed = pdf(QStringLiteral("mixed-8.pdf"), QStringLiteral("mixed"), 8);
+    return set;
+}
+
 } // namespace folia::fixtures

@@ -26,7 +26,8 @@ if(FOLIA_WITH_MATH)
 endif()
 if(APPLE)
   target_link_libraries(folia_app_core PUBLIC "-framework AppKit" "-framework Foundation"
-                        "-framework ImageIO" "-framework CoreGraphics" "-framework UniformTypeIdentifiers")
+                        "-framework ImageIO" "-framework CoreGraphics" "-framework CoreText"
+                        "-framework UniformTypeIdentifiers")
 endif()
 target_compile_definitions(folia_app_core PUBLIC
   FOLIA_VERSION="${PROJECT_VERSION}"

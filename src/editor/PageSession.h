@@ -62,7 +62,7 @@ public:
     qint64 estimatedBytes() const;
     int lineCount() const;
 
-    // Images (docs/ATTACHMENTS.md). An import shows a placeholder under the
+    // Images and PDFs (docs/ATTACHMENTS.md). An import shows a placeholder under the
     // line at `position` (after a code/math block, never inside one) until
     // each image's file is durable; finishImport() then inserts its
     // `![alt](attachment:<hash>)` line through applyEdit(). Returns a batch id.
@@ -73,7 +73,13 @@ public:
     // stay pinned (undo could bring them back) until the session closes.
     const QSet<QString> &pinnedAttachments() const { return m_pinned; }
     static QTextCharFormat imageFormat(const QString &hash, const QString &alt);
-    static QString imageHash(const QTextBlock &b);
+    static QTextCharFormat pdfFormat(const QString &hash, const QString &name);
+    // The object format of an attachment reference (`![alt](attachment:…)`
+    // or `[name](attachment:…)`); false when `text` is neither.
+    static bool attachmentFormatFor(QStringView text, QTextCharFormat *format);
+    // The Markdown an Image or Pdf line is stored as.
+    static QString attachmentMarkdown(const QTextBlock &b);
+    static QString imageHash(const QTextBlock &b); // Image and Pdf lines
 
     // Child page links (page link lines).
     QVector<PageId> linkTargets() const;
@@ -109,7 +115,7 @@ private:
     BlockData *ensureData(QTextBlock &b);
     LineRole classify(const QTextBlock &b, int carry) const;
     QTextBlock findBlockById(BlockId id) const;
-    void pinImages(QTextBlock first, QTextBlock last);
+    void pinAttachments(QTextBlock first, QTextBlock last);
 
     PageId m_id;
     PageId m_parent = 0;

@@ -167,20 +167,14 @@ void AttachmentStore::fetchInfo(const QString &hash)
         const QString path = pathFor(hash);
         QPointer<AttachmentStore> self(this);
         m_pool.start([self, hash, path] {
-            const platform::ImageInfo ii = platform::imageInfo(path);
-            const qint64 size = QFileInfo(path).size();
-            QMetaObject::invokeMethod(self, [self, hash, ii, size] {
+            AttachmentInfo a;
+            a.hash = hash;
+            const bool ok = QFileInfo::exists(path) && readMetadata(path, &a, nullptr);
+            QMetaObject::invokeMethod(self, [self, hash, a, ok] {
                 if (!self)
                     return;
                 self->m_fetching.remove(hash);
-                if (ii.ok) {
-                    AttachmentInfo a;
-                    a.hash = hash;
-                    a.mime = ii.mime;
-                    a.bytes = size;
-                    a.width = ii.width;
-                    a.height = ii.height;
-                    a.orientation = ii.orientation;
+                if (ok) {
                     self->remember(a);
                     self->m_store->putAttachment(a);
                 } else {
@@ -279,19 +273,47 @@ void AttachmentStore::runImport(const Source &src, ImportResult *res)
         return;
     }
     syncDir(m_opt.dir);
-    const platform::ImageInfo ii = platform::imageInfo(final);
-    if (!ii.ok) {
-        res->error = tr("Not a supported image (%1)").arg(ii.error);
+    QString why;
+    if (!readMetadata(final, &res->info, &why)) {
+        res->error = why;
         return; // unreferenced: the next sweep removes it
     }
-    res->info.mime = ii.mime;
-    res->info.bytes = QFileInfo(final).size();
-    res->info.width = ii.width;
-    res->info.height = ii.height;
-    res->info.orientation = ii.orientation;
     res->alt = src.name;
     res->ok = true;
     res->micros = t.nsecsElapsed() / 1000;
+}
+
+bool AttachmentStore::readMetadata(const QString &path, AttachmentInfo *a, QString *error)
+{
+    // PDFs first: ImageIO also opens some PDFs (as a picture of page 1).
+    if (platform::looksLikePdf(path)) {
+        const platform::PdfInfo pi = platform::pdfInfo(path);
+        if (!pi.ok) {
+            if (error)
+                *error = tr("Cannot read this PDF (%1)").arg(pi.error);
+            return false;
+        }
+        a->mime = QStringLiteral("application/pdf");
+        a->bytes = QFileInfo(path).size();
+        a->pages = pi.pages;
+        a->pageGeom = attachments::encodePageGeom(pi.geom);
+        a->width = qMax(1, qRound(pi.geom.first().w)); // first page, points, as shown
+        a->height = qMax(1, qRound(pi.geom.first().h));
+        a->orientation = 1;
+        return true;
+    }
+    const platform::ImageInfo ii = platform::imageInfo(path);
+    if (!ii.ok) {
+        if (error)
+            *error = tr("Not a supported image or PDF (%1)").arg(ii.error);
+        return false;
+    }
+    a->mime = ii.mime;
+    a->bytes = QFileInfo(path).size();
+    a->width = ii.width;
+    a->height = ii.height;
+    a->orientation = ii.orientation;
+    return true;
 }
 
 void AttachmentStore::import(const Source &src, QObject *ctx, std::function<void(ImportResult)> done)
@@ -384,11 +406,12 @@ void AttachmentStore::collectGarbage(std::function<void(int)> done)
         // references live in open sessions, which pin them.
         QSet<QString> referenced;
         {
-            sql::Stmt s(db, "SELECT text FROM blocks WHERE kind=0 AND text LIKE '![%](attachment:%)'");
+            // Both forms: `![alt](attachment:…)` (images), `[name](attachment:…)` (PDFs).
+            sql::Stmt s(db, "SELECT text FROM blocks WHERE kind=0 AND text LIKE '%](attachment:%)'");
             int rc;
             while ((rc = s.step()) == SQLITE_ROW) {
                 QString h;
-                if (attachments::parseImageMarkdown(s.text(0), &h, nullptr))
+                if (attachments::parseAnyMarkdown(s.text(0), &h))
                     referenced.insert(h);
             }
             if (rc != SQLITE_DONE)

@@ -59,6 +59,7 @@ private:
     void scenarioRecovery();
     void scenarioSettings();
     void scenarioImages(); // BenchImages.cpp
+    void scenarioPdf();    // BenchPdf.cpp
     void finish();
 
     AppController *m_app;
