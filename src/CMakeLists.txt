@@ -46,6 +46,8 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/app/main.cpp)
     target_sources(folia PRIVATE ${FOLIA_ICON})
     set_source_files_properties(${FOLIA_ICON} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
     set_target_properties(folia PROPERTIES MACOSX_BUNDLE_ICON_FILE Folia.icns)
+  elseif(WIN32)
+    target_sources(folia PRIVATE ${CMAKE_SOURCE_DIR}/packaging/brand/folia.rc)
   endif()
   # Ship presets inside the bundle / next to the executable so first run can
   # copy them into the user's editable shell folder.

@@ -1163,6 +1163,8 @@ private slots:
         Harness h;
         h.store.createPage(0, -1, QStringLiteral("Alpha"));
         h.store.createPage(0, -1, QStringLiteral("Beta"));
+        // Writes commit asynchronously; the outline's first fetch must see both.
+        QVERIFY(h.store.flush());
         QString err;
         const QString path = QStringLiteral(FOLIA_PRESET_SOURCE_DIR) + QStringLiteral("/default/shell.lua");
         QVERIFY2(h.host->loadFile(path, &err), qPrintable(err));
