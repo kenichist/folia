@@ -3,8 +3,9 @@
 Folia is a local notes app: nested pages, LaTeX math and code blocks, with a
 window layout written in Lua. Stack: C++17, Qt 6 Widgets (Core/Gui/Widgets
 only, no browser engine), embedded Lua 5.5, SQLite 3.54. Everything runs in
-one process. Background threads: one SQLite writer, one SQLite reader, and one
-math worker that exits when idle.
+one process. Background threads: one SQLite writer, one SQLite reader, one
+math worker, one attachment import worker and up to two media decode workers
+(an image lane and a PDF lane); the workers exit when idle.
 
 ```
            ┌────────────── main thread ─────────────────────────────────────┐
@@ -201,18 +202,22 @@ See `presets/REFERENCE.md` (the language reference shipped with the presets).
 | writer | all SQLite writes |
 | reader | queries; superseded title searches are skipped |
 | math worker | `QThreadPool` with 1 thread; exits after 2 s idle |
+| attachment import | `QThreadPool` with 1 thread (copy + hash + fsync + header read); exits after 30 s idle |
+| media lanes | `QThreadPool` with 2 threads: at most one image decode and one PDF render; exits after 30 s idle |
 
 | Cache | Cap |
 |---|---|
 | Document cache (open pages) | 16 pages / 48 MB (estimated). Pages not yet committed are pinned. LRU eviction. |
 | Preview display lists | 4 MiB LRU (byte-sized by `MathDisplayList::byteSize`). |
+| Decoded images | One 128 MiB media budget for cached bitmaps plus reserved in-flight decodes; LRU, at most 2 resolutions per attachment (`docs/ATTACHMENTS.md`). |
 | Laid-out blocks per document | 600 (evicts glyph data far from the viewport). |
 | Title cache | 20 000 entries. |
 | SQLite | 2 MiB per connection. |
 
 On macOS memory pressure (dispatch source): clean cached pages are dropped,
-the preview cache is trimmed (to 0 when critical), and the layout cap is
-lowered. The caret stops blinking after 5 s idle, so an idle window has no
+the preview cache is trimmed (to 0 when critical), the layout cap is
+lowered, and the decoded-image cache is trimmed while the media budget drops
+to ½ (warning) or ¼ (critical) for a 60 s cool-down. The caret stops blinking after 5 s idle, so an idle window has no
 repaint loop.
 
 ## 7. Platform layer

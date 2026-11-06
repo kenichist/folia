@@ -58,6 +58,14 @@ def main():
         print("fixture generated in %.1fs" % (time.time() - t), flush=True)
     with open(manifest) as f:
         man = json.load(f)
+    # Image fixtures for the `images` scenario, written by the decode-cost
+    # probe next to the fixture generator (out of process, so the scenario's
+    # footprint baseline does not carry the encoder's memory).
+    media_dir = os.path.join(fixdir, "media")
+    probe = os.path.join(os.path.dirname(os.path.abspath(a.fixturegen)), "folia_mediaprobe")
+    if os.path.exists(probe):
+        subprocess.run([probe, "--make", media_dir, "6" if a.quick else "24"], check=True,
+                       stdout=subprocess.DEVNULL)
     sample = man.get("sample_pages", [])
     q = a.quick
     R = (lambda n: 1) if q else (lambda n: n)
@@ -84,6 +92,7 @@ def main():
          ["--no-math", "--shell", os.path.join(ROOT, "presets/examples/minimal/shell.lua")]),
         ("idle_stress_note", "idle", {"seconds": N(60, 10), "page": man.get("stress_page")}, R(1), []),
         ("navigate", "navigate", {"batches": 5, "per_batch": N(100, 20)}, R(1), []),
+        ("images", "images", {"photos": N(24, 6), "idle_seconds": N(20, 5), "media_dir": media_dir}, R(1), []),
         ("integration", "integration", {"ordinary_page": sample[0] if sample else man.get("ordinary_page"),
                                          "math_page": man.get("ordinary_page")}, R(1), []),
     ]

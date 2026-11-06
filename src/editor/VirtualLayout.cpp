@@ -3,12 +3,17 @@
 #include "core/Instrument.h"
 #include "core/LucideIcons.h"
 #include "editor/Links.h"
+#include "editor/MediaService.h"
+#include "storage/AttachmentStore.h"
 #ifdef FOLIA_WITH_MATH
 #include "math/MathRenderer.h"
 #endif
 
 #include <QElapsedTimer>
 #include <QFontMetricsF>
+#include <QGuiApplication>
+#include <QPaintDevice>
+#include <QScreen>
 #include <QPainter>
 #include <QPainterPath>
 #include <QTextDocument>
@@ -30,6 +35,10 @@ constexpr qreal kCodeInset = 14;
 constexpr qreal kPreviewPad = 8;
 constexpr qreal kCopyIcon = 13;
 constexpr qreal kInlinePad = 1.5; // space on each side of a formula drawn in place
+constexpr qreal kImageTop = 6;     // above an image line
+constexpr qreal kImageBelow = 6;   // below it, before the paragraph spacing
+constexpr qreal kImportH = 56;     // placeholder of images being imported
+constexpr int kResizeSettleMs = 150; // decodes at a new width wait this long
 
 LineRole roleOf(const QTextBlock &b)
 {
@@ -38,6 +47,11 @@ LineRole roleOf(const QTextBlock &b)
 }
 
 BlockData *dataOf(const QTextBlock &b) { return static_cast<BlockData *>(b.userData()); }
+
+QString imageHashOf(const QTextBlock &b)
+{
+    return b.begin().fragment().charFormat().property(kAttachmentHashProperty).toString();
+}
 
 int headingLevel(QStringView t)
 {
@@ -87,6 +101,7 @@ VirtualLayout::VirtualLayout(QTextDocument *doc, EditorContext *ctx)
 {
     setPaintDevice(nullptr);
     registerHandler(kPageLinkObjectType, new PageLinkHandler(this));
+    registerHandler(kImageObjectType, new PageLinkHandler(this)); // sized/painted below too
     // Formulas rendered on the worker are shown in one repaint per burst,
     // a couple of frames later, never right after the frame that asked.
     m_inlineRepaint.setSingleShot(true);
@@ -94,6 +109,39 @@ VirtualLayout::VirtualLayout(QTextDocument *doc, EditorContext *ctx)
     connect(&m_inlineRepaint, &QTimer::timeout, this, [this] {
         emit update(QRectF(0, m_viewTop, 1e9, qMax<qreal>(1, m_viewBottom - m_viewTop)));
     });
+    if (QScreen *sc = QGuiApplication::primaryScreen())
+        m_dpr = sc->devicePixelRatio();
+    m_mediaSettle.setSingleShot(true);
+    connect(&m_mediaSettle, &QTimer::timeout, this, [this] {
+        m_mediaDirty = true;
+        updateMediaWants();
+    });
+    if (MediaService *media = m_ctx->media) {
+        connect(media, &MediaService::arrived, this, [this](const MediaKey &k) { mediaArrived(k.hash); });
+        connect(media, &MediaService::refused, this, [this](const MediaKey &k) { mediaArrived(k.hash); });
+        connect(media, &MediaService::budgetChanged, this, [this] {
+            m_mediaDirty = true; // request sizes follow the budget
+            emit update(QRectF(0, m_viewTop, 1e9, qMax<qreal>(1, m_viewBottom - m_viewTop)));
+        });
+    }
+    if (AttachmentStore *as = m_ctx->attachments) {
+        connect(as, &AttachmentStore::infoArrived, this, [this](const QString &hash) {
+            // Sizes are known now: lay out the lines showing it again.
+            QTextDocument *d = document();
+            for (QTextBlock b = d->firstBlock(); b.isValid(); b = b.next())
+                if (roleOf(b) == LineRole::Image && imageHashOf(b) == hash) {
+                    b.layout()->clearLayout();
+                    relayoutBlock(b);
+                }
+            m_mediaDirty = true;
+        });
+    }
+}
+
+VirtualLayout::~VirtualLayout()
+{
+    if (m_ctx->media)
+        m_ctx->media->removeOwner(this);
 }
 
 // ----------------------------------------------------------- geometry -----
@@ -134,6 +182,8 @@ qreal VirtualLayout::topPadFor(const QTextBlock &block, LineRole role) const
     case LineRole::MathOpen:
     case LineRole::MathSingle:
         return 10;
+    case LineRole::Image:
+        return kImageTop;
     case LineRole::Para: {
         const int h = headingLevel(block.text());
         return h == 1 ? 16 : h == 2 ? 12 : h == 3 ? 8 : 0;
@@ -156,9 +206,40 @@ qreal VirtualLayout::bottomPadFor(LineRole role) const
     case LineRole::MathClose:
     case LineRole::MathSingle:
         return 10 + ps;
+    case LineRole::Image:
+        return kImageBelow + ps;
     default:
         return ps;
     }
+}
+
+qreal VirtualLayout::extraBelow(const QTextBlock &block) const
+{
+    const BlockData *d = dataOf(block);
+    return d && d->pendingImports > 0 ? kImportH : 0;
+}
+
+QSizeF VirtualLayout::imageDisplaySize(const QString &hash) const
+{
+    const qreal col = columnWidth();
+    const AttachmentInfo *info = m_ctx->attachments ? m_ctx->attachments->info(hash) : nullptr;
+    if (!info || info->width <= 0 || info->height <= 0) {
+        // Not known yet (or missing): a modest box; relaid when it arrives.
+        if (m_ctx->attachments)
+            m_ctx->attachments->fetchInfo(hash);
+        return QSizeF(qMin<qreal>(col, 320), 120);
+    }
+    const qreal w = qMin<qreal>(col, info->width);
+    return QSizeF(w, qMax<qreal>(1, std::round(w * info->height / info->width)));
+}
+
+QRectF VirtualLayout::imageRect(const QTextBlock &block) const
+{
+    if (roleOf(block) != LineRole::Image)
+        return QRectF();
+    const QRectF br = blockBoundingRect(block);
+    const QSizeF sz = imageDisplaySize(imageHashOf(block));
+    return QRectF(QPointF(columnLeft(), br.top() + kImageTop), sz);
 }
 
 QFont VirtualLayout::roleFont(const QTextBlock &block, LineRole role) const
@@ -192,6 +273,9 @@ float VirtualLayout::estimateHeight(const QTextBlock &block) const
 {
     instr::add(instr::BlockHeightEstimates);
     const LineRole role = roleOf(block);
+    if (role == LineRole::Image) // exact: the same arithmetic as layoutBlock()
+        return float(std::ceil(topPadFor(block, role) + imageDisplaySize(imageHashOf(block)).height()
+                               + extraBelow(block) + bottomPadFor(role)));
     const QFont f = roleFont(block, role);
     const QFontMetricsF fm(f);
     const qreal lw = qMax<qreal>(40, columnWidth() - 2 * indentFor(role));
@@ -203,7 +287,7 @@ float VirtualLayout::estimateHeight(const QTextBlock &block) const
         BlockData *d = dataOf(block);
         h += (d && d->previewHeight > 0) ? d->previewHeight : 2 * fm.lineSpacing();
     }
-    return float(h);
+    return float(h + extraBelow(block));
 }
 
 void VirtualLayout::setHeight(int number, float h) const
@@ -291,6 +375,7 @@ qint64 VirtualLayout::estimatedLayoutBytes() const
 // --------------------------------------------------------- invalidation ---
 void VirtualLayout::fullInvalidate()
 {
+    m_mediaDirty = true;
     QTextDocument *doc = document();
     const int n = doc->blockCount();
     m_h.assign(size_t(n), 0.f);
@@ -342,7 +427,10 @@ void VirtualLayout::documentChanged(int from, int charsRemoved, int charsAdded)
     if (w <= 0)
         w = 800;
     const int n = doc->blockCount();
+    m_mediaDirty = true;
     if (w != m_width || m_h.empty()) {
+        if (!m_h.empty())
+            m_widthChanged.start(); // a resize: coalesce image decodes
         m_width = w;
         fullInvalidate();
         return;
@@ -811,6 +899,25 @@ void VirtualLayout::layoutBlock(const QTextBlock &block, int number) const
                 break;
             }
 #endif
+    if (role == LineRole::Image) {
+        // One line holding the image object; its height comes from the stored
+        // dimensions (the same arithmetic as estimateHeight), never a decode.
+        const qreal ih = imageDisplaySize(imageHashOf(block)).height();
+        tl->beginLayout();
+        QTextLine line = tl->createLine();
+        if (line.isValid()) {
+            line.setLineWidth(lw);
+            line.setPosition(QPointF(x, y + ih - line.ascent()));
+        }
+        tl->endLayout();
+        y += ih + extraBelow(block) + bottomPadFor(role);
+        if (!(m_st[size_t(number)] & StLaidOut)) {
+            m_st[size_t(number)] |= StLaidOut;
+            ++m_laidOut;
+        }
+        setHeight(number, float(std::ceil(y)));
+        return;
+    }
     tl->beginLayout();
     for (;;) {
         QTextLine line = tl->createLine();
@@ -853,6 +960,7 @@ void VirtualLayout::layoutBlock(const QTextBlock &block, int number) const
             y += d->previewHeight;
         }
     }
+    y += extraBelow(block);
     y += bottomPadFor(role);
     if (!(m_st[size_t(number)] & StLaidOut)) {
         m_st[size_t(number)] |= StLaidOut;
@@ -1071,6 +1179,12 @@ qreal VirtualLayout::previewPointSize() const
 // --------------------------------------------------------------- paint ----
 void VirtualLayout::setViewport(qreal top, qreal bottom)
 {
+    if (top > m_viewTop)
+        m_scrollDir = 1;
+    else if (top < m_viewTop)
+        m_scrollDir = -1;
+    if (top != m_viewTop || bottom != m_viewBottom)
+        m_mediaDirty = true;
     m_viewTop = top;
     m_viewBottom = bottom;
 }
@@ -1278,6 +1392,24 @@ void VirtualLayout::draw(QPainter *painter, const PaintContext &ctx)
                 }
             }
         }
+        // Selected image: tinted, since the object hides the selection background.
+        if (role == LineRole::Image) {
+            for (const Selection &s : ctx.selections)
+                if (s.cursor.selectionStart() <= bpos && s.cursor.selectionEnd() > bpos) {
+                    QColor c = s.format.background().color();
+                    c.setAlpha(110);
+                    painter->fillRect(imageRect(block), c);
+                    break;
+                }
+        }
+        // Images being imported after this line: a placeholder, never text.
+        if (const BlockData *pd = dataOf(block); pd && pd->pendingImports > 0) {
+            const QRectF pr(columnLeft(), r.bottom() - bottomPadFor(role) - kImportH + 6, qMin<qreal>(columnWidth(), 360),
+                            kImportH - 12);
+            paintImagePlaceholder(painter, pr,
+                                  pd->pendingImports > 1 ? tr("Importing %1 images…").arg(pd->pendingImports)
+                                                         : tr("Importing image…"));
+        }
         // Copy affordance on code openers.
         if (role == LineRole::CodeOpen && tl->lineCount() > 0) {
             const QRectF cr = codeCopyRect(block);
@@ -1309,6 +1441,8 @@ void VirtualLayout::draw(QPainter *painter, const PaintContext &ctx)
     }
     if (m_laidOut > m_cap)
         evictFarBlocks(first, last);
+    if (m_mediaDirty)
+        updateMediaWants();
 }
 
 void VirtualLayout::evictFarBlocks(int firstVisible, int lastVisible)
@@ -1330,8 +1464,10 @@ void VirtualLayout::evictFarBlocks(int firstVisible, int lastVisible)
             continue; // pinned: active composition
         tl->clearLayout();
         tl->clearFormats(); // frees shaped glyph data
-        if (BlockData *d = dataOf(b))
+        if (BlockData *d = dataOf(b)) {
             d->inlineMath.reset(); // rebuilt (from the cache) if it comes back
+            d->mediaKey = MediaKey(); // the key only: the bitmap stays cached
+        }
         m_st[size_t(i)] &= uint8_t(~StLaidOut);
         --m_laidOut;
     }
@@ -1379,6 +1515,13 @@ int VirtualLayout::hitTest(const QPointF &point, Qt::HitTestAccuracy accuracy) c
 // ----------------------------------------------------- inline objects -----
 void VirtualLayout::resizeInlineObject(QTextInlineObject item, int pos, const QTextFormat &format)
 {
+    if (format.objectType() == kImageObjectType) {
+        const QSizeF sz = imageDisplaySize(format.property(kAttachmentHashProperty).toString());
+        item.setWidth(sz.width());
+        item.setAscent(sz.height());
+        item.setDescent(0);
+        return;
+    }
     if (format.objectType() != kPageLinkObjectType) {
         QAbstractTextDocumentLayout::resizeInlineObject(item, pos, format);
         return;
@@ -1394,13 +1537,17 @@ void VirtualLayout::resizeInlineObject(QTextInlineObject item, int pos, const QT
 
 void VirtualLayout::positionInlineObject(QTextInlineObject item, int pos, const QTextFormat &format)
 {
-    if (format.objectType() != kPageLinkObjectType)
+    if (format.objectType() != kPageLinkObjectType && format.objectType() != kImageObjectType)
         QAbstractTextDocumentLayout::positionInlineObject(item, pos, format);
 }
 
 void VirtualLayout::drawInlineObject(QPainter *p, const QRectF &rect, QTextInlineObject object,
                                      int pos, const QTextFormat &format)
 {
+    if (format.objectType() == kImageObjectType) {
+        drawImageObject(p, rect, pos, format);
+        return;
+    }
     if (format.objectType() != kPageLinkObjectType) {
         QAbstractTextDocumentLayout::drawInlineObject(p, rect, object, pos, format);
         return;
@@ -1425,6 +1572,151 @@ void VirtualLayout::drawInlineObject(QPainter *p, const QRectF &rect, QTextInlin
     const QRectF tr = chip.adjusted(29, 0, -9, 0);
     p->drawText(tr, Qt::AlignVCenter | Qt::AlignLeft, fm.elidedText(title, Qt::ElideRight, tr.width()));
     p->restore();
+}
+
+// -------------------------------------------------------------- images ----
+void VirtualLayout::paintImagePlaceholder(QPainter *p, const QRectF &rect, const QString &label) const
+{
+    const EditorTheme &t = m_ctx->theme();
+    p->save();
+    p->setRenderHint(QPainter::Antialiasing, true);
+    QColor border = t.dim;
+    border.setAlpha(90);
+    p->setPen(QPen(border, 1));
+    p->setBrush(t.codeBackground);
+    p->drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6);
+    if (!label.isEmpty()) {
+        QFont f = t.body;
+        f.setPointSizeF(t.body.pointSizeF() * 0.86);
+        p->setFont(f);
+        p->setPen(t.dim);
+        p->drawText(rect, Qt::AlignCenter, label);
+    }
+    p->restore();
+}
+
+void VirtualLayout::drawImageObject(QPainter *p, const QRectF &rect, int pos, const QTextFormat &format)
+{
+    // No file I/O, decoding or conversion here: look the key up, draw, keep
+    // nothing but the key.
+    const QString hash = format.property(kAttachmentHashProperty).toString();
+    if (const QPaintDevice *dev = p->device()) {
+        const qreal dpr = dev->devicePixelRatioF();
+        if (dpr > 0 && dpr != m_dpr) {
+            m_dpr = dpr;
+            m_mediaDirty = true;
+        }
+    }
+    MediaService *media = m_ctx->media;
+    AttachmentStore *as = m_ctx->attachments;
+    const AttachmentInfo *info = as ? as->info(hash) : nullptr;
+    BlockData *d = dataOf(document()->findBlock(pos));
+    const QImage *img = nullptr;
+    MediaKey used;
+    bool smooth = false;
+    QString label;
+    if (media && info) {
+        const MediaService::Request req = media->imageRequest(*info, QString(), rect.width(), m_dpr);
+        used = req.key;
+        img = media->lookup(req.key);
+        if (!img && (img = media->nearest(hash, req.key.width, 0.10, &used)))
+            smooth = true; // within ±10 %: reused, drawn smooth-scaled
+        if (!img)
+            img = media->nearest(hash, req.key.width, -1, &used); // while resizing: fast scaling
+        if (!img) {
+            used = req.key;
+            if (media->tooLarge(req.key))
+                label = tr("Too large to preview");
+            else if (media->failed(hash))
+                label = tr("Cannot show this image");
+        }
+    } else if (as && as->isMissing(hash)) {
+        label = tr("Missing attachment");
+    }
+    if (d)
+        d->mediaKey = used;
+    if (!img) {
+        paintImagePlaceholder(p, rect, label);
+        return;
+    }
+    p->save();
+    p->setRenderHint(QPainter::SmoothPixmapTransform, smooth);
+    p->drawImage(rect, *img);
+    p->restore();
+}
+
+void VirtualLayout::mediaArrived(const QString &hash)
+{
+    // Repaint only the visible lines showing it.
+    const int first = blockAtY(m_viewTop);
+    const int last = blockAtY(m_viewBottom);
+    if (first < 0)
+        return;
+    QTextBlock b = document()->findBlockByNumber(first);
+    for (int i = first; i <= last && b.isValid(); ++i, b = b.next())
+        if (roleOf(b) == LineRole::Image && imageHashOf(b) == hash)
+            emit update(QRectF(0, topOf(i), 1e9, m_h[size_t(i)]));
+}
+
+void VirtualLayout::releaseMedia()
+{
+    if (m_ctx->media)
+        m_ctx->media->removeOwner(this);
+    m_mediaDirty = true;
+}
+
+void VirtualLayout::updateMediaWants()
+{
+    m_mediaDirty = false;
+    MediaService *media = m_ctx->media;
+    AttachmentStore *as = m_ctx->attachments;
+    if (!media || !as || m_h.empty() || m_viewBottom <= m_viewTop)
+        return;
+    // Keep window: the viewport plus one viewport ahead in the scroll
+    // direction. Requests outside it are dropped before they start.
+    const qreal vh = m_viewBottom - m_viewTop;
+    const qreal keepTop = m_scrollDir < 0 ? m_viewTop - vh : m_viewTop;
+    const qreal keepBottom = m_scrollDir > 0 ? m_viewBottom + vh : m_viewBottom;
+    const bool resizing = m_widthChanged.isValid() && m_widthChanged.elapsed() < kResizeSettleMs;
+    bool settle = false;
+    QVector<MediaService::Request> visible, ahead;
+    const int first = blockAtY(keepTop);
+    const int last = blockAtY(keepBottom);
+    QTextBlock b = document()->findBlockByNumber(first);
+    for (int i = first; i <= last && b.isValid(); ++i, b = b.next()) {
+        if (roleOf(b) != LineRole::Image)
+            continue;
+        const QString hash = imageHashOf(b);
+        const AttachmentInfo *info = as->info(hash);
+        if (!info) {
+            as->fetchInfo(hash);
+            continue;
+        }
+        MediaService::Request r = media->imageRequest(*info, as->pathFor(hash), imageDisplaySize(hash).width(), m_dpr);
+        if (!media->contains(r.key)) {
+            MediaKey near;
+            if (media->nearest(hash, r.key.width, 0.10, &near)) {
+                r.key = near; // within ±10 % of a cached resolution: no decode
+            } else if (resizing) {
+                // The divider is moving: keep drawing what is cached (scaled)
+                // and decode once the width has settled.
+                settle = true;
+                if (!media->nearest(hash, r.key.width, -1, &near))
+                    continue;
+                r.key = near;
+            }
+        }
+        const qreal top = topOf(i);
+        const bool isVisible = top + m_h[size_t(i)] > m_viewTop && top < m_viewBottom;
+        r.priority = isVisible ? 0 : 1;
+        (isVisible ? visible : ahead).push_back(r);
+    }
+    if (m_scrollDir < 0)
+        std::reverse(ahead.begin(), ahead.end()); // nearest first
+    visible += ahead;
+    media->setWanted(this, visible);
+    if (settle)
+        m_mediaSettle.start(int(qMax<qint64>(1, kResizeSettleMs - m_widthChanged.elapsed())));
 }
 
 } // namespace folia

@@ -17,6 +17,7 @@
 #include "editor/EditorContext.h"
 
 #include <QAbstractTextDocumentLayout>
+#include <QElapsedTimer>
 #include <QPointer>
 #include <QSet>
 #include <QTextBlock>
@@ -29,6 +30,7 @@ class VirtualLayout : public QAbstractTextDocumentLayout {
     Q_OBJECT
 public:
     VirtualLayout(QTextDocument *doc, EditorContext *ctx);
+    ~VirtualLayout() override;
 
     void draw(QPainter *painter, const PaintContext &context) override;
     int hitTest(const QPointF &point, Qt::HitTestAccuracy accuracy) const override;
@@ -64,6 +66,16 @@ public:
     QString mathSource(const QTextBlock &closeOrSingle) const;
     qreal previewPointSize() const;
 
+    // Images (docs/ATTACHMENTS.md §3). Display size comes from the stored
+    // dimensions (no decode needed for layout): min(column, native) wide.
+    QSizeF imageDisplaySize(const QString &hash) const;
+    QRectF imageRect(const QTextBlock &block) const;
+    // This layout is no longer shown: withdraw its decode requests.
+    void releaseMedia();
+    // Recompute which bitmaps this layout wants (visible first, then one
+    // viewport ahead in the scroll direction). Normally done after a paint.
+    void updateMediaWants();
+    qreal devicePixelRatio() const { return m_dpr; }
 protected:
     void documentChanged(int from, int charsRemoved, int charsAdded) override;
     void resizeInlineObject(QTextInlineObject item, int posInDocument, const QTextFormat &format) override;
@@ -89,6 +101,10 @@ private:
     QString mathSourceFor(const QTextBlock &closeOrSingle, LineRole role) const;
     void paintBlockDecorations(QPainter *p, const QTextBlock &block, LineRole role,
                                const QRectF &rect, const PaintContext &ctx) const;
+    void drawImageObject(QPainter *p, const QRectF &rect, int pos, const QTextFormat &format);
+    void paintImagePlaceholder(QPainter *p, const QRectF &rect, const QString &label) const;
+    qreal extraBelow(const QTextBlock &block) const; // import placeholder
+    void mediaArrived(const QString &hash);
     QFont roleFont(const QTextBlock &block, LineRole role) const;
     qreal indentFor(LineRole role) const;
     qreal topPadFor(const QTextBlock &block, LineRole role) const;
@@ -115,6 +131,14 @@ private:
     // drawn in the paint that first needs them instead of a second one.
     mutable qint64 m_inlineBudgetUs = 0;
     QTimer m_inlineRepaint;
+    // Images: device pixel ratio of the last paint, whether the wanted set
+    // must be recomputed, scroll direction (prefetch goes that way) and the
+    // resize settle (decodes at a new width wait until it stops changing).
+    qreal m_dpr = 1;
+    bool m_mediaDirty = true;
+    int m_scrollDir = 1;
+    QElapsedTimer m_widthChanged;
+    QTimer m_mediaSettle;
 };
 
 } // namespace folia

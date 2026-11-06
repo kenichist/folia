@@ -7,6 +7,7 @@
 #pragma once
 
 #include "core/Types.h"
+#include "editor/MediaKey.h"
 
 #include <QTextBlockUserData>
 #include <QTextFormat>
@@ -31,7 +32,10 @@ enum class LineRole : int {
     MathClose = 6,
     MathSingle = 7,
     PageLink = 8,
+    Image = 9, // one U+FFFC carrying an attachment reference (docs/ATTACHMENTS.md)
 };
+
+inline bool roleIsObjectLine(LineRole r) { return r == LineRole::PageLink || r == LineRole::Image; }
 
 inline bool roleInCode(LineRole r) { return r == LineRole::CodeOpen || r == LineRole::CodeLine; }
 inline bool roleInMath(LineRole r) { return r == LineRole::MathOpen || r == LineRole::MathLine; }
@@ -51,6 +55,11 @@ constexpr int kPageLinkTargetProperty = QTextFormat::UserProperty + 1;
 constexpr int kLayoutFormatMarker = QTextFormat::UserProperty + 2;
 // On layout formats of bare URLs: the address the URL opens (QString).
 constexpr int kLinkHrefProperty = QTextFormat::UserProperty + 3;
+// Images: a single U+FFFC object character with the attachment's hash and
+// alt text. Stored as `![alt](attachment:<hash>)`.
+constexpr int kImageObjectType = QTextFormat::UserObject + 2;
+constexpr int kAttachmentHashProperty = QTextFormat::UserProperty + 4;
+constexpr int kImageAltProperty = QTextFormat::UserProperty + 5;
 
 struct BlockTracker; // per-document bookkeeping, see PageSession
 
@@ -95,6 +104,13 @@ public:
 
     // Inline formulas (paragraph lines with $…$ only).
     std::unique_ptr<InlineMathState> inlineMath;
+
+    // Image lines: the cache key last drawn (a key, never a bitmap copy;
+    // cleared when the layout is evicted, the cache entry stays).
+    MediaKey mediaKey;
+    // Images being imported to go after this line: a placeholder is drawn
+    // under it. Presentation only, never serialized.
+    quint8 pendingImports = 0;
 
     BlockTracker *tracker = nullptr;
 };

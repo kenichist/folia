@@ -12,6 +12,9 @@
 
 namespace folia {
 
+class AttachmentStore;
+class MediaService;
+
 struct EditorTheme {
     QFont body;
     QFont mono;
@@ -55,6 +58,8 @@ public:
     quint64 themeSerial() const { return m_serial; }
 
     IPreviewService *previews = nullptr;
+    AttachmentStore *attachments = nullptr; // image metadata, imports, pins
+    MediaService *media = nullptr;          // decoded bitmaps (budgeted cache + scheduler)
     std::function<QString(PageId)> titleOf;
     bool highlightEnabled = true;
 

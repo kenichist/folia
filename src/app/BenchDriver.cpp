@@ -306,6 +306,7 @@ QJsonObject BenchDriver::processJson() const
     p.insert(QStringLiteral("doc_cache_bytes_est"), double(m_app->docCacheBytes()));
     p.insert(QStringLiteral("doc_cache_entries"), m_app->docCacheEntries());
     p.insert(QStringLiteral("preview_cache_bytes"), double(m_app->previews() ? m_app->previews()->cacheBytes() : 0));
+    p.insert(QStringLiteral("threads"), s.threads);
     if (PageSession *a = m_app->activeSession())
         p.insert(QStringLiteral("laid_out_blocks"), a->layout()->laidOutCount());
     return p;
@@ -344,6 +345,7 @@ void BenchDriver::run()
     else if (s == QLatin1String("navigate")) scenarioNavigate();
     else if (s == QLatin1String("integration")) scenarioIntegration();
     else if (s == QLatin1String("settings")) scenarioSettings();
+    else if (s == QLatin1String("images")) scenarioImages();
     else if (s == QLatin1String("recovery")) { scenarioRecovery(); return; }
     else m_notes.append(QStringLiteral("unknown scenario"));
     finish();

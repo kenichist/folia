@@ -1,8 +1,13 @@
-# Images and PDFs: design (revision 2)
+# Images and PDFs: design (revision 3)
 
-Status: proposal, not implemented. Revision 2 takes in an outside review of the
-first draft and adds facts checked against this repository on 2026-11-06. Every
-number below is a **target for a benchmark**, not a measurement.
+Status: steps 1–3 of §7 are implemented (the attachment store, `MediaBudget`
+with the two-lane scheduler, and the image block on ImageIO); PDFs (steps 4–5)
+are not. Revision 2 took in an outside review of the first draft and added
+facts checked against this repository on 2026-11-06. Revision 3 replaces
+estimates with measurements where the image benchmarks contradicted them;
+those places are marked **Measured** and the numbers are in
+`docs/BENCHMARKS.md` §6. Numbers not marked that way are still
+targets.
 
 ## 0. Facts that constrain the design
 
@@ -29,7 +34,10 @@ question the first draft left open.
 ## 1. Storage
 
 - Originals are files under `Application Support/Folia/attachments/<sha256>`,
-  content-addressed. SQLite holds only metadata:
+  content-addressed. **Implemented:** the folder sits next to the workspace
+  file (`<folder>/attachments` for `workspace.db`, `<name>.attachments` for
+  any other workspace file), so two workspaces never sweep each other's
+  files. SQLite holds only metadata (schema version 2):
   `attachments(hash, mime, bytes, width, height, orientation, pages, page_geom)`.
   - `width` and `height` are **after the orientation transform**, so EXIF
     rotation never causes a layout change later.
@@ -52,6 +60,17 @@ question the first draft left open.
   trashed".** A file is deleted only when nothing references it: no live page,
   no trashed page, and no open session's undo stack. The sweep runs at idle,
   well after the last reference goes away.
+  - **Implemented:** an open session pins every hash it has shown since it
+    opened, until it closes. That is a superset of what its undo stack can
+    restore, without inspecting Qt's undo stack. An import pins its hash
+    before the file appears under its name and hands the pin to the session.
+  - The sweep is one writer-thread transaction, so no save interleaves: it
+    scans `blocks` for references (live and trashed pages alike, since
+    trashed pages keep their blocks), then deletes unpinned, unreferenced
+    files and their rows, checking each pin under the same lock imports
+    take. Files without a row and stale temp files are removed only after
+    10 minutes. It runs 60 s after the last pin is released, and 120 s
+    after launch if the folder is not empty.
 - Markdown forms: `![alt](attachment:hash)` and `[file.pdf](attachment:hash)`.
   In the document, each is one U+FFFC line, like page links.
 
@@ -73,20 +92,49 @@ media bytes = cached pixels + reserved in-flight working sets + display copies
 - If a job does not fit, it waits. If its estimate alone exceeds the whole
   budget, it is not run: the block shows "too large to preview" at its stored
   size. Under `QImageReader`, `QImageReader::setAllocationLimit` stays on as a
-  second guard. It is not a process-wide limit.
+  second guard. **Correction:** in Qt 6 it *is* a process-wide limit
+  (`static`), so it is left at Qt's default rather than tuned per decode.
 - Memory pressure trims caches toward 0 (critical) or a floor (warning) and
   **lowers the budget for a cool-down period**. Without that, caches would grow
   straight back while the system is still under pressure.
+  - **Measured:** lowering the budget alone stalled rendering. With the budget
+    at ¼ (32 MiB), every photo's estimate (~46 MB at 1520 px) waited for the
+    whole 60 s cool-down. Request sizes now follow the *current* budget, so
+    during a cool-down images decode at a lower density instead of not at
+    all, and owners re-request full density when the cool-down ends.
 - **No pixel references outlive eviction.** `QImage` shares its pixel data, so
   dropping a cache entry frees nothing while a copy lives elsewhere. So:
   - Blocks store only a cache key. Paint looks the key up and draws, and keeps
     no copy.
   - Completion lambdas drop their image immediately when the target is gone.
   - Debug builds assert `QImage::isDetached()`-style uniqueness on eviction.
+  - **Measured:** unique ownership is not enough on macOS. Freed multi-MB
+    malloc blocks stay in the footprint: fifteen 1520×1140 bitmaps freed
+    leave 107 MB counted, and `malloc_zone_pressure_relief` releases none of
+    them. So decoded bitmaps live in their own anonymous mapping
+    (`platform::allocateImage`), unmapped when the cache drops them, and the
+    footprint falls with the cache.
 
 Opaque renderer allocations (ImageIO and CG internals) cannot be reserved
 exactly. The overhead factor plus headroom covers them, and the peak-footprint
 benchmark checks that it is enough.
+
+**Measured: the working set is not proportional to the output.** ImageIO
+decodes at native/2^k, the largest power-of-two reduction that still covers
+the output (up to 1/8 for JPEG, PNG and HEIC), scales that into the
+thumbnail, and the thumbnail is copied into our bitmap. So the reservation is
+
+```
+estimate = intermediate × a + output × b + fixed      (4 bytes per pixel)
+```
+
+with a, b and fixed per format (`MediaService::costFor`). They are fitted
+with headroom to the probe's peaks and to the peaks inside the app, where
+PNG decodes cost about 30 MB more (tables in `docs/BENCHMARKS.md` §6). A
+single factor on the output could not fit both a 2880×1800 PNG at 1400 px
+(k = 1, 24 MB peak) and at 1520 px (k = 0, 37 MB peak). ImageIO also keeps
+1–28 MB after a decode (allocator and ImageIO caches, HEIC the most). No
+reservation covers that; the plateau benchmark shows it.
 
 ## 3. Images
 
@@ -101,10 +149,24 @@ benchmark checks that it is enough.
   decodes in full and then scales is **measured per format** (JPEG, PNG, HEIC,
   WebP). It is not assumed. The overhead factor in §2 is set per format from
   those measurements.
+  - **Measured:** JPEG, HEIC *and PNG* decode at a reduced size (a 6000×4000
+    PNG at 1400 px peaks at 0.25× its full-size bitmap). WebP decodes in full
+    (1.3× the full-size bitmap at any output). `kCGImageSourceSubsampleFactor`
+    lowered no peak and is not used.
+  - Thread CPU understates JPEG and HEIC cost: ImageIO decodes them partly on
+    its own threads (HEIC: ~160 ms wall, ~20 ms on our worker), so
+    `media_cpu_us_discarded` counts only the worker's share.
 - **Output size is limited in total pixels as well as width.** The target is the
   physical width (`column width × DPR`, capped at native width). Height follows
   from the aspect ratio. Total pixels are clamped (start at 16 MP). Tall images
   past that limit are decoded at a lower density and drawn scaled up.
+  - **Measured:** with a 128 MiB budget the 16 MP clamp never binds. The
+    binding clamp is "one decode reserves at most 75 % of the current
+    budget". A PNG decoded at native/2 still needs a native/2 intermediate,
+    so the 1000×40000 screenshot (shown 760 pt wide) decodes at 234×9360,
+    about 0.15 of the display's density, and looks blurry. Decoding tall
+    images in strips (the PDF tile machinery of step 4) is the follow-up
+    that restores full density.
 - **Fallback decoder: `QImageReader`**, with `setScaledSize` and
   `setAutoTransform(true)`. `setScaledSize` may decode in full and then scale,
   depending on the format handler. The budget assumes the worst case for any
@@ -114,7 +176,8 @@ benchmark checks that it is enough.
 - **Eviction does not mean "decode again".** When `evictFarBlocks` clears a
   block, it drops only the block's key. The shared LRU keeps recent bitmaps
   while the budget allows, so scrolling down and back up hits the cache. Memory
-  pressure evicts aggressively.
+  pressure evicts aggressively. A cache hit is counted when a block starts
+  wanting a key that is already decoded.
 - **Scheduling:**
   - There is one pending decode per cache key. Blocks that show the same
     attachment attach to it.
@@ -135,6 +198,13 @@ benchmark checks that it is enough.
   `RGB32`). Large bitmaps still cost memory bandwidth per repaint, so only
   damaged regions repaint when a result arrives.
 - Static only: the first frame of GIF/APNG, with no animation timers.
+- **Implemented in the editor:** an image is one U+FFFC line, like a page
+  link. Its height comes from the stored dimensions, so the estimate before
+  layout equals the laid-out height. Paste (encoded clipboard bytes are
+  stored as is; raw pixels become PNG), drag-and-drop of image files and
+  Edit ▸ Insert Image… all go through the same import. Copying an image line
+  copies its Markdown, and pasting that Markdown back gives an image line on
+  a line of its own.
 - **A disk-cached display preview** (a downscaled copy kept beside the
   original) is deferred. It is worth adding only if benchmarks show repeated
   expensive decodes (huge PNGs, HEIC). It is never generated upfront for every
@@ -202,6 +272,10 @@ benchmark checks that it is enough.
   Qt's 30 s default, so threads are not recreated after every reading pause.
   Keep it only if the idle benchmark shows no regression in footprint or thread
   count.
+  - **Measured, and kept at 30 s:** idle on the image page (0.15 % of a core,
+    6.0 wakeups/s) matched the text page (0.27 %, 7.0/s). The thread count
+    went from 7 to 11 (the import worker, the image lane and ImageIO's own
+    threads), all parked.
 
 ## 6. Instrumentation and benchmarks
 
@@ -222,6 +296,9 @@ Each scenario records:
 - CPU time spent on discarded work
 - extra wakeups caused by attachments after the work settles
 
+The `images` bench scenario and `folia_mediaprobe` cover the image rows
+below; the measured results are in `docs/BENCHMARKS.md` §6.
+
 | Scenario | What it shows |
 |---|---|
 | Image-heavy page: idle, then scrolled | Plateau; whether idle returns to the baseline |
@@ -239,6 +316,10 @@ Corrections to the first draft's figures:
 - A 4:3 image at 700 logical px × 2 DPR is 1400×1050×4 B ≈ **5.6 MiB**, so a
   32 MiB cache holds about **five**, not eight. The draft's "12 MP → 8 MB" also
   contradicted itself.
+  - **Measured:** the default column is 760 pt, so a photo is 1520×1140 ≈
+    6.9 MB. The 128 MiB budget kept 14 of them cached (101.7 MB) beside a
+    decode in flight. Scrolling a 30-photo page down and back up found 13 in
+    the cache and decoded 16 again.
 - "CoreGraphics uses the least memory" and "a long PDF takes 20–60 MB" are
   targets to demonstrate on comparable documents. Page count alone does not
   predict rendering cost.
