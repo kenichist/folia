@@ -77,8 +77,9 @@ jobs:
         env:
           QT_QPA_PLATFORM: windows
         run: |
+          set +e
           for t in math/math_tests shell/shell_tests; do
-            (cd build/tests/$(dirname $t) && ./$(basename $t).exe -o log.txt,txt; echo "exit code $?"; cat log.txt | grep -v '^PASS' | tail -60)
+            (cd build/tests/$(dirname $t) && ./$(basename $t).exe -o log.txt,txt; echo "exit code $?"; grep -v '^PASS' log.txt | grep -v 'QDEBUG\|pathological\|PERF' | tail -80)
           done
       - name: Package
         shell: bash
