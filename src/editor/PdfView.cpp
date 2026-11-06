@@ -89,6 +89,12 @@ PdfView::PdfView(EditorContext *ctx, const AttachmentInfo &info, const QString &
         markDirty();
         viewport()->update();
     });
+    m_flingSettle.setSingleShot(true);
+    connect(&m_flingSettle, &QTimer::timeout, this, [this] {
+        markDirty(); // slowed down: heavy pages are requested now
+        viewport()->update();
+    });
+    m_scrollClock.start();
     m_hiddenClose.setSingleShot(true);
     connect(&m_hiddenClose, &QTimer::timeout, this, [this] {
         // In-flight jobs keep their own reference: the last one closes it.
@@ -382,16 +388,16 @@ void PdfView::updateWants()
                 wants << r;
             }
     };
+    const bool fling = m_flingSettle.isActive();
     for (int i : std::as_const(order))
-        add(requestsFor(i, planFor(i, m_zoom), view, 0));
+        if (!fling || !m_pages[i].heavy())
+            add(requestsFor(i, planFor(i, m_zoom), view, 0));
     // Prefetch: at most one viewport ahead in the scroll direction.
     const QRectF next = view.translated(0, m_scrollDir * view.height());
     const int nf = pageAt(next.top()), nl = pageAt(next.bottom());
-    if (m_scrollDir > 0) {
-        for (int i = nf; i <= nl; ++i)
-            add(requestsFor(i, planFor(i, m_zoom), next, 1));
-    } else {
-        for (int i = nl; i >= nf; --i)
+    for (int k = 0; k <= nl - nf; ++k) {
+        const int i = m_scrollDir > 0 ? nf + k : nl - k;
+        if (!fling || !m_pages[i].heavy())
             add(requestsFor(i, planFor(i, m_zoom), next, 1));
     }
     m_media->setWanted(this, wants);
@@ -549,6 +555,16 @@ void PdfView::scrollContentsBy(int dx, int dy)
     else if (dy > 0)
         m_scrollDir = -1;
     Q_UNUSED(dx);
+    if (dy != 0) {
+        // Speed over the last 100 ms: a fling defers heavy pages.
+        const qint64 now = m_scrollClock.elapsed();
+        const int y = verticalScrollBar()->value();
+        m_scrollTrail.push_back({now, y});
+        while (!m_scrollTrail.isEmpty() && now - m_scrollTrail.first().first > 100)
+            m_scrollTrail.removeFirst();
+        if (qAbs(y - m_scrollTrail.first().second) > viewport()->height() / 2)
+            m_flingSettle.start(m_cfg.flingSettleMs);
+    }
     markDirty();
     viewport()->update();
     const int cur = currentPage();

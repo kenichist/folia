@@ -31,6 +31,9 @@ QString thermalState();             // "nominal", "fair", "serious", "critical",
 QString powerSource();
 bool reducedMotion();
 bool reducedTransparency();
+// Benchmarks: keep the process out of App Nap (macOS throttles the threads
+// of a background app whose windows are covered). Off by default.
+void setAppNapAllowed(bool allowed);
 // Called on the main thread when the OS reports memory pressure.
 void onMemoryPressure(std::function<void(bool critical)> cb);
 

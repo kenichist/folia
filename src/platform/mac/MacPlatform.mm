@@ -97,6 +97,18 @@ bool reducedTransparency()
     return NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceTransparency;
 }
 
+void setAppNapAllowed(bool allowed)
+{
+    static id<NSObject> activity = nil;
+    if (!allowed && !activity) {
+        activity = [NSProcessInfo.processInfo beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep
+                                                                reason:@"Folia benchmark"];
+    } else if (allowed && activity) {
+        [NSProcessInfo.processInfo endActivity:activity];
+        activity = nil;
+    }
+}
+
 void onMemoryPressure(std::function<void(bool)> cb)
 {
     static dispatch_source_t source = nullptr;
@@ -421,6 +433,23 @@ void scanPage(CGPDFPageRef page, PdfPageGeom *g)
     CGPDFDictionaryRef res = nullptr;
     if (CGPDFDictionaryGetDictionary(pd, "Resources", &res))
         scanResources(res, &scan);
+    // Content length, from the stream dictionaries' /Length (not read).
+    CGPDFInteger bytes = 0;
+    CGPDFStreamRef st = nullptr;
+    CGPDFArrayRef parts = nullptr;
+    CGPDFDictionaryRef sd = nullptr;
+    CGPDFInteger n = 0;
+    if (CGPDFDictionaryGetStream(pd, "Contents", &st)) {
+        if ((sd = CGPDFStreamGetDictionary(st)) && CGPDFDictionaryGetInteger(sd, "Length", &n))
+            bytes += n;
+    } else if (CGPDFDictionaryGetArray(pd, "Contents", &parts)) {
+        for (size_t i = 0; i < CGPDFArrayGetCount(parts); ++i)
+            if (CGPDFArrayGetStream(parts, i, &st) && (sd = CGPDFStreamGetDictionary(st))
+                && CGPDFDictionaryGetInteger(sd, "Length", &n))
+                bytes += n;
+    }
+    if (bytes > 64 * 1024)
+        g->flags |= PdfPageGeom::HeavyContent;
 }
 
 } // namespace

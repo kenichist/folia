@@ -95,6 +95,13 @@ void BenchDriver::scenarioPdf()
                                       "first): footprints include the writer's freed memory"));
     const QString counterName = platform::sampleSelf().counterName;
     m_extra.insert(QStringLiteral("media_budget_bytes"), double(media->budget().base()));
+    // app_nap=0: hold a user-initiated activity, so a covered bench window
+    // does not get its threads throttled by App Nap.
+    const bool appNap = m_args.value(QStringLiteral("app_nap"), 1).toInt() != 0;
+    platform::setAppNapAllowed(appNap);
+    m_extra.insert(QStringLiteral("app_nap_allowed"), appNap);
+    // kinds_only=scanned,vector,…: phase 2 and phase 5 for those kinds only.
+    const QStringList kindsOnly = m_args.value(QStringLiteral("kinds_only")).toString().split(QLatin1Char(','), Qt::SkipEmptyParts);
     if (const int hold = m_args.value(QStringLiteral("demo_hold_ms"), 0).toInt(); hold > 0) {
         // Screenshots only: the note with its cards, the viewer, a zoom.
         m_app->newPage(0, -1, QStringLiteral("Reading list"), false);
@@ -232,10 +239,14 @@ void BenchDriver::scenarioPdf()
     // viewer tile at fit width on this display.
     const qreal dpr = m_app->window()->devicePixelRatioF();
     struct Doc { QString name, path; };
-    const QVector<Doc> docs = {{QStringLiteral("text"), set.long200}, {QStringLiteral("scanned"), set.scanned},
-                               {QStringLiteral("vector"), set.vector}, {QStringLiteral("transparency"), set.transparency}};
+    // The scan last: its 70 MB decode stays in the footprint (the allocator
+    // keeps it) and would blur the smaller peaks measured after it.
+    const QVector<Doc> docs = {{QStringLiteral("text"), set.long200}, {QStringLiteral("vector"), set.vector},
+                               {QStringLiteral("transparency"), set.transparency}, {QStringLiteral("scanned"), set.scanned}};
     const int fitWidthPx = qRound((m_app->window()->width() - 2 * 16 - 16) * dpr); // the viewer's fit width
     for (const Doc &d : docs) {
+        if (!kindsOnly.isEmpty())
+            break;
         const platform::PdfInfo pi = platform::pdfInfo(d.path);
         if (!pi.ok)
             continue;
@@ -276,7 +287,8 @@ void BenchDriver::scenarioPdf()
     for (int i = 0; i < 40; ++i)
         ed->textCursor().insertText(QString::fromUtf8(kLorem) + QStringLiteral("\n"));
     m_app->flushSaves();
-    idleWindow(QStringLiteral("idle_text"));
+    if (kindsOnly.isEmpty())
+        idleWindow(QStringLiteral("idle_text"));
 
     // 2. A note with the five PDFs, through the real import path.
     m_app->newPage(0, -1, QStringLiteral("Documents"), false);
@@ -319,7 +331,7 @@ void BenchDriver::scenarioPdf()
 
     // 3. Typing while a PDF renders beside the note: a PDF view in its own
     // window next to the main one, rendering vector tiles at 3x.
-    {
+    if (kindsOnly.isEmpty()) {
         QWidget *main = m_app->window();
         PdfView beside(m_app->editorContext(), vectorInfo, as->pathFor(vectorInfo.hash));
         beside.setWindowTitle(QStringLiteral("PDF beside the note"));
@@ -369,8 +381,13 @@ void BenchDriver::scenarioPdf()
 
     // 4. The 200-page document in the viewer.
     media->trim(0); // measured phases start cold
+    PdfView *v = nullptr;
+    QScrollBar *vb = nullptr;
+    PdfCounters c0 = PdfCounters::now();
+    double maxUsed = 0;
+    if (kindsOnly.isEmpty()) {
     const double beforeViewer = footprint();
-    PdfView *v = openViewer(longInfo, QStringLiteral("long-200.pdf"));
+    v = openViewer(longInfo, QStringLiteral("long-200.pdf"));
     if (!v) {
         m_notes.append(QStringLiteral("viewer did not open"));
         return;
@@ -381,12 +398,12 @@ void BenchDriver::scenarioPdf()
     m_extra.insert(QStringLiteral("long_plan_tiles"), v->planFor(0, v->zoom()).tiles);
     m_extra.insert(QStringLiteral("long_page_px"), QStringLiteral("%1x%2").arg(v->planFor(0, v->zoom()).width).arg(v->planFor(0, v->zoom()).height));
     media->waitIdle();
-    QScrollBar *vb = v->verticalScrollBar();
+    vb = v->verticalScrollBar();
     instr::takeSamples();
-    PdfCounters c0 = PdfCounters::now();
+    c0 = PdfCounters::now();
     platform::ProcessSample s0 = platform::sampleSelf();
     platform::intervalPeakFootprint();
-    double maxFootprint = 0, maxCache = 0, maxUsed = 0;
+    double maxFootprint = 0, maxCache = 0;
     int frames = 0;
     while (vb->value() < vb->maximum() && frames < 5000) {
         viewerFrame(v, qMin(vb->maximum(), vb->value() + step), QStringLiteral("pdf_scroll_down_frame_ms"));
@@ -496,6 +513,7 @@ void BenchDriver::scenarioPdf()
     m_extra.insert(QStringLiteral("long_close_cache_before"), cacheBeforeClose);
     m_extra.insert(QStringLiteral("long_close_cache_after"), double(media->cacheBytes()));
     m_extra.insert(QStringLiteral("long_close_documents_open"), platform::PdfDocument::liveCount());
+    } // phase 4
 
     // 5. Scanned, vector-heavy and transparency-heavy documents.
     for (const QString &name : {QStringLiteral("scanned-24"), QStringLiteral("vector-16"), QStringLiteral("transparency-16")}) {
@@ -503,6 +521,8 @@ void BenchDriver::scenarioPdf()
         if (!info.isPdf())
             continue;
         const QString kind = name.section(QLatin1Char('-'), 0, 0);
+        if (!kindsOnly.isEmpty() && !kindsOnly.contains(kind))
+            continue;
         media->trim(0);
         instr::takeSamples();
         const double f0 = footprint();
@@ -542,7 +562,7 @@ void BenchDriver::scenarioPdf()
 
     // 6. Idle with the viewer open and settled; then memory pressure, and
     // scrolling on during the cool-down.
-    v = openViewer(longInfo, QStringLiteral("long-200.pdf"));
+    v = kindsOnly.isEmpty() ? openViewer(longInfo, QStringLiteral("long-200.pdf")) : nullptr;
     if (v) {
         vb = v->verticalScrollBar();
         waitViewport(v, QStringLiteral("idle_viewer_open"), 30000);
@@ -572,7 +592,8 @@ void BenchDriver::scenarioPdf()
         m_app->closePdf();
     }
     media->waitIdle();
-    idleWindow(QStringLiteral("idle_after_close"));
+    if (kindsOnly.isEmpty())
+        idleWindow(QStringLiteral("idle_after_close"));
     m_extra.insert(QStringLiteral("documents_open_at_end"), platform::PdfDocument::liveCount());
     for (auto it = unpainted.cbegin(); it != unpainted.cend(); ++it)
         m_extra.insert(it.key() + QStringLiteral("_unpainted_frames"), it.value());

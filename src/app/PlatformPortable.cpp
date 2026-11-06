@@ -215,6 +215,7 @@ QString powerSource() { return QStringLiteral("unknown"); }
 bool reducedMotion() { return false; }
 bool reducedTransparency() { return false; }
 void onMemoryPressure(std::function<void(bool)>) {}
+void setAppNapAllowed(bool) {}
 qint64 intervalPeakFootprint() { return sampleSelf().footprintBytes; }
 qint64 releaseFreedMemory() { return 0; }
 

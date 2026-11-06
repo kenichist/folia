@@ -13,7 +13,9 @@
 //    rendered once it has settled.
 //  * Bitmaps come from MediaService (one budget, the PDF lane, one render at
 //    a time, so calls on the document are serialized). Requests that scroll
-//    away are dropped before they start. The viewer keeps keys, never pixels.
+//    away are dropped before they start; during a fling, heavy pages are not
+//    requested at all until the view slows down. The viewer keeps keys,
+//    never pixels.
 //  * Its invalidation is its own: only results for this document, only the
 //    page or tile they belong to, only while it is visible. The note editor
 //    never repaints it and it never repaints the note editor.
@@ -54,6 +56,11 @@ public:
         int tileSize = 512;                      // physical px, both dimensions
         qint64 wholePageMaxBytes = 2ll << 20;    // a page bitmap above this is tiled
         int zoomSettleMs = 150;                  // a zoom is rendered once it stops changing
+        // Moving faster than half a viewport per 100 ms, heavy pages (layers,
+        // big images, long content streams) are not requested until the view
+        // slows down for this long: a render cannot be interrupted, and one
+        // started mid-fling is thrown away when it finishes.
+        int flingSettleMs = 80;
         int closeHiddenAfterMs = 30000;          // hidden this long: the document closes
         qreal margin = 16;                       // logical px around the pages
         qreal gap = 12;                          // between pages
@@ -99,6 +106,7 @@ public:
     void goToPage(int page);
     void scrollToY(qreal y);
     bool zooming() const { return m_zooming; }
+    bool flinging() const { return m_flingSettle.isActive(); }
 
     // ---- rendering plan (tests, benchmarks)
     Plan planFor(int page, qreal zoom) const;
@@ -154,6 +162,9 @@ private:
     int m_lastCurrent = -1;
     int m_paints = 0;
     QTimer m_zoomSettle;
+    QTimer m_flingSettle;
+    QElapsedTimer m_scrollClock;
+    QVector<QPair<qint64, int>> m_scrollTrail; // (ms, scroll value) over the last 100 ms
     QTimer m_hiddenClose;
     std::shared_ptr<platform::PdfDocument> m_doc;
     // Per page, the last two plans drawn in full (newest first): drawn

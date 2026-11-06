@@ -25,6 +25,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QThread>
+#include <QThreadPool>
 
 #include <cmath>
 #include <cstdio>
@@ -95,7 +96,15 @@ int probePdf(const QStringList &a)
         bool ok = true;
         for (const QRect &r : regions) {
             QString err;
-            QImage img = platform::renderPdfPage(doc.get(), page, pageW, r, &err);
+            QImage img;
+            if (qEnvironmentVariableIsSet("FOLIA_PROBE_POOL")) {
+                // As in the app: on a QThreadPool worker (QoS experiments).
+                QThreadPool pool;
+                pool.start([&] { img = platform::renderPdfPage(doc.get(), page, pageW, r, &err); });
+                pool.waitForDone();
+            } else {
+                img = platform::renderPdfPage(doc.get(), page, pageW, r, &err);
+            }
             ok = ok && !img.isNull();
             if (!qEnvironmentVariableIsEmpty("FOLIA_PROBE_SAVE") && regions.size() == 1)
                 img.save(qEnvironmentVariable("FOLIA_PROBE_SAVE")); // eyeballing only

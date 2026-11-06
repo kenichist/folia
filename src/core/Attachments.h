@@ -39,11 +39,13 @@ struct AttachmentInfo {
 // hints read from the page's resources at import (no content is drawn):
 // CoreGraphics decodes embedded images in full (at most reduced by a power
 // of two for JPEG) and allocates a device-resolution layer per transparency
-// group, whatever the output size (docs/BENCHMARKS.md §6, "PDF render cost").
+// group, whatever the output size (docs/BENCHMARKS.md §6b, "PDF render
+// cost"); and long content streams take long to walk, once per tile.
 struct PdfPageGeom {
     enum Flag : quint16 {
-        Layers = 1,      // transparency groups or soft masks
+        Layers = 1,         // transparency groups or soft masks
         ReducibleImage = 2, // the largest image is DCT/JPX: decoded at native/2^k
+        HeavyContent = 4,   // content streams over 64 KB (thousands of paths)
     };
     float w = 0;
     float h = 0;
@@ -54,6 +56,8 @@ struct PdfPageGeom {
     {
         return w == o.w && h == o.h && rotation == o.rotation && flags == o.flags && imagePixels == o.imagePixels;
     }
+    // Slow to render per tile: worth not starting while the view flies past.
+    bool heavy() const { return (flags & (Layers | HeavyContent)) || imagePixels >= 1000000; }
 };
 
 namespace attachments {

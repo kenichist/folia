@@ -309,6 +309,12 @@ private slots:
         const PdfPageGeom t = platform::pdfInfo(text).geom.value(0);
         QCOMPARE(t.imagePixels, 0u);
         QCOMPARE(t.flags, quint16(0));
+        QVERIFY(!t.heavy());
+        const QString vec = fresh(QStringLiteral("vec.pdf"));
+        QVERIFY(platform::writeFixturePdf(vec, QStringLiteral("vector"), 1));
+        const PdfPageGeom vg = platform::pdfInfo(vec).geom.value(0);
+        QVERIFY(vg.flags & PdfPageGeom::HeavyContent); // 3000 curves: a long content stream
+        QVERIFY(vg.heavy() && s.heavy());
         // The estimate follows: a scan at full density costs its decoded
         // image, at thumbnail size a reduced decode; layers cost more than
         // plain pages for the same bitmap.
@@ -731,6 +737,54 @@ private slots:
         for (const MediaKey &k : std::as_const(g->started))
             oldStarted += wantedPagesBefore.contains(k.page) ? 1 : 0;
         QCOMPARE(oldStarted, 1);
+    }
+
+    void flingDefersHeavyPagesOnly()
+    {
+        auto g = std::make_shared<Gate>();
+        g->release();
+        Rig rig(fresh(QStringLiteral("ws.db")), fresh(QStringLiteral("att")), true, instant());
+        // Even pages are scans (heavy), odd pages plain text.
+        QVector<PdfPageGeom> pages = letterPages(60);
+        for (int i = 0; i < pages.size(); i += 2) {
+            pages[i].imagePixels = 2550u * 3300u;
+            pages[i].flags = PdfPageGeom::ReducibleImage;
+        }
+        QVERIFY(pages[0].heavy() && !pages[1].heavy());
+        PdfView::Config cfg;
+        cfg.flingSettleMs = 120;
+        PdfView v(&rig.ctx, pdfInfoFor(fakeHash('b'), pages), QStringLiteral("/nowhere.pdf"), cfg);
+        v.resize(800, 700);
+        v.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&v));
+        v.setZoom(0.4); // several pages per viewport
+        v.viewport()->repaint();
+        QVERIFY(!v.flinging());
+        // Fast: a viewport per step.
+        for (int i = 0; i < 6; ++i) {
+            v.verticalScrollBar()->setValue(v.verticalScrollBar()->value() + v.viewport()->height());
+            v.viewport()->repaint();
+        }
+        QVERIFY(v.flinging());
+        QSet<int> wanted;
+        for (const MediaService::Request &r : v.lastWants())
+            wanted.insert(r.key.page);
+        QVERIFY(!wanted.isEmpty());
+        for (int p : std::as_const(wanted))
+            QVERIFY2(!pages[p].heavy(), qPrintable(QString::number(p))); // only the cheap pages
+        // Slowed down: the heavy ones are asked for too.
+        QTRY_VERIFY(!v.flinging());
+        v.viewport()->repaint();
+        bool heavyWanted = false;
+        for (const MediaService::Request &r : v.lastWants())
+            heavyWanted = heavyWanted || pages[r.key.page].heavy();
+        QVERIFY(heavyWanted);
+        // Slow scrolling never counts as a fling.
+        for (int i = 0; i < 6; ++i) {
+            v.verticalScrollBar()->setValue(v.verticalScrollBar()->value() + 20);
+            QTest::qWait(20);
+        }
+        QVERIFY(!v.flinging());
     }
 
     void documentClosesWhenViewerCloses()
