@@ -295,6 +295,14 @@ void MediaService::trim(qint64 target)
         evict(m_lru.back());
 }
 
+bool MediaService::viewerWants(const QString &hash) const
+{
+    for (auto it = m_want.cbegin(); it != m_want.cend(); ++it)
+        if (it.key().hash == hash && (it.key().kind == MediaKey::PdfPage || it.key().kind == MediaKey::PdfTile))
+            return true;
+    return false;
+}
+
 qint64 MediaService::dropViewerBitmaps(const QString &hash)
 {
     qint64 freed = 0;
@@ -507,10 +515,13 @@ void MediaService::finished(const MediaKey &key, QImage image, const QString &er
             qWarning("folia: cannot render %s: %s", key.isPdf() ? "PDF" : "image", qPrintable(error));
         emit refused(key);
     } else if (!m_want.contains(key)) {
-        // Finished but unwanted: never shown. Kept only if it fits as is.
+        // Finished but unwanted: never shown. Kept only if it fits as is,
+        // and never for a PDF viewer that has closed (nothing wants any page
+        // or tile of that document): closing frees its bitmaps.
         instr::add(instr::MediaJobsDiscarded);
         instr::add(instr::MediaCpuUsDiscarded, cpuUs);
-        if (m_budget.used() + image.sizeInBytes() <= m_budget.limit())
+        const bool orphan = (key.kind == MediaKey::PdfPage || key.kind == MediaKey::PdfTile) && !viewerWants(key.hash);
+        if (!orphan && m_budget.used() + image.sizeInBytes() <= m_budget.limit())
             insert(key, std::move(image), /*asLeastRecent=*/true);
     } else {
         const qint64 bytes = image.sizeInBytes();

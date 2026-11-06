@@ -56,7 +56,8 @@ public:
         int tileSize = 512;                      // physical px, both dimensions
         qint64 wholePageMaxBytes = 2ll << 20;    // a page bitmap above this is tiled
         int zoomSettleMs = 150;                  // a zoom is rendered once it stops changing
-        // Moving faster than half a viewport per 100 ms, heavy pages (layers,
+        // Moving faster than a quarter viewport per 100 ms (a heavy tile takes
+        // 30-250 ms, so it would be out of view when done), heavy pages (layers,
         // big images, long content streams) are not requested until the view
         // slows down for this long: a render cannot be interrupted, and one
         // started mid-fling is thrown away when it finishes.

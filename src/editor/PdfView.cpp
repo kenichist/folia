@@ -562,7 +562,7 @@ void PdfView::scrollContentsBy(int dx, int dy)
         m_scrollTrail.push_back({now, y});
         while (!m_scrollTrail.isEmpty() && now - m_scrollTrail.first().first > 100)
             m_scrollTrail.removeFirst();
-        if (qAbs(y - m_scrollTrail.first().second) > viewport()->height() / 2)
+        if (qAbs(y - m_scrollTrail.first().second) > viewport()->height() / 4)
             m_flingSettle.start(m_cfg.flingSettleMs);
     }
     markDirty();

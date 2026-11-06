@@ -784,10 +784,10 @@ private slots:
         for (const MediaService::Request &r : v.lastWants())
             heavyWanted = heavyWanted || pages[r.key.page].heavy();
         QVERIFY(heavyWanted);
-        // Slow scrolling never counts as a fling.
+        // Reading-speed scrolling never counts as a fling.
         for (int i = 0; i < 6; ++i) {
-            v.verticalScrollBar()->setValue(v.verticalScrollBar()->value() + 20);
-            QTest::qWait(20);
+            v.verticalScrollBar()->setValue(v.verticalScrollBar()->value() + 15);
+            QTest::qWait(25);
         }
         QVERIFY(!v.flinging());
     }
@@ -829,11 +829,14 @@ private slots:
         QTRY_COMPARE(platform::PdfDocument::liveCount(), before + 1);
         // Closed: gone, with its requests.
         const std::weak_ptr<platform::PdfDocument> handle = v->document();
+        v->goToPage(4); // something in flight when it closes
+        v->viewport()->repaint();
         delete v;
         rig.media->waitIdle();
         QTRY_VERIFY(handle.expired());
         QTRY_COMPARE(platform::PdfDocument::liveCount(), before);
         QCOMPARE(rig.media->queuedJobs(), 0);
+        QCOMPARE(rig.media->cacheEntries(), 0); // a render that finished after closing is not kept
     }
 
     void viewerAndEditorRepaintSeparately()

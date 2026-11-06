@@ -100,7 +100,8 @@ void BenchDriver::scenarioPdf()
     const bool appNap = m_args.value(QStringLiteral("app_nap"), 1).toInt() != 0;
     platform::setAppNapAllowed(appNap);
     m_extra.insert(QStringLiteral("app_nap_allowed"), appNap);
-    // kinds_only=scanned,vector,…: phase 2 and phase 5 for those kinds only.
+    // kinds_only=scanned,vector,…[,beside]: phase 2, phase 5 for those kinds
+    // (and phase 3 with "beside") only.
     const QStringList kindsOnly = m_args.value(QStringLiteral("kinds_only")).toString().split(QLatin1Char(','), Qt::SkipEmptyParts);
     if (const int hold = m_args.value(QStringLiteral("demo_hold_ms"), 0).toInt(); hold > 0) {
         // Screenshots only: the note with its cards, the viewer, a zoom.
@@ -331,7 +332,7 @@ void BenchDriver::scenarioPdf()
 
     // 3. Typing while a PDF renders beside the note: a PDF view in its own
     // window next to the main one, rendering vector tiles at 3x.
-    if (kindsOnly.isEmpty()) {
+    if (kindsOnly.isEmpty() || kindsOnly.contains(QStringLiteral("beside"))) {
         QWidget *main = m_app->window();
         PdfView beside(m_app->editorContext(), vectorInfo, as->pathFor(vectorInfo.hash));
         beside.setWindowTitle(QStringLiteral("PDF beside the note"));

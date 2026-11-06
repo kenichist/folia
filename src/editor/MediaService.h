@@ -200,6 +200,7 @@ private:
     // in its place (other resolutions of an image, other levels of a page).
     qint64 evictUnwanted(qint64 bytes, const MediaKey *keep = nullptr);
     qint64 evictableBytes() const;
+    bool viewerWants(const QString &hash) const; // any page or tile of it
 
     Config m_cfg;
     MediaBudget m_budget;
