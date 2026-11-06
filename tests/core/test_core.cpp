@@ -674,6 +674,77 @@ private slots:
         c.insertText(QStringLiteral(" typed at end"));
         QVERIFY(ses.document()->lastBlock().text().endsWith(QStringLiteral("typed at end")));
     }
+
+    void resizingLaysOutTheViewAndEstimatesOnceSettled()
+    {
+        // A live resize (the split's divider, the window) of a long note:
+        // each step lays out what is drawn and estimates nothing; the rest
+        // is estimated once, after the width stops changing, to the same
+        // heights an immediate full pass would give.
+        Store s;
+        QString err;
+        Store::Options o;
+        o.path = freshDb();
+        QVERIFY(s.open(o, &err));
+        auto alloc = [&s] { return s.allocateBlockId(); };
+        PageContent pc;
+        pc.id = 1;
+        pc.found = true;
+        for (int i = 0; i < 20000; ++i) {
+            BlockRecord r;
+            r.id = s.allocateBlockId();
+            r.text = QStringLiteral("Paragraph %1 lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do "
+                                    "eiusmod tempor incididunt ut labore.").arg(i);
+            pc.blocks << r;
+        }
+        PageSession ses(1, m_ctx, alloc);
+        ses.load(pc);
+        NoteEditor ed(m_ctx);
+        ed.resize(560, 600); // narrower than the column: every width step rewraps
+        ed.show();
+        ed.setSession(&ses);
+        QTest::qWait(50);
+        ed.viewport()->repaint();
+        VirtualLayout *vl = ses.layout();
+        const qreal before = vl->documentSize().height();
+        QVERIFY(vl->laidOutCount() > 0 && vl->laidOutCount() < 200);
+        const qint64 est0 = instr::get(instr::BlockHeightEstimates);
+        for (int i = 1; i <= 20; ++i) {
+            ed.resize(560 - 8 * i, 600);
+            ed.viewport()->repaint();
+            QVERIFY2(vl->laidOutCount() < 200, qPrintable(QString::number(vl->laidOutCount())));
+        }
+        // No whole-document pass during the drag (a full pass is 20 000).
+        QVERIFY2(instr::get(instr::BlockHeightEstimates) - est0 < 1000,
+                 qPrintable(QString::number(instr::get(instr::BlockHeightEstimates) - est0)));
+        // Only the drawn lines were rewrapped; far heights wait for the settle.
+        QVERIFY(qAbs(vl->documentSize().height() - before) < before * 0.001);
+        // Settled: one pass, and the document is taller at the narrower width.
+        QTRY_VERIFY(vl->documentSize().height() > before * 1.05);
+        const qint64 est1 = instr::get(instr::BlockHeightEstimates);
+        QVERIFY(est1 - est0 >= 19000 && est1 - est0 < 22000);
+        const qreal settled = vl->documentSize().height();
+        vl->relayoutAll(); // an immediate full pass at this width
+        ed.viewport()->repaint();
+        QVERIFY2(qAbs(vl->documentSize().height() - settled) < settled * 0.002,
+                 qPrintable(QStringLiteral("%1 vs %2").arg(vl->documentSize().height()).arg(settled)));
+        // Wider than the column + margins: the column keeps its width, so
+        // moving it costs the visible lines only, and nothing is re-estimated.
+        ed.resize(1400, 600);
+        QTest::qWait(250);
+        ed.viewport()->repaint();
+        const qint64 est2 = instr::get(instr::BlockHeightEstimates);
+        const qreal wide = vl->documentSize().height();
+        for (int i = 1; i <= 10; ++i) {
+            ed.resize(1400 + 10 * i, 600);
+            ed.viewport()->repaint();
+        }
+        QTest::qWait(250);
+        QVERIFY2(instr::get(instr::BlockHeightEstimates) - est2 < 200,
+                 qPrintable(QString::number(instr::get(instr::BlockHeightEstimates) - est2)));
+        QCOMPARE(vl->documentSize().height(), wide);
+        ed.setSession(nullptr);
+    }
 };
 
 QTEST_MAIN(CoreTests)

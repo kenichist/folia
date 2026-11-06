@@ -93,6 +93,14 @@ private:
     enum : uint8_t { StLaidOut = 1 };
 
     void fullInvalidate();
+    // A width change on an unchanged document (window, sidebar, the split's
+    // divider): only lines already laid out are dropped (at most the cap);
+    // every height stays as it was, so a resize step costs the visible
+    // lines, not the document. The heights of lines not laid out are
+    // estimated again once the width has settled (reestimate), and only if
+    // the text column changed width.
+    void resizeInvalidate(bool columnChanged);
+    void reestimate();
     void layoutBlock(const QTextBlock &block, int number) const;
     float estimateHeight(const QTextBlock &block) const;
     void ensureTops(int upTo) const;
@@ -148,6 +156,8 @@ private:
     int m_scrollDir = 1;
     QElapsedTimer m_widthChanged;
     QTimer m_mediaSettle;
+    QTimer m_widthSettle;         // re-estimates heights once a resize stops
+    bool m_estimatesStale = false; // heights of lines not laid out are for an older width
 };
 
 } // namespace folia
