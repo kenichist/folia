@@ -632,8 +632,8 @@ void BenchDriver::scenarioPdf()
             continue;
         m_extra.insert(kind + QStringLiteral("_first_viewport_ms"), waitViewport(kv, kind + QStringLiteral("_open"), 120000));
         {
-            // Full density, or a whole page at a lower density because one
-            // tile's working set does not fit 75 % of the budget.
+            // Full density, or a lower density because one tile's working
+            // set does not fit 75 % of the budget.
             const PdfView::Plan pl = kv->planFor(kv->currentPage(), kv->zoom());
             const int full = qRound(kv->pages().value(kv->currentPage()).w * kv->zoom() * kv->devicePixelRatioUsed());
             m_extra.insert(kind + QStringLiteral("_plan"), QStringLiteral("%1 %2x%3").arg(pl.tiles ? QStringLiteral("tiles") : QStringLiteral("page"))
