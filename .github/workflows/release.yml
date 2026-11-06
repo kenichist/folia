@@ -70,7 +70,16 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFOLIA_BUILD_TOOLS=OFF
           cmake --build build
       - name: Test
-        run: ctest --test-dir build --output-on-failure -V
+        run: ctest --test-dir build --output-on-failure
+      - name: Failed test details
+        if: failure()
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: windows
+        run: |
+          for t in math/math_tests shell/shell_tests; do
+            (cd build/tests/$(dirname $t) && ./$(basename $t).exe -o log.txt,txt; echo "exit code $?"; cat log.txt | grep -v '^PASS' | tail -60)
+          done
       - name: Package
         shell: bash
         run: |
