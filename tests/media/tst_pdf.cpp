@@ -4,19 +4,24 @@
 // and its thumbnail on the PDF lane, and the viewer: prefix-sum layout,
 // whole-page vs tile plans, zoom settling, stale requests dropped before
 // they start, the document handle's lifetime and separate invalidation.
+#include "app/AppController.h"
+#include "app/PdfViewerPage.h"
 #include "app/Platform.h"
 #include "core/Attachments.h"
 #include "core/Instrument.h"
 #include "editor/EditorContext.h"
+#include "editor/EditorPane.h"
 #include "editor/MediaService.h"
 #include "editor/NoteEditor.h"
 #include "editor/PageSession.h"
 #include "editor/PdfView.h"
 #include "editor/VirtualLayout.h"
 #include "storage/AttachmentStore.h"
+#include "shell/CommandRegistry.h"
 #include "storage/Store.h"
 
 #include <QApplication>
+#include <QMainWindow>
 #include <QDir>
 #include <QFile>
 #include <QMimeData>
@@ -881,6 +886,71 @@ private slots:
         QTest::qWait(30);
         QCOMPARE(v.paintCount(), paints);
         ed.setSession(nullptr);
+    }
+
+    void viewerTakesTheEditorsPlaceInTheApp()
+    {
+        if (!cg())
+            QSKIP("CoreGraphics only");
+        QTemporaryDir home;
+        const QString src = fresh(QStringLiteral("app.pdf"));
+        QVERIFY(platform::writeFixturePdf(src, QStringLiteral("text"), 6));
+        AppController::Options o;
+        o.homeDir = home.path();
+        auto app = std::make_unique<AppController>(o);
+        QString err;
+        QVERIFY2(app->start(&err), qPrintable(err));
+        app->window()->show();
+        QTRY_VERIFY(app->activeSession());
+        const int docs = platform::PdfDocument::liveCount();
+        NoteEditor *ed = app->editorPane()->editor();
+        AttachmentStore::Source s;
+        s.path = src;
+        s.name = QStringLiteral("app.pdf");
+        QVERIFY(ed->importImages({s}));
+        app->attachments()->waitForImports();
+        QTRY_VERIFY(!app->activeSession()->hasPendingImports());
+        QString hash;
+        for (QTextBlock b = app->activeSession()->document()->firstBlock(); b.isValid(); b = b.next())
+            if (PageSession::roleOf(b) == LineRole::Pdf)
+                hash = PageSession::imageHash(b);
+        QVERIFY(!hash.isEmpty());
+        const QString title = app->window()->windowTitle();
+        // The card's click signal opens it inside the main window.
+        emit ed->openPdfRequested(hash, QStringLiteral("app.pdf"));
+        QVERIFY(app->pdfOpen());
+        PdfViewerPage *page = app->pdfViewer();
+        QCOMPARE(page->window(), static_cast<QWidget *>(app->window()));
+        QVERIFY(!app->editorPane()->isVisible());
+        QCOMPARE(app->window()->windowTitle(), QStringLiteral("app.pdf — Folia"));
+        QCOMPARE(page->view()->pageCount(), 6);
+        QVERIFY(app->attachments()->isPinned(hash));
+        QVERIFY(!app->commands()->dispatchCommand(QStringLiteral("editor.undo"), {}).ok);
+        page->view()->viewport()->repaint();
+        app->media()->waitIdle();
+        QTRY_VERIFY(app->media()->cacheEntries() > 1); // the card's thumbnail and the viewer's tiles
+        // Esc returns to the note; the viewer and its bitmaps are gone.
+        QTest::keyClick(page->view(), Qt::Key_Escape);
+        QVERIFY(!app->pdfOpen());
+        QVERIFY(!app->pdfViewer());
+        QVERIFY(app->editorPane()->isVisible());
+        QCOMPARE(app->window()->windowTitle(), title);
+        app->media()->waitIdle();
+        QCOMPARE(app->media()->cacheEntries(), 1); // the thumbnail stays
+        QTRY_COMPARE(platform::PdfDocument::liveCount(), docs);
+        // Going to a page closes it; so does the command.
+        QVERIFY(app->showPdf(hash, QStringLiteral("app.pdf")));
+        QVERIFY(app->commands()->dispatchCommand(QStringLiteral("page.new"), {}).ok);
+        QTRY_VERIFY(!app->pdfOpen());
+        QVERIFY(app->showPdf(hash, QStringLiteral("app.pdf")));
+        QVERIFY(app->commands()->dispatchCommand(QStringLiteral("pdf.close"), {}).ok);
+        QVERIFY(!app->pdfOpen());
+        // Quitting with the viewer open tears down in order (the viewer
+        // calls into the media service and attachment store as it goes).
+        QVERIFY(app->showPdf(hash, QStringLiteral("app.pdf")));
+        app->pdfViewer()->view()->viewport()->repaint();
+        app.reset();
+        QTRY_COMPARE(platform::PdfDocument::liveCount(), docs);
     }
 
     // ------------------------------------------------------- scheduler ----
