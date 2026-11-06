@@ -114,6 +114,19 @@ media bytes = cached pixels + reserved in-flight working sets + display copies
     whole 60 s cool-down. Request sizes now follow the *current* budget, so
     during a cool-down images decode at a lower density instead of not at
     all, and owners re-request full density when the cool-down ends.
+- **Cached pixels have a cap of their own, below the budget** (64 MiB of
+  the 128 MiB). The budget bounds the peak: cached pixels plus work in
+  flight. The cap bounds what stays resident once work is done. The headroom
+  between them is for the working sets that come and go, such as a scan's
+  tile (~87 MB reserved) or a photo decode (~46 MB). Pixels on screen are never
+  evicted to meet the cap.
+  - **Measured** (`bench/results/pdf-cache-2026-11-06/`): a 200-page
+    document scrolled at fit width renders the same number of tiles with
+    a 128 MiB or a 64 MiB cache (5,969 / 5,970: a linear pass misses
+    either way), and the plateau drops by the 64 MB of tiles no longer
+    kept. Lowering the *budget* to 64 MiB instead also cut the cache, but a
+    scan's tile no longer fit 75 % of it: scans rendered whole at a lower
+    density (blurry), and photos come close to that line (46 of 48 MB).
 - **No pixel references outlive eviction.** `QImage` shares its pixel data, so
   dropping a cache entry frees nothing while a copy lives elsewhere. So:
   - Blocks store only a cache key. Paint looks the key up and draws, and keeps
@@ -415,6 +428,17 @@ Corrections to the first draft's figures:
     second pass, and closing returns it to 90 MB with the cache empty. What
     a long PDF costs is set by the budget, not by its length. Comparing
     with QtPdf waits for step 5.
+  - **Measured, later** (`footprint -p` at each step,
+    `bench/results/pdf-cache-2026-11-06/`): most of the ~60 MB beside the
+    tiles, and most of what stays after closing, is not the viewer's. The
+    window's backing store grows from one IOSurface buffer (14.7 MB) to three
+    once the view updates every frame, and Qt never releases the third
+    (docs/RELEASE_REPORT.md, "Largest remaining bottleneck"). The bench's own
+    offscreen canvas (13.6 MB) is kept by the allocator after it is freed.
+    The tiles themselves (own mappings) go back to 0.4 MB. Opening, scrolling
+    and closing the 200-page document and the scan 12 times: the footprint
+    after each close levels off within 5 cycles and does not grow after.
+    With the 64 MiB cache cap the plateau is ~64 MB lower.
 
 ## 7. Order of work
 

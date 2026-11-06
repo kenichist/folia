@@ -80,6 +80,7 @@ void BenchDriver::scenarioImages()
                                       "first): footprints are inflated by the encoder's freed memory"));
     const QString counterName = platform::sampleSelf().counterName;
     m_extra.insert(QStringLiteral("media_budget_bytes"), double(media->budget().base()));
+    m_extra.insert(QStringLiteral("media_cache_max_bytes"), double(media->config().cacheMaxBytes));
 
     auto footprint = [] { return double(platform::sampleSelf().footprintBytes); };
     auto idleWindow = [&](const QString &prefix) {

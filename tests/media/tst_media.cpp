@@ -337,6 +337,35 @@ private slots:
         QTRY_VERIFY(m.contains(ahead.key));
     }
 
+    void cacheCapEvictsLeastRecentButNeverWhatIsShown()
+    {
+        MediaService::Config cfg;
+        cfg.budgetBytes = 4000;
+        cfg.cacheMaxBytes = 1000; // cached pixels; the rest is headroom for work in flight
+        MediaService m(cfg);
+        m.setDecoder(instantDecoder());
+        int owner = 0;
+        auto r = [](const char *name) { return req(QString::fromLatin1(name), 100, 1, 0, 400); }; // 400 B bitmaps
+        // Shown one after another: the cap keeps the two most recent.
+        for (const char *n : {"a", "b", "c"}) {
+            m.setWanted(&owner, {r(n)});
+            QTRY_VERIFY(m.contains(r(n).key));
+        }
+        QCOMPARE(m.cacheEntries(), 2);
+        QVERIFY(!m.contains(r("a").key));
+        QCOMPARE(m.cacheBytes(), qint64(800));
+        // A visible set over the cap stays whole: what is on screen is not evicted.
+        m.setWanted(&owner, {r("d"), r("e"), r("f")});
+        QTRY_VERIFY(m.contains(r("d").key) && m.contains(r("e").key) && m.contains(r("f").key));
+        QCOMPARE(m.cacheBytes(), qint64(1200));
+        QVERIFY(!m.contains(r("b").key) && !m.contains(r("c").key));
+        // Work whose estimate is over the cap but within the budget still runs.
+        const MediaService::Request big = req(QStringLiteral("big"), 100, 1, 0, 3000);
+        m.setWanted(&owner, {big});
+        QTRY_VERIFY(m.contains(big.key));
+        QVERIFY(m.cacheBytes() <= 1000);
+    }
+
     void memoryPressureTrimsAndCoolsDown()
     {
         MediaService::Config cfg;

@@ -1,0 +1,49 @@
+======================================================================
+Folia [57172]: 64-bit    Footprint: 112 MB (16384 bytes per page)
+======================================================================
+
+  Dirty      Clean  Reclaimable    Regions    Category
+    ---        ---          ---        ---    ---
+  55 MB        0 B          0 B         10    IOSurface
+  27 MB        0 B          0 B         22    MALLOC_SMALL
+  21 MB        0 B      3696 KB          7    MALLOC_LARGE
+1749 KB        0 B          0 B        865    __DATA_DIRTY
+1483 KB        0 B          0 B        978    __DATA
+1056 KB        0 B        48 KB         12    MALLOC metadata
+ 755 KB        0 B          0 B          1    page table
+ 704 KB        0 B          0 B         36    stack
+ 704 KB        0 B          0 B          6    CoreUI image data
+ 400 KB        0 B          0 B         27    untagged (VM_ALLOCATE)
+ 320 KB     816 KB          0 B         32    mapped file
+ 320 KB        0 B          0 B          1    libdispatch
+ 304 KB        0 B          0 B          1    MALLOC_TINY
+ 270 KB        0 B          0 B        625    __AUTH
+ 265 KB        0 B          0 B       2513    unused dyld shared cache area
+ 240 KB        0 B          0 B         15    CoreAnimation
+ 185 KB     400 KB          0 B       1041    __DATA_CONST
+ 128 KB        0 B          0 B          1    Accelerate image backing stores
+ 112 KB        0 B          0 B       1008    __AUTH_CONST
+ 112 KB        0 B          0 B          2    __TPRO_CONST
+  96 KB        0 B          0 B          6    ColorSync
+  64 KB        0 B          0 B          2    IOAccelerator
+  64 KB        0 B          0 B          2    Owned physical footprint (unmapped)
+  48 KB        0 B          0 B          1    dyld private memory
+  48 KB        0 B          0 B          9    IOKit
+  32 KB        0 B          0 B          1    Activity Tracing
+  32 KB        0 B          0 B          2    CoreGraphics
+  16 KB        0 B          0 B          1    CoreServices
+  16 KB        0 B          0 B          1    IOAccelerator (graphics)
+  16 KB        0 B          0 B          1    tag 22
+  16 KB        0 B          0 B          1    os_alloc_once
+  16 KB        0 B          0 B          1    Foundation
+    0 B    7120 KB          0 B       1064    __TEXT
+    0 B        0 B          0 B         32    __LINKEDIT
+    0 B        0 B          0 B          1    __FONT_DATA
+    0 B        0 B          0 B          1    __CTF
+    ---        ---          ---        ---    ---
+ 112 MB    8336 KB      3744 KB       8331    TOTAL
+
+Auxiliary data:
+    phys_footprint: 112 MB
+    phys_footprint_peak: 255 MB
+

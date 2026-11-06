@@ -521,11 +521,13 @@ void MediaService::finished(const MediaKey &key, QImage image, const QString &er
         instr::add(instr::MediaJobsDiscarded);
         instr::add(instr::MediaCpuUsDiscarded, cpuUs);
         const bool orphan = (key.kind == MediaKey::PdfPage || key.kind == MediaKey::PdfTile) && !viewerWants(key.hash);
-        if (!orphan && m_budget.used() + image.sizeInBytes() <= m_budget.limit())
+        if (!orphan && m_budget.used() + image.sizeInBytes() <= m_budget.limit()
+            && m_budget.cached() + image.sizeInBytes() <= m_cfg.cacheMaxBytes)
             insert(key, std::move(image), /*asLeastRecent=*/true);
     } else {
         const qint64 bytes = image.sizeInBytes();
-        if (const qint64 over = m_budget.overBy(bytes))
+        const qint64 over = qMax(m_budget.overBy(bytes), m_budget.cached() + bytes - m_cfg.cacheMaxBytes);
+        if (over > 0)
             evictUnwanted(over, &key);
         insert(key, std::move(image), false);
         emit arrived(key);
