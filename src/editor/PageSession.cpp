@@ -4,6 +4,7 @@
 #include "editor/EditorContext.h"
 #include "editor/Links.h"
 #include "editor/VirtualLayout.h"
+#include "storage/AttachmentStore.h"
 
 #include <QTextDocument>
 #include <QTextFragment>
@@ -41,6 +42,10 @@ PageSession::~PageSession()
     emit closing();
     m_tracker.detached = true; // block deletions during teardown are not edits
     delete m_doc;
+    // The undo stack is gone: what only it referenced may now be collected.
+    if (m_ctx->attachments)
+        for (const QString &h : std::as_const(m_pinned))
+            m_ctx->attachments->unpin(h);
 }
 
 LineRole PageSession::roleOf(const QTextBlock &b)
@@ -69,6 +74,20 @@ QTextBlock PageSession::segmentHead(QTextBlock b)
     return b;
 }
 
+QTextCharFormat PageSession::imageFormat(const QString &hash, const QString &alt)
+{
+    QTextCharFormat f;
+    f.setObjectType(kImageObjectType);
+    f.setProperty(kAttachmentHashProperty, hash);
+    f.setProperty(kImageAltProperty, alt);
+    return f;
+}
+
+QString PageSession::imageHash(const QTextBlock &b)
+{
+    return b.begin().fragment().charFormat().property(kAttachmentHashProperty).toString();
+}
+
 QTextCharFormat PageSession::pageLinkFormat(PageId target)
 {
     QTextCharFormat f;
@@ -92,8 +111,13 @@ LineRole PageSession::classify(const QTextBlock &b, int carry) const
         return LineRole::MathSingle;
     if (t.size() == 1 && t[0] == kObj) {
         const QTextFragment f = b.begin().fragment();
-        if (f.isValid() && f.charFormat().objectType() == kPageLinkObjectType)
-            return LineRole::PageLink;
+        if (f.isValid()) {
+            const int ot = f.charFormat().objectType();
+            if (ot == kPageLinkObjectType)
+                return LineRole::PageLink;
+            if (ot == kImageObjectType)
+                return LineRole::Image;
+        }
     }
     return LineRole::Para;
 }
@@ -141,8 +165,9 @@ void PageSession::load(const PageContent &pc)
     // 1. Flatten records into lines, remembering the id of each line.
     std::vector<BlockId> ids;
     QStringList lines;
-    struct Link { int line; PageId target; };
-    std::vector<Link> links;
+    // Object lines (child-page links, images) need their char format.
+    struct ObjLine { int line; QTextCharFormat format; };
+    std::vector<ObjLine> objects;
     // Named web links: lines are stored as Markdown `[label](url)`; the
     // document holds the label with an anchor format.
     struct WebLinks { int line; QVector<links::Span> spans; };
@@ -154,6 +179,17 @@ void PageSession::load(const PageContent &pc)
         m_savedIds.insert(r.id);
         switch (r.kind) {
         case BlockKind::Text: {
+            QString hash, alt;
+            if (attachments::parseImageMarkdown(r.text, &hash, &alt)) {
+                objects.push_back({int(lines.size()), imageFormat(hash, alt)});
+                lines.push_back(QString(kObj));
+                ids.push_back(r.id);
+                if (m_ctx->attachments && !m_pinned.contains(hash)) {
+                    m_ctx->attachments->pin(hash);
+                    m_pinned.insert(hash);
+                }
+                break;
+            }
             const QStringList parts = r.text.split(QLatin1Char('\n'));
             for (int i = 0; i < parts.size(); ++i) {
                 QVector<links::Span> spans;
@@ -195,7 +231,7 @@ void PageSession::load(const PageContent &pc)
             }
             break;
         case BlockKind::PageLink:
-            links.push_back({int(lines.size()), r.target});
+            objects.push_back({int(lines.size()), pageLinkFormat(r.target)});
             lines.push_back(QString(kObj));
             ids.push_back(r.id);
             break;
@@ -223,14 +259,14 @@ void PageSession::load(const PageContent &pc)
                 chunk += QLatin1Char('\n');
             chunk += lines[i];
         }
-        c.insertText(chunk);
+        c.insertText(chunk, QTextCharFormat()); // never the previous object line's format
         next = end;
     };
-    for (const Link &l : links) {
+    for (const ObjLine &l : objects) {
         flushTo(l.line);
         if (l.line > 0)
-            c.insertText(QStringLiteral("\n"));
-        c.insertText(QString(kObj), pageLinkFormat(l.target));
+            c.insertText(QStringLiteral("\n"), QTextCharFormat());
+        c.insertText(QString(kObj), l.format);
         next = l.line + 1;
     }
     flushTo(int(lines.size()));
@@ -300,8 +336,26 @@ void PageSession::onContentsChange(int pos, int removed, int added)
             break;
     }
     propagateRoles(first, last);
+    pinImages(first, last);
     ++m_rev;
     emit revisionChanged(m_rev);
+}
+
+void PageSession::pinImages(QTextBlock first, QTextBlock last)
+{
+    if (!m_ctx->attachments)
+        return;
+    for (QTextBlock b = first; b.isValid(); b = b.next()) {
+        if (roleOf(b) == LineRole::Image) {
+            const QString h = imageHash(b);
+            if (!h.isEmpty() && !m_pinned.contains(h)) {
+                m_ctx->attachments->pin(h);
+                m_pinned.insert(h);
+            }
+        }
+        if (b == last)
+            break;
+    }
 }
 
 void PageSession::propagateRoles(QTextBlock first, QTextBlock last)
@@ -501,6 +555,11 @@ SaveBatch PageSession::takeSaveBatch()
                 if (role == LineRole::PageLink) {
                     r.kind = BlockKind::PageLink;
                     r.target = b.begin().fragment().charFormat().property(kPageLinkTargetProperty).toLongLong();
+                } else if (role == LineRole::Image) {
+                    const QTextCharFormat f = b.begin().fragment().charFormat();
+                    r.kind = BlockKind::Text;
+                    r.text = attachments::imageMarkdown(f.property(kAttachmentHashProperty).toString(),
+                                                        f.property(kImageAltProperty).toString());
                 } else if (role == LineRole::MathSingle) {
                     r.kind = BlockKind::Math;
                     r.lang = QStringLiteral("single");
@@ -553,11 +612,16 @@ Revision PageSession::applyEdit(const Edit &e)
         c.setPosition(b.position() + qBound(0, e.offset, b.length() - 1));
         c.insertText(e.text);
         break;
-    case Edit::Op::ReplaceBlockText:
+    case Edit::Op::ReplaceBlockText: {
         c.setPosition(b.position());
         c.setPosition(b.position() + b.length() - 1, QTextCursor::KeepAnchor);
-        c.insertText(e.text);
+        QString hash, alt;
+        if (attachments::parseImageMarkdown(e.text, &hash, &alt))
+            c.insertText(QString(kObj), imageFormat(hash, alt));
+        else
+            c.insertText(e.text, QTextCharFormat()); // never inherit an object format
         break;
+    }
     case Edit::Op::InsertBlock: {
         if (!b.isValid())
             b = m_doc->lastBlock();
@@ -571,7 +635,14 @@ Revision PageSession::applyEdit(const Edit &e)
         }
         const BlockRecord &r = e.record;
         switch (r.kind) {
-        case BlockKind::Text: c.insertText(r.text); break;
+        case BlockKind::Text: {
+            QString hash, alt;
+            if (attachments::parseImageMarkdown(r.text, &hash, &alt))
+                c.insertText(QString(kObj), imageFormat(hash, alt));
+            else
+                c.insertText(r.text, QTextCharFormat());
+            break;
+        }
         case BlockKind::Code: c.insertText(kFence + r.lang + QLatin1Char('\n') + r.text + QLatin1Char('\n') + kFence); break;
         case BlockKind::Math: c.insertText(kMath + QLatin1Char('\n') + r.text + QLatin1Char('\n') + kMath); break;
         case BlockKind::PageLink: c.insertText(QString(kObj), pageLinkFormat(r.target)); break;
@@ -603,6 +674,84 @@ Revision PageSession::applyEdit(const Edit &e)
     }
     c.endEditBlock();
     return m_rev != before ? m_rev : m_rev;
+}
+
+int PageSession::beginImport(int position, int count)
+{
+    QTextBlock b = m_doc->findBlock(position);
+    if (!b.isValid())
+        b = m_doc->lastBlock();
+    // Never split a code/math segment: images go after its closing line.
+    const LineRole r = roleOf(b);
+    if (roleIsCodeSegment(r) || roleIsMathSegment(r)) {
+        for (QTextBlock x = b; x.isValid(); x = x.next()) {
+            b = x;
+            const LineRole xr = roleOf(x);
+            if (xr == LineRole::CodeClose || xr == LineRole::MathClose)
+                break;
+        }
+    }
+    BlockData *d = ensureData(b);
+    ++d->pendingImports;
+    if (m_layout)
+        m_layout->relayoutBlock(b);
+    ImportBatch batch;
+    batch.anchor = d->id;
+    batch.remaining = qMax(1, count);
+    batch.replaceEmpty = b.length() <= 1 && roleOf(b) == LineRole::Para;
+    const int id = m_nextImport++;
+    m_imports.insert(id, batch);
+    return id;
+}
+
+void PageSession::finishImport(int id, bool ok, const AttachmentInfo &info, const QString &alt)
+{
+    auto it = m_imports.find(id);
+    if (it == m_imports.end())
+        return;
+    ImportBatch &batch = *it;
+    --batch.remaining;
+    QTextBlock a = findBlockById(batch.anchor);
+    if (a.isValid()) {
+        BlockData *d = dataOf(a);
+        if (d && d->pendingImports > 0)
+            --d->pendingImports;
+        if (m_layout)
+            m_layout->relayoutBlock(a);
+    }
+    if (ok) {
+        const QString md = attachments::imageMarkdown(info.hash, alt);
+        Edit e;
+        e.block = batch.anchor;
+        e.text = md;
+        e.record.kind = BlockKind::Text;
+        e.record.text = md;
+        QTextBlock inserted;
+        if (a.isValid() && batch.replaceEmpty && a.length() <= 1 && roleOf(a) == LineRole::Para) {
+            e.op = Edit::Op::ReplaceBlockText;
+            applyEdit(e);
+            inserted = findBlockById(batch.anchor);
+        } else {
+            e.op = Edit::Op::InsertBlock;
+            e.after = true;
+            applyEdit(e);
+            inserted = a.isValid() ? a.next() : m_doc->lastBlock();
+        }
+        batch.replaceEmpty = false;
+        if (inserted.isValid()) {
+            batch.anchor = ensureData(inserted)->id; // keep the batch in order
+            a = inserted;
+        }
+    }
+    if (batch.remaining > 0) {
+        if (a.isValid()) {
+            ++ensureData(a)->pendingImports;
+            if (m_layout)
+                m_layout->relayoutBlock(a);
+        }
+    } else {
+        m_imports.erase(it);
+    }
 }
 
 QVector<PageId> PageSession::linkTargets() const

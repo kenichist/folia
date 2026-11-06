@@ -34,6 +34,21 @@ enum Counter : int {
     WidgetsCreated,
     WidgetsReused,
     PaintEvents,
+    // Media (docs/ATTACHMENTS.md §6). Gauges are set, counters only grow.
+    MediaBudgetBytes,      // gauge: current budget (lowered during a pressure cool-down)
+    MediaReservedBytes,    // gauge: reserved for jobs in flight
+    MediaCacheBytes,       // gauge: decoded pixels held by the cache
+    ImageDecodes,
+    ImageCacheHits,
+    PdfRenders,
+    PdfTiles,
+    MediaJobsDroppedQueued, // removed from the queue before they started
+    MediaJobsDiscarded,     // finished, but nobody wanted the result any more
+    MediaCpuUsDiscarded,    // worker CPU time spent on those
+    MediaBudgetWaits,       // jobs that had to wait for budget
+    MediaTooLarge,          // jobs refused: estimate exceeds the whole budget
+    AttachmentImports,
+    AttachmentGcDeleted,
     CounterCount
 };
 

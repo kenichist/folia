@@ -23,7 +23,7 @@ namespace folia {
 namespace {
 
 constexpr qint64 kGap = 1 << 16;
-constexpr int kSchemaVersion = 1;
+constexpr int kSchemaVersion = 2;
 
 const char *kSchemaV1 = R"SQL(
 CREATE TABLE IF NOT EXISTS pages(
@@ -57,7 +57,52 @@ CREATE INDEX IF NOT EXISTS blocks_by_page ON blocks(page_id, ord);
 CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 )SQL";
 
+// v2: attachment metadata (docs/ATTACHMENTS.md §1). The originals are files
+// named by hash; width/height are after the orientation transform.
+const char *kSchemaV2 = R"SQL(
+CREATE TABLE IF NOT EXISTS attachments(
+  hash TEXT PRIMARY KEY,
+  mime TEXT NOT NULL DEFAULT '',
+  bytes INTEGER NOT NULL DEFAULT 0,
+  width INTEGER NOT NULL DEFAULT 0,
+  height INTEGER NOT NULL DEFAULT 0,
+  orientation INTEGER NOT NULL DEFAULT 1,
+  pages INTEGER NOT NULL DEFAULT 0,
+  page_geom BLOB,
+  created_at INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;
+)SQL";
+
 qint64 nowMs() { return QDateTime::currentMSecsSinceEpoch(); }
+
+AttachmentInfo readAttachment(const sql::Stmt &s)
+{
+    // Column order: hash, mime, bytes, width, height, orientation, pages
+    AttachmentInfo a;
+    a.hash = s.text(0);
+    a.mime = s.text(1);
+    a.bytes = s.i64(2);
+    a.width = s.i32(3);
+    a.height = s.i32(4);
+    a.orientation = s.i32(5);
+    a.pages = s.i32(6);
+    return a;
+}
+
+QVector<AttachmentInfo> queryAttachments(sqlite3 *db, const QStringList &hashes)
+{
+    QVector<AttachmentInfo> out;
+    if (hashes.isEmpty())
+        return out;
+    sql::Stmt s(db, "SELECT hash, mime, bytes, width, height, orientation, pages FROM attachments WHERE hash=?1");
+    for (const QString &h : hashes) {
+        s.bind(1, h);
+        if (s.step() == SQLITE_ROW)
+            out.push_back(readAttachment(s));
+        s.reset();
+    }
+    return out;
+}
 
 bool applyPragmas(sqlite3 *db, bool writer, QString *error)
 {
@@ -154,7 +199,7 @@ std::vector<bool> lisKeep(const std::vector<qint64> &vals)
 // ============================================================== Writer ====
 struct Store::Writer {
     struct Job {
-        enum Type { Save, Create, Move, Trash, Setting } type = Save;
+        enum Type { Save, Create, Move, Trash, Setting, Custom } type = Save;
         SaveBatch batch;
         PageMeta meta;   // Create
         int index = -1;  // Create/Move
@@ -165,6 +210,8 @@ struct Store::Writer {
         std::function<void(MoveResult, PageId)> moveDone;
         std::function<void(bool, PageId)> trashDone;
         QString key, value;
+        std::function<int(sqlite3 *)> custom;
+        std::function<void()> customDone;
         int attempts = 0;
     };
 
@@ -596,6 +643,7 @@ struct Store::Writer {
             case Job::Move: rc = execMove(*job, &moveRes, &oldParent); break;
             case Job::Trash: rc = execTrash(*job); break;
             case Job::Setting: rc = execSetting(*job); break;
+            case Job::Custom: rc = job->custom ? job->custom(db) : SQLITE_OK; break;
             }
             if (rc == SQLITE_OK) {
                 if (job->type == Job::Save)
@@ -707,6 +755,16 @@ struct Store::Writer {
         }
         case Job::Setting:
             break;
+        case Job::Custom:
+            if (job->customDone) {
+                auto done = job->customDone;
+                QPointer<QObject> ctx = job->ctx;
+                QMetaObject::invokeMethod(s, [done, ctx] {
+                    if (ctx)
+                        done();
+                }, Qt::QueuedConnection);
+            }
+            break;
         }
     }
 };
@@ -766,6 +824,7 @@ struct Store::Reader {
 Store::Store(QObject *parent) : QObject(parent)
 {
     qRegisterMetaType<StorageError>();
+    qRegisterMetaType<AttachmentInfo>();
 }
 
 Store::~Store()
@@ -820,6 +879,19 @@ bool Store::open(const Options &opt, QString *error)
             sql::execAll(wdb, "ROLLBACK");
             if (error)
                 *error = tr("Could not initialise workspace: %1").arg(merr);
+            sqlite3_close(wdb);
+            return false;
+        }
+    }
+    if (version < 2) {
+        QString merr;
+        if (sql::execAll(wdb, "BEGIN IMMEDIATE", &merr) != SQLITE_OK
+            || sql::execAll(wdb, kSchemaV2, &merr) != SQLITE_OK
+            || sql::execAll(wdb, "PRAGMA user_version=2", &merr) != SQLITE_OK
+            || sql::execAll(wdb, "COMMIT", &merr) != SQLITE_OK) {
+            sql::execAll(wdb, "ROLLBACK");
+            if (error)
+                *error = tr("Could not upgrade workspace: %1").arg(merr);
             sqlite3_close(wdb);
             return false;
         }
@@ -919,6 +991,7 @@ void Store::openPage(PageId id, QObject *ctx, std::function<void(PageContent)> d
                 pc.selection.scrollY = p.i32(7);
             }
         }
+        QStringList hashes;
         if (pc.found) {
             sql::Stmt b(db, "SELECT id, kind, lang, text, target FROM blocks WHERE page_id=?1 ORDER BY ord");
             b.bind(1, id);
@@ -929,10 +1002,17 @@ void Store::openPage(PageId id, QObject *ctx, std::function<void(PageContent)> d
                 r.lang = b.text(2);
                 r.text = b.text(3);
                 r.target = b.i64(4);
+                QString hash;
+                if (r.kind == BlockKind::Text && attachments::parseImageMarkdown(r.text, &hash, nullptr))
+                    hashes << hash;
                 pc.blocks.push_back(std::move(r));
             }
         }
-        QMetaObject::invokeMethod(this, [guard, done, pc = std::move(pc)]() mutable {
+        hashes.removeDuplicates();
+        QVector<AttachmentInfo> infos = queryAttachments(db, hashes);
+        QMetaObject::invokeMethod(this, [this, guard, done, pc = std::move(pc), infos = std::move(infos)]() mutable {
+            if (!infos.isEmpty())
+                emit attachmentsLoaded(infos); // before the page's layout asks for sizes
             if (guard)
                 done(std::move(pc));
         }, Qt::QueuedConnection);
@@ -1119,6 +1199,45 @@ void Store::trashPage(PageId id, const QSet<PageId> &held, QObject *ctx, std::fu
     job->ctx = ctx;
     job->trashDone = std::move(done);
     m_writer->enqueue(std::move(job));
+}
+
+void Store::writeJob(std::function<int(sqlite3 *)> fn, QObject *ctx, std::function<void()> done)
+{
+    if (!m_open)
+        return; // closed (shutdown): nothing may reach the writer any more
+    auto job = std::make_shared<Writer::Job>();
+    job->type = Writer::Job::Custom;
+    job->custom = std::move(fn);
+    job->ctx = ctx;
+    job->customDone = std::move(done);
+    m_writer->enqueue(std::move(job));
+}
+
+void Store::putAttachment(const AttachmentInfo &a)
+{
+    writeJob([a](sqlite3 *db) {
+        sql::Stmt s(db, "INSERT INTO attachments(hash, mime, bytes, width, height, orientation, pages, created_at) "
+                        "VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(hash) DO UPDATE SET "
+                        "mime=excluded.mime, bytes=excluded.bytes, width=excluded.width, height=excluded.height, "
+                        "orientation=excluded.orientation, pages=excluded.pages");
+        s.bind(1, a.hash).bind(2, a.mime).bind(3, a.bytes).bind(4, a.width).bind(5, a.height)
+            .bind(6, a.orientation).bind(7, a.pages).bind(8, nowMs());
+        return s.exec() ? SQLITE_OK : s.lastError();
+    });
+}
+
+void Store::attachmentInfo(const QStringList &hashes, QObject *ctx, std::function<void(QVector<AttachmentInfo>)> done)
+{
+    if (!m_open)
+        return;
+    QPointer<QObject> guard(ctx);
+    m_reader->post([this, hashes, guard, done](sqlite3 *db) {
+        QVector<AttachmentInfo> infos = queryAttachments(db, hashes);
+        QMetaObject::invokeMethod(this, [guard, done, infos = std::move(infos)]() mutable {
+            if (guard)
+                done(std::move(infos));
+        }, Qt::QueuedConnection);
+    });
 }
 
 QString Store::setting(const QString &key, const QString &def) const

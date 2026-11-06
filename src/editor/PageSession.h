@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/Api.h"
+#include "core/Attachments.h"
 #include "editor/BlockData.h"
 
 #include <QHash>
@@ -61,6 +62,19 @@ public:
     qint64 estimatedBytes() const;
     int lineCount() const;
 
+    // Images (docs/ATTACHMENTS.md). An import shows a placeholder under the
+    // line at `position` (after a code/math block, never inside one) until
+    // each image's file is durable; finishImport() then inserts its
+    // `![alt](attachment:<hash>)` line through applyEdit(). Returns a batch id.
+    int beginImport(int position, int count);
+    void finishImport(int batch, bool ok, const AttachmentInfo &info, const QString &alt);
+    bool hasPendingImports() const { return !m_imports.isEmpty(); }
+    // Hashes of every image this session has shown since it opened: they
+    // stay pinned (undo could bring them back) until the session closes.
+    const QSet<QString> &pinnedAttachments() const { return m_pinned; }
+    static QTextCharFormat imageFormat(const QString &hash, const QString &alt);
+    static QString imageHash(const QTextBlock &b);
+
     // Child page links (page link lines).
     QVector<PageId> linkTargets() const;
     void appendPageLink(PageId target);
@@ -95,6 +109,7 @@ private:
     BlockData *ensureData(QTextBlock &b);
     LineRole classify(const QTextBlock &b, int carry) const;
     QTextBlock findBlockById(BlockId id) const;
+    void pinImages(QTextBlock first, QTextBlock last);
 
     PageId m_id;
     PageId m_parent = 0;
@@ -117,6 +132,14 @@ private:
     int m_anchor = 0;
     int m_position = 0;
     int m_scrollY = 0;
+    struct ImportBatch {
+        BlockId anchor = 0;
+        int remaining = 0;
+        bool replaceEmpty = false; // the first image takes over an empty line
+    };
+    QHash<int, ImportBatch> m_imports;
+    int m_nextImport = 1;
+    QSet<QString> m_pinned;
 };
 
 } // namespace folia

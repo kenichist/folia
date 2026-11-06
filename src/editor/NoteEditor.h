@@ -9,6 +9,7 @@
 
 #include "core/Api.h"
 #include "editor/PageSession.h"
+#include "storage/AttachmentStore.h"
 
 #include <QElapsedTimer>
 #include <QPointer>
@@ -57,6 +58,15 @@ public:
     // label typed into the form). False (with a reason) where links cannot go.
     bool editLink(QString *why = nullptr);
     bool isEditingLink() const;
+
+    // Images (docs/ATTACHMENTS.md): imported on a worker, inserted after the
+    // caret's line once each file is stored. Paste and drag-and-drop go
+    // through insertFromMimeData; this is also what the file picker uses.
+    bool importImages(const QList<AttachmentStore::Source> &sources);
+    // Edit ▸ Insert Image…: a file picker. False when nothing was chosen.
+    bool chooseImages();
+    // The image sources a clipboard or drop carries (empty: treat as text).
+    static QList<AttachmentStore::Source> imageSources(const QMimeData *data);
 
 signals:
     void openPageRequested(folia::PageId id);

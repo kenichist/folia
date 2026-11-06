@@ -1,5 +1,6 @@
 #include "editor/NoteEditor.h"
 
+#include "core/Attachments.h"
 #include "core/Instrument.h"
 #include "editor/EditorContext.h"
 #include "editor/LinkPopups.h"
@@ -12,10 +13,13 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QKeyEvent>
 #include <QMimeData>
 #include <QPainter>
 #include <QScrollBar>
+#include <QStandardPaths>
 #include <QStyleHints>
 #include <QTextBlock>
 #include <QTextDocument>
@@ -28,6 +32,15 @@ namespace folia {
 namespace {
 
 LineRole roleAt(const QTextBlock &b) { return PageSession::roleOf(b); }
+
+bool isImageFile(const QString &path)
+{
+    static const QStringList ext = {QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+                                    QStringLiteral("heic"), QStringLiteral("heif"), QStringLiteral("webp"),
+                                    QStringLiteral("gif"), QStringLiteral("tif"), QStringLiteral("tiff"),
+                                    QStringLiteral("bmp")};
+    return ext.contains(QFileInfo(path).suffix().toLower());
+}
 
 PageId linkTarget(const QTextBlock &b)
 {
@@ -143,6 +156,8 @@ void NoteEditor::storeViewState()
 
 void NoteEditor::detachSession()
 {
+    if (m_session && m_session->layout())
+        m_session->layout()->releaseMedia(); // no longer shown: no decodes for it
     closeLinkEditor();
     if (m_bubble)
         m_bubble->hide();
@@ -162,8 +177,11 @@ void NoteEditor::setSession(PageSession *s)
     if (m_session == s)
         return;
     storeViewState();
-    if (m_session)
+    if (m_session) {
         disconnect(m_session, &PageSession::closing, this, nullptr);
+        if (m_session->layout())
+            m_session->layout()->releaseMedia(); // no longer shown: no decodes for it
+    }
     m_session = s;
     if (!s) {
         detachSession();
@@ -237,10 +255,11 @@ bool NoteEditor::handleSmartKeys(QKeyEvent *e)
         return copyCodeBlockAtCursor();
 
     if ((key == Qt::Key_Return || key == Qt::Key_Enter) && plain && !c.hasSelection()) {
-        if (role == LineRole::PageLink) {
+        if (roleIsObjectLine(role)) {
             c.movePosition(QTextCursor::EndOfBlock);
-            c.insertText(QStringLiteral("\n"));
+            c.insertText(QStringLiteral("\n"), QTextCharFormat());
             setTextCursor(c);
+            setCurrentCharFormat(QTextCharFormat());
             return true;
         }
         if ((role == LineRole::CodeOpen || role == LineRole::MathOpen) && c.atBlockEnd()) {
@@ -314,14 +333,14 @@ bool NoteEditor::handleSmartKeys(QKeyEvent *e)
     }
     if (key == Qt::Key_Backspace && plain && !c.hasSelection() && c.atBlockStart()) {
         QTextBlock prev = b.previous();
-        if (prev.isValid() && roleAt(prev) == LineRole::PageLink) {
+        if (prev.isValid() && roleIsObjectLine(roleAt(prev))) {
             QTextCursor d(document());
             d.setPosition(prev.position());
             d.setPosition(b.position(), QTextCursor::KeepAnchor);
-            d.removeSelectedText(); // remove the whole link line, keep this one
+            d.removeSelectedText(); // remove the whole link/image line, keep this one
             return true;
         }
-        if (role == LineRole::PageLink && prev.isValid()) {
+        if (roleIsObjectLine(role) && prev.isValid()) {
             c.setPosition(prev.position() + prev.length() - 1);
             setTextCursor(c);
             return true;
@@ -329,7 +348,7 @@ bool NoteEditor::handleSmartKeys(QKeyEvent *e)
     }
     if (key == Qt::Key_Delete && plain && !c.hasSelection() && c.atBlockEnd()) {
         QTextBlock next = b.next();
-        if (next.isValid() && roleAt(next) == LineRole::PageLink) {
+        if (next.isValid() && roleIsObjectLine(roleAt(next))) {
             QTextCursor d(document());
             d.setPosition(b.position() + b.length() - 1);
             d.setPosition(next.position() + next.length() - 1, QTextCursor::KeepAnchor);
@@ -344,12 +363,13 @@ bool NoteEditor::handleSmartKeys(QKeyEvent *e)
             return true;
         }
     }
-    if (role == LineRole::PageLink && !(mods & Qt::ControlModifier) && !e->text().isEmpty()
+    if (roleIsObjectLine(role) && !(mods & Qt::ControlModifier) && !e->text().isEmpty()
         && e->text().at(0).isPrint()) {
-        // Typing on a link line starts a new paragraph after it.
+        // Typing on a link or image line starts a new paragraph after it.
         c.movePosition(QTextCursor::EndOfBlock);
-        c.insertText(QStringLiteral("\n"));
+        c.insertText(QStringLiteral("\n"), QTextCharFormat());
         setTextCursor(c);
+        setCurrentCharFormat(QTextCharFormat()); // never type into an object format
         return false;
     }
     return false;
@@ -644,6 +664,10 @@ QString NoteEditor::plainTextForRange(int from, int to) const
         if (roleAt(b) == LineRole::PageLink) {
             const QString title = m_ctx->titleOf ? m_ctx->titleOf(linkTarget(b)) : QString();
             out << QStringLiteral("[[%1]]").arg(title.isEmpty() ? QStringLiteral("Untitled") : title);
+        } else if (roleAt(b) == LineRole::Image) {
+            const QTextCharFormat f = b.begin().fragment().charFormat();
+            out << attachments::imageMarkdown(f.property(kAttachmentHashProperty).toString(),
+                                              f.property(kImageAltProperty).toString());
         } else {
             QString t = links::blockSource(b, s, qMax(s, e)); // named links copy as [label](url)
             t.remove(QChar::ObjectReplacementCharacter);
@@ -665,11 +689,99 @@ QMimeData *NoteEditor::createMimeDataFromSelection() const
 
 bool NoteEditor::canInsertFromMimeData(const QMimeData *source) const
 {
-    return source->hasText();
+    return source->hasText() || (m_ctx->attachments && !imageSources(source).isEmpty());
+}
+
+QList<AttachmentStore::Source> NoteEditor::imageSources(const QMimeData *m)
+{
+    QList<AttachmentStore::Source> out;
+    if (!m)
+        return out;
+    // Files (Finder copy, drag-and-drop): streamed from disk by the worker.
+    if (m->hasUrls()) {
+        for (const QUrl &u : m->urls())
+            if (u.isLocalFile() && isImageFile(u.toLocalFile())) {
+                AttachmentStore::Source s;
+                s.path = u.toLocalFile();
+                s.name = QFileInfo(s.path).completeBaseName();
+                out << s;
+            }
+        if (!out.isEmpty())
+            return out;
+    }
+    // Pixels on the clipboard (screenshots, "Copy Image"). Text wins when the
+    // clipboard also carries real text (apps often add a picture of it).
+    if (!m->hasImage())
+        return out;
+    const QString text = m->text().trimmed();
+    if (!text.isEmpty() && !links::looksLikeUrl(text))
+        return out;
+    AttachmentStore::Source s;
+    for (const char *fmt : {"image/png", "image/jpeg", "image/heic", "image/gif", "image/webp", "image/tiff"})
+        if (m->hasFormat(QLatin1String(fmt))) {
+            s.bytes = m->data(QLatin1String(fmt)); // as encoded: no decode, no re-encode
+            break;
+        }
+    if (s.bytes.isEmpty())
+        s.image = qvariant_cast<QImage>(m->imageData()); // encoded to PNG on the worker
+    if (!s.bytes.isEmpty() || !s.image.isNull())
+        out << s;
+    return out;
+}
+
+bool NoteEditor::importImages(const QList<AttachmentStore::Source> &sources)
+{
+    AttachmentStore *as = m_ctx->attachments;
+    if (!m_session || !as || sources.isEmpty() || isReadOnly())
+        return false;
+    QTextCursor c = textCursor();
+    if (c.hasSelection()) {
+        c.removeSelectedText(); // an image pasted over a selection replaces it
+        setTextCursor(c);
+    }
+    PageSession *s = m_session;
+    const int batch = s->beginImport(c.position(), int(sources.size()));
+    QPointer<PageSession> guard(s);
+    for (const AttachmentStore::Source &src : sources) {
+        // Delivered on the session's thread; dropped if the session is gone
+        // (a session with imports in flight is never evicted).
+        as->import(src, s, [guard, batch](AttachmentStore::ImportResult r) {
+            if (!guard)
+                return;
+            if (!r.ok)
+                qWarning("folia: image import failed: %s", qPrintable(r.error));
+            guard->finishImport(batch, r.ok, r.info, r.alt.isEmpty() ? QStringLiteral("image") : r.alt);
+        });
+    }
+    return true;
+}
+
+bool NoteEditor::chooseImages()
+{
+    if (!m_session || !m_ctx->attachments)
+        return false;
+    const QStringList files = QFileDialog::getOpenFileNames(
+        this, tr("Insert Image"), QStandardPaths::writableLocation(QStandardPaths::PicturesLocation),
+        tr("Images (*.png *.jpg *.jpeg *.heic *.heif *.webp *.gif *.tif *.tiff *.bmp)"));
+    QList<AttachmentStore::Source> srcs;
+    for (const QString &f : files) {
+        AttachmentStore::Source s;
+        s.path = f;
+        s.name = QFileInfo(f).completeBaseName();
+        srcs << s;
+    }
+    return importImages(srcs);
 }
 
 void NoteEditor::insertFromMimeData(const QMimeData *source)
 {
+    if (m_ctx->attachments) {
+        const QList<AttachmentStore::Source> imgs = imageSources(source);
+        if (!imgs.isEmpty()) {
+            importImages(imgs);
+            return;
+        }
+    }
     QString t = source->text();
     t.remove(QChar::ObjectReplacementCharacter);
     t.replace(QLatin1String("\r\n"), QLatin1String("\n"));
@@ -704,6 +816,17 @@ void NoteEditor::insertFromMimeData(const QMimeData *source)
         for (int i = 0; i < lines.size(); ++i) {
             if (i > 0)
                 c.insertText(QStringLiteral("\n"), QTextCharFormat());
+            QString imgHash, imgAlt;
+            if (attachments::parseImageMarkdown(lines[i], &imgHash, &imgAlt)) {
+                // A copied image line comes back as an image, always on a line
+                // of its own (a reference is never part of a paragraph).
+                if (!c.atBlockStart())
+                    c.insertText(QStringLiteral("\n"), QTextCharFormat());
+                c.insertText(QString(QChar::ObjectReplacementCharacter), PageSession::imageFormat(imgHash, imgAlt));
+                if (i + 1 == lines.size() && !c.atBlockEnd())
+                    c.insertText(QStringLiteral("\n"), QTextCharFormat());
+                continue;
+            }
             QVector<links::Span> spans;
             const QString shown = links::parseMarkdown(lines[i], &spans);
             int at = 0;

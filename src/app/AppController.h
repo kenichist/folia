@@ -17,7 +17,9 @@ class QStackedWidget;
 
 namespace folia {
 
+class AttachmentStore;
 class CommandRegistry;
+class MediaService;
 class DataContext;
 class EditorContext;
 class EditorPane;
@@ -46,6 +48,8 @@ public:
         int autosaveMaxDirtyMs = 900; // < 1 s maximum dirty interval incl. commit
         qint64 docCacheBytes = 48ll << 20;
         int docCacheEntries = 16;
+        qint64 mediaBudgetBytes = 0;   // 0: MediaService's default
+        QString attachmentsDir;        // default: next to the workspace file
     };
 
     explicit AppController(const Options &opt, QObject *parent = nullptr);
@@ -64,6 +68,8 @@ public:
     DataContext *data() const { return m_data; }
     EditorContext *editorContext() const { return m_ectx; }
     PreviewService *previews() const { return m_previews; }
+    AttachmentStore *attachments() const { return m_attachments; }
+    MediaService *media() const { return m_media; }
     PageSession *activeSession() const { return m_active; }
     PageId currentPage() const;
 
@@ -132,6 +138,8 @@ private:
     Store *m_store = nullptr;
     EditorContext *m_ectx = nullptr;
     PreviewService *m_previews = nullptr;
+    AttachmentStore *m_attachments = nullptr;
+    MediaService *m_media = nullptr;
     DataContext *m_data = nullptr;
     CommandRegistry *m_commands = nullptr;
     EditorPane *m_pane = nullptr;

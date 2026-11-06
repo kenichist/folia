@@ -29,7 +29,8 @@ build-qa/tools/folia_fixturegen --out /tmp/bench/ws.db --seed 42 \
 ```
 
 * The schema comes from the real `folia::Store` (opened and closed once, so
-  the fixture carries exactly the app's migrations, `PRAGMA user_version=1`).
+  the fixture carries exactly the app's migrations, now `PRAGMA user_version=2`
+  with the empty `attachments` table; the 2026-11-04 results were made at 1).
   All rows are then written with raw SQLite in a few large transactions
   (pages in one, blocks in batches of 5,000 pages), `synchronous=OFF`,
   journal mode switched back to WAL at the end.
@@ -141,7 +142,8 @@ Use a fresh copy of the fixture per run for scenarios that write. Scenarios
 (`doc=ordinary|stress|code`, `ime=true|false`, `bgrender=true`), `scroll`,
 `stress`, `presentation`, `idle` (`seconds=60`, `settle_ms`), `navigate`
 (`batches=5`, `per_batch=100`), `integration`, `snapshot`, `recovery`,
-`settings` (`reps=10`, `window=0|1`, `apply=0|1`, `close_settle_ms`; see below).
+`settings` (`reps=10`, `window=0|1`, `apply=0|1`, `close_settle_ms`; see below),
+`images` (`photos=24`, `idle_seconds=20`, `media_dir`, `step=40`; see §6).
 Bench JSON schema:
 
 ```json
@@ -336,7 +338,166 @@ finalizers, plain and with the global `type` shadowed), `ctx_newindex_error`
 metamethod-on-spec/node, memory-at-budget and plain `__gc` probes were
 defects that are now fixed in `src/shell` and are plain assertions.
 
-## 6. Caveats
+## 6. Images (attachments)
+
+What docs/ATTACHMENTS.md §6 asks for, for steps 1–3 (images; PDFs come
+later). Two tools:
+
+```sh
+build/tools/folia_mediaprobe --make /tmp/bench/media 24      # fixtures, out of process
+python3 -I bench/scripts/mediaprobe_matrix.py --probe build/tools/folia_mediaprobe \
+    --media /tmp/bench/media --out mediaprobe.json             # decode cost per format and size
+APP=build/src/Folia.app/Contents/MacOS/Folia
+$APP --home /tmp/bench/img-home --no-watch --bench images --bench-out images.json \
+    --bench-arg media_dir=/tmp/bench/media [--bench-arg photos=24] [--bench-arg idle_seconds=20]
+```
+
+`bench/run_suite.py` writes the fixtures and runs `images` too. The
+fixtures: 24 JPEG photos 4032×3024 (5.3 MB each), one HEIC and one WebP of
+the same size, three 2880×1800 UI-like PNG screenshots, a 1000×40000 PNG
+scrolling screenshot, and a 6000×4000 noisy PNG (36 MB).
+
+`--bench images` measures, in one process:
+
+0. the decode cost of each format, before anything else runs;
+1. idle on a text-only page (the baseline);
+2. building a 30-image page through the real import path;
+3. idle on that page;
+4. one continuous scroll down;
+5. straight back up;
+6. a continuous window resize to a new width, then a small back-and-forth;
+7. a 36 MB PNG imported while 150 characters are typed;
+8. critical memory pressure (`reclaimMemory(true)`), then 300 more scroll
+   frames during the cool-down;
+9. idle again.
+
+Results are top-level "extra" keys (`down_decodes`, `up_cache_hit_rate`,
+`resize_decodes_during_drag`, `pressure_footprint_after_trim`, …) and
+metrics (`images_scroll_*_frame_ms`, `decode_peak_bytes_<format>`,
+`import_typing_input_to_paint_us`, …).
+
+Peaks use rusage's `ri_interval_max_phys_footprint`
+(`platform::intervalPeakFootprint()`). The kernel resets it on every read,
+so it is read once right before and once right after the work.
+
+If the system does not paint the window (covered, or on another Space),
+nothing is wanted and nothing decodes. The scenario counts such frames
+(`*_unpainted_frames`) and paints them through the same code into an
+offscreen image, so decodes and memory stay valid. Their timings are left
+out. `offscreen_fallback=0` turns this off.
+
+### Measured (M1 MacBook Air 8 GB, macOS 26.6.2, Release, 2026-11-06)
+
+Raw files and provenance: `bench/results/images-2026-11-06/`. Battery,
+thermal state nominal, window 1180×759 pt at 2×, so images 760 pt wide
+decode at 1520 px. MB = 10⁶ bytes. Budget: 128 MiB (134.2 MB).
+
+**Image decode cost** (`folia_mediaprobe`: a fresh process per point, worst
+of 3). "Estimate" is `MediaService::estimateFor` with the final factors.
+"Kept after" is footprint growth that outlives the decode beyond the
+output bitmap (ImageIO and allocator caches).
+
+| Format | Native | Output | Peak MB | Peak ÷ output | Estimate MB | Estimate ÷ peak | Decode ms | Worker CPU ms | Kept after MB |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| jpeg | 4032×3024 | 400×300 | 2.8 | 5.73 | 8.4 | 3.05 | 33 | 33 | 0.8 |
+| jpeg | 4032×3024 | 800×600 | 8.8 | 4.59 | 14.7 | 1.67 | 39 | 39 | 0.9 |
+| jpeg | 4032×3024 | 1400×1050 | 32.2 | 5.48 | 36.3 | 1.13 | 79 | 35 | 2.2 |
+| jpeg | 4032×3024 | 1520×1140 | 33.3 | 4.80 | 38.4 | 1.16 | 77 | 36 | 2.3 |
+| jpeg | 4032×3024 | 2800×2100 | 123.1 | 5.23 | 126.5 | 1.03 | 145 | 97 | 2.6 |
+| jpeg | 4032×3024 | 4032×3024 | 148.3 | 3.04 | 177.0 | 1.19 | 106 | 56 | 2.0 |
+| heic | 4032×3024 | 400×300 | 6.0 | 12.49 | 10.1 | 1.69 | 184 | 19 | 4.1 |
+| heic | 4032×3024 | 800×600 | 11.8 | 6.16 | 15.3 | 1.29 | 183 | 19 | 5.7 |
+| heic | 4032×3024 | 1400×1050 | 28.0 | 4.77 | 32.3 | 1.15 | 158 | 21 | 10.4 |
+| heic | 4032×3024 | 1520×1140 | 32.3 | 4.65 | 34.4 | 1.07 | 151 | 22 | 11.4 |
+| heic | 4032×3024 | 2800×2100 | 99.6 | 4.23 | 104.2 | 1.05 | 172 | 32 | 29.0 |
+| heic | 4032×3024 | 4032×3024 | 153.1 | 3.14 | 154.7 | 1.01 | 191 | 44 | 5.1 |
+| webp | 4032×3024 | 400×300 | 51.2 | 106.60 | 63.7 | 1.25 | 163 | 162 | 1.2 |
+| webp | 4032×3024 | 800×600 | 55.1 | 28.70 | 66.8 | 1.21 | 169 | 169 | 1.4 |
+| webp | 4032×3024 | 1400×1050 | 65.6 | 11.16 | 75.1 | 1.14 | 181 | 181 | 1.3 |
+| webp | 4032×3024 | 1520×1140 | 68.2 | 9.84 | 77.3 | 1.13 | 182 | 182 | 1.4 |
+| webp | 4032×3024 | 2800×2100 | 111.7 | 4.75 | 112.1 | 1.00 | 210 | 209 | 1.6 |
+| webp | 4032×3024 | 4032×3024 | 147.4 | 3.02 | 165.1 | 1.12 | 175 | 171 | 1.0 |
+| png screenshot | 2880×1800 | 400×250 | 7.3 | 18.15 | 36.9 | 5.08 | 30 | 30 | 4.0 |
+| png screenshot | 2880×1800 | 800×500 | 15.2 | 9.48 | 46.8 | 3.08 | 32 | 32 | 3.8 |
+| png screenshot | 2880×1800 | 1400×875 | 23.9 | 4.88 | 53.7 | 2.25 | 36 | 36 | 6.0 |
+| png screenshot | 2880×1800 | 1520×950 | 36.9 | 6.39 | 85.1 | 2.30 | 44 | 44 | 1.1 |
+| png screenshot | 2880×1800 | 2800×1750 | 72.9 | 3.72 | 114.1 | 1.56 | 62 | 62 | 1.2 |
+| png screenshot | 2880×1800 | 2880×1800 | 62.9 | 3.04 | 116.5 | 1.85 | 34 | 34 | 0.7 |
+| png huge | 6000×4000 | 400×267 | 10.4 | 24.39 | 37.3 | 3.58 | 328 | 327 | 6.9 |
+| png huge | 6000×4000 | 800×533 | 19.1 | 11.17 | 48.5 | 2.55 | 331 | 330 | 7.1 |
+| png huge | 6000×4000 | 1400×933 | 24.4 | 4.67 | 55.9 | 2.29 | 335 | 334 | 8.7 |
+| png huge | 6000×4000 | 1520×1013 | 52.6 | 8.53 | 92.1 | 1.75 | 346 | 345 | 12.4 |
+| png huge | 6000×4000 | 2800×1867 | 91.3 | 4.36 | 123.1 | 1.35 | 366 | 365 | 12.6 |
+| png huge | 6000×4000 | 6000×4000 | 289.0 | 3.01 | 417.6 | 1.44 | 358 | 353 | 0.9 |
+| png tall | 1000×40000 | 400×16000 | 97.8 | 3.82 | 163.3 | 1.67 | 277 | 276 | 3.0 |
+| png tall | 1000×40000 | 800×32000 | 361.8 | 3.53 | 552.6 | 1.53 | 454 | 446 | 1.8 |
+| png tall | 1000×40000 | 1000×40000 | 481.0 | 3.01 | 673.6 | 1.40 | 298 | 292 | 0.9 |
+
+- **Reduced decoding.** ImageIO decodes JPEG, PNG and HEIC at native/2^k
+  (k ≤ 3), the largest power-of-two step that still covers the output.
+  That is why a 2880×1800 PNG costs 23.9 MB at 1400 px (k = 1) but 36.9 MB
+  at 1520 px (k = 0). WebP is decoded at full size whatever the output.
+- **Subsampling.** `kCGImageSourceSubsampleFactor` 2 or 4 lowered no peak
+  (JPEG rose from 30.7 to 35.8 MB), so it is not used.
+- **QImageReader**, for comparison, with Homebrew's plugins: a 6000×4000 PNG
+  at 1400 px peaks at 97 MB (a full decode) against 23 MB with ImageIO; a
+  JPEG at 1400 px peaks at 12 MB.
+- **Worker CPU** counts only the decoding thread. ImageIO decodes HEIC (and
+  some of JPEG) on its own threads: a HEIC decode takes 150–190 ms of wall
+  time but only ~20 ms of worker CPU.
+
+**The same decodes inside the app** (`--bench images`, phase 0, main
+thread, run 4). PNG peaks here are about 30 MB higher than in the probe
+process, so PNG's fixed cost (32 MiB) is set from these numbers:
+
+| Format | Decode | Peak MB | Estimate MB | Estimate ÷ peak | Decode ms (median) |
+|---|---|---:|---:|---:|---:|
+| jpeg | 4032×3024 → 1520×1140 | 31.9 | 38.4 | 1.21 | 45 |
+| heic | 4032×3024 → 1520×1140 | 31.3 | 34.4 | 1.10 | 71 |
+| webp | 4032×3024 → 1520×1140 | 66.7 | 77.3 | 1.16 | 181 |
+| png screenshot | 2880×1800 → 1520×950 | 66.6 | 85.1 | 1.28 | 43 |
+| png huge | 6000×4000 → 1520×1013 | 65.1 | 92.1 | 1.41 | 350 |
+| png tall | 1000×40000 → 234×9360 | 66.3 | 71.0 | 1.07 | 242 |
+
+The tall screenshot decodes at 234×9360, not 1000×40000. A decode may
+reserve at most 75 % of the budget, and a PNG still needs a native/2^k
+intermediate. It is drawn scaled up to 760 pt, so it looks blurry.
+
+**The image-heavy page** (`images.json`, run 4; frame timings from
+`images-onscreen-frames.json`, run 3, when the window was painted
+on screen):
+
+| Measure | Result |
+|---|---|
+| Idle, text page (baseline), 20 s after a 3 s settle | 0.27 % of a core, 7.0 wakeups/s (median 6), 55.2 MB, 7 threads |
+| Idle, image page (2 images visible) | 0.15 %, 6.0 wakeups/s (median 6), 73.0 MB, 11 threads |
+| Idle, after the whole scenario | 0.16 %, 5.5 wakeups/s, 102.0 MB, 12 threads |
+| Import, 30 files streamed in turn | 520 ms in total; the 36 MB PNG was stored (copied, hashed, fsynced, renamed, header read) in 156 ms (90 ms in run 3) |
+| Typing while the 36 MB PNG is imported | input → end of paint p50 2.9 ms, p95 5.5 ms, max 32.8 ms (run 3: 1.8 / 3.5 / 14.7 ms). The copy holds one 256 KiB buffer. Peak footprint growth over the import (36.6 MB) is mostly decodes of images scrolled into view by the typing. |
+| Scroll down the page once (1,202 frames of 40 px) | 29 decodes (the 30th image was decoded at open). 0 jobs dropped, discarded, waiting or too large. Media use peaked at 133.4 MB of the 134.2 MB budget; the cache at 101.7 MB. |
+| Footprint during that scroll | 87 → 137 MB, flat across the tall screenshot (one decode), ending at 164 MB (sampled max 185 MB, rusage peak 194 MB). That is about the baseline plus the budget: a plateau. |
+| Straight back up | 13 cache hits, 16 decodes (hit rate 0.45). The 30 bitmaps (6.9 MB each, 207 MB) exceed the budget, so the earliest were evicted. Images within the budget all hit (`media_tests`). |
+| Scroll frames, on screen (run 3) | down: p50 16.66 ms, p95 16.80 ms, max 18.31 ms; up: p50 16.66 ms, max 16.92 ms; editor paint p50 2.6 ms, p95 3.9 ms |
+| Window resize, 40 steps of 10 px | 0 decodes while it moved; 3 once it settled (the 3 visible images). A ±30 px back-and-forth: 0 decodes (reused within ±10 %). Frames (run 3): p50 16.7 ms, p95 33.3 ms, max 65.0 ms |
+| Critical memory pressure | cache trimmed to 0 and the footprint fell from 162.5 to 102.0 MB at once; budget 33.6 MB for 60 s |
+| Scrolling during the cool-down (300 frames) | 10 decodes at a lower density, 0 waits, media use max 32.9 MB, footprint max 117.9 MB; frames p50 16.66 ms, p95 17.07 ms, max 33.3 ms (on screen) |
+
+What these runs found (fixed in this branch, and recorded in
+docs/ATTACHMENTS.md):
+
+- **Lowering the budget under pressure stalled rendering.** Every photo's
+  estimate exceeded the lowered budget and waited for the whole
+  cool-down. Request sizes now follow the current budget.
+- **Freed bitmaps stayed in the footprint.** Trimming ~100 MB of cache left
+  it unchanged, and `malloc_zone_pressure_relief` released 0 bytes. Bitmaps
+  now live in their own mappings.
+- **PNG decodes cost more inside the app than in the probe.** PNG's
+  factors are set from the in-app peaks.
+
+Not covered yet: `QImageReader` as the main decoder (other platforms) and
+everything PDF.
+
+## 7. Caveats
 
 * `QT_QPA_PLATFORM=offscreen` runs exercise the plumbing only: paint and
   presentation timings there do not include the window server. Threshold

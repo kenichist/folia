@@ -13,6 +13,7 @@
 #pragma once
 
 #include "core/Api.h"
+#include "core/Attachments.h"
 
 #include <QHash>
 #include <QObject>
@@ -24,6 +25,7 @@
 #include <memory>
 
 class QLockFile;
+struct sqlite3;
 
 namespace folia {
 
@@ -90,6 +92,17 @@ public:
     BlockId allocateBlockId() { return m_nextBlockId.fetch_add(1); }
     PageId allocatePageId() { return m_nextPageId.fetch_add(1); }
 
+    // Attachment metadata and other storage owned by modules that bring their
+    // own SQL (storage/AttachmentStore). `fn` runs on the writer thread inside
+    // one transaction (BEGIN IMMEDIATE .. COMMIT), in FIFO order with saves;
+    // a non-OK return rolls back and the job is retried like a failed save.
+    // `done` (optional) runs on ctx's thread after the commit.
+    void writeJob(std::function<int(sqlite3 *)> fn, QObject *ctx = nullptr, std::function<void()> done = {});
+    void putAttachment(const AttachmentInfo &info);
+    // Metadata for `hashes` (reader thread); unknown hashes are left out.
+    void attachmentInfo(const QStringList &hashes, QObject *ctx,
+                        std::function<void(QVector<AttachmentInfo>)> done);
+
     // Small key/value settings, cached on the main thread.
     QString setting(const QString &key, const QString &def = {}) const;
     void setSetting(const QString &key, const QString &value);
@@ -103,6 +116,9 @@ signals:
     void commitFailed(folia::PageId page, folia::Revision rev, const folia::StorageError &error);
     void writerRecovered();
     void treeChanged(folia::PageId parent);
+    // Metadata of the attachments a page references, delivered right before
+    // that page's openPage() callback, so its layout knows image sizes.
+    void attachmentsLoaded(const QVector<folia::AttachmentInfo> &infos);
 
 private:
     struct Writer;
@@ -128,3 +144,4 @@ private:
 } // namespace folia
 
 Q_DECLARE_METATYPE(folia::StorageError)
+Q_DECLARE_METATYPE(folia::AttachmentInfo)

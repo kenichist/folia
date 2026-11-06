@@ -58,6 +58,7 @@ private:
     void scenarioIntegration();
     void scenarioRecovery();
     void scenarioSettings();
+    void scenarioImages(); // BenchImages.cpp
     void finish();
 
     AppController *m_app;

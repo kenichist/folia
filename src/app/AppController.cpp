@@ -9,7 +9,9 @@
 #include "editor/EditorPane.h"
 #include "editor/NoteEditor.h"
 #include "editor/PageSession.h"
+#include "editor/MediaService.h"
 #include "editor/PreviewService.h"
+#include "storage/AttachmentStore.h"
 #include "editor/VirtualLayout.h"
 #include "shell/CommandRegistry.h"
 #include "shell/DataContext.h"
@@ -84,6 +86,15 @@ AppController::~AppController()
     delete m_shell; // references widgets owned by the window
     m_shell = nullptr;
     delete m_window;
+    // Page sessions (and the VirtualLayouts their documents own) call into
+    // the editor context, attachment store and media service as they go.
+    // Those are children created before any session, so ~QObject would free
+    // them first: delete every session now, including any already handed to
+    // deleteLater.
+    m_active = nullptr;
+    m_cache.clear();
+    m_lru.clear();
+    qDeleteAll(findChildren<PageSession *>(Qt::FindDirectChildrenOnly));
 }
 
 PageId AppController::currentPage() const
@@ -194,6 +205,24 @@ bool AppController::start(QString *error)
         m_ectx->previews = m_previews;
     }
 #endif
+    {
+        // Attachments sit next to the workspace they belong to (the default
+        // workspace: <data folder>/attachments), so two workspaces never
+        // sweep each other's files.
+        AttachmentStore::Options ao;
+        const QFileInfo db(dbPath);
+        ao.dir = !m_opt.attachmentsDir.isEmpty() ? m_opt.attachmentsDir
+            : db.fileName() == QLatin1String("workspace.db")
+                ? db.absolutePath() + QStringLiteral("/attachments")
+                : db.absolutePath() + QLatin1Char('/') + db.completeBaseName() + QStringLiteral(".attachments");
+        m_attachments = new AttachmentStore(m_store, ao, this);
+        MediaService::Config mc;
+        if (m_opt.mediaBudgetBytes > 0)
+            mc.budgetBytes = m_opt.mediaBudgetBytes;
+        m_media = new MediaService(mc, this);
+        m_ectx->attachments = m_attachments;
+        m_ectx->media = m_media;
+    }
     m_data = new DataContext(m_store, this);
     m_ectx->titleOf = [this](PageId id) {
         if (auto it = m_cache.find(id); it != m_cache.end())
@@ -388,6 +417,7 @@ void AppController::buildWindow()
     edit->addSeparator();
     act(edit, tr("Copy Code Block"), QStringLiteral("code.copy_block"));
     act(edit, tr("Insert or Edit Link…"), QStringLiteral("link.edit"));
+    act(edit, tr("Insert Image…"), QStringLiteral("image.insert"));
     QMenu *go = mb->addMenu(tr("&Go"));
     act(go, tr("Back"), QStringLiteral("nav.back"));
     act(go, tr("Forward"), QStringLiteral("nav.forward"));
@@ -590,8 +620,9 @@ void AppController::evictCache()
     for (int i = m_lru.size() - 1; i >= 0 && (bytes > m_opt.docCacheBytes || m_cache.size() > m_opt.docCacheEntries); --i) {
         const PageId id = m_lru[i];
         PageSession *s = m_cache.value(id);
-        // Pinned: the active page, and anything not yet durably committed.
-        if (!s || s == m_active || s->isUncommitted() || s->hasUnsnapshotted())
+        // Pinned: the active page, anything not yet durably committed, and
+        // pages with images still being imported.
+        if (!s || s == m_active || s->isUncommitted() || s->hasUnsnapshotted() || s->hasPendingImports())
             continue;
         bytes -= s->estimatedBytes();
         m_cache.remove(id);
@@ -770,6 +801,8 @@ bool AppController::shutdown(bool interactive)
     if (m_shutDown)
         return true;
     flushPreferences();
+    if (m_attachments && m_attachments->importsInFlight() > 0)
+        m_attachments->waitForImports(); // their references go into this flush
     flushSaves();
     bool ok = m_store->flush(4000);
     while (!ok && interactive) {
@@ -798,7 +831,7 @@ void AppController::reclaimMemory(bool critical)
 {
     for (int i = m_lru.size() - 1; i >= 0; --i) {
         PageSession *s = m_cache.value(m_lru[i]);
-        if (!s || s == m_active || s->isUncommitted() || s->hasUnsnapshotted())
+        if (!s || s == m_active || s->isUncommitted() || s->hasUnsnapshotted() || s->hasPendingImports())
             continue;
         m_cache.remove(m_lru[i]);
         m_lru.removeAt(i);
@@ -806,6 +839,8 @@ void AppController::reclaimMemory(bool critical)
     }
     if (m_previews)
         m_previews->trim(critical ? 0 : (1 << 20));
+    if (m_media)
+        m_media->memoryPressure(critical); // trims, then a lower budget for a cool-down
     icons::clearCache();
     if (m_active && m_active->layout())
         m_active->layout()->setLayoutCap(critical ? 150 : 300);
@@ -1030,6 +1065,9 @@ void AppController::registerCommands()
     c->add({QStringLiteral("link.edit"), tr("Insert or Edit Link"), {}, {}, [this](const QVariantMap &) {
                 QString why;
                 return m_pane->editor()->editLink(&why) ? okResult() : fail(why);
+            }, {}});
+    c->add({QStringLiteral("image.insert"), tr("Insert Image"), {}, {}, [this](const QVariantMap &) {
+                return m_pane->editor()->chooseImages() ? okResult() : fail(tr("no image chosen"));
             }, {}});
     c->add({QStringLiteral("page.reveal"), tr("Reveal Page in Tree"), {}, {arg("id", T::LongLong)}, [this](const QVariantMap &a) {
                 emit m_data->revealRequested(argId(a));
