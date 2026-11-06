@@ -666,6 +666,62 @@ covered (0.99–2.14×). Whole vector pages of 2000 px and more are not
 (0.75–0.83), and are never requested: they are above the threshold, and the
 reduced-density fallback under pressure stays within 75 % of the budget.
 
+### The viewer, the card and typing (M1 MacBook Air 8 GB, macOS 26.6.2, Release, 2026-11-06)
+
+Raw files and provenance: `bench/results/pdf-2026-11-06/` (`pdf.json` is
+the full run on the final code; `pdf-heavy-and-typing.json` the heavy
+documents and typing beside a PDF, final code, window painted while
+typing; `pdf-onscreen-frames.json` an earlier full run whose 200-page
+scroll was painted on screen, used for frame timings only). Window
+1180×759 pt at 2×, so the viewer fits a Letter page 2296×2971 px wide
+(zoom 188 %, 30 tiles of 512 px per page). Budget 128 MiB (134.2 MB).
+MB = 10⁶ bytes. All runs with `app_nap=0`.
+
+| Measure | Result |
+|---|---|
+| Import, 5 PDFs (0.35–48 MB) | 154 ms in total, page geometry read on the import worker; `page_geom` is 21 bytes for each uniform fixture, 161 bytes for the 8-page mixed one |
+| Card thumbnails, in-app render cost | text 8 ms / 0.4 MB peak, vector 103 ms / 1.0 MB, transparency 41 ms / 1.7 MB, scan 34 ms / 7.2 MB (cold). Reservation ÷ peak 1.40–15 |
+| One viewer tile (512 px), in-app | text 2.6 ms / 1.1 MB, vector 252 ms / 1.1 MB, transparency 218 ms / 5.6 MB, scan 55 ms / 68.9 MB (cold). Reservation ÷ peak ≥ 1.33 |
+| Typing 300 characters while a PDF view beside the note renders vector tiles at 3× | input → end of paint p50 0.51 ms, p95 2.17 ms, max 3.68 ms (20 tiles rendered meanwhile). The editor painted 300 times (once per key) and 0 times for PDF results; the PDF view painted 20 times, once per tile, 0 times for keys |
+| 200-page document, open at fit width | first viewport sharp in 249 ms |
+| Scroll to the end (997 frames of 300 px) | 5,900 tile renders (p50 1.5 ms each), 70 dropped before starting, 3 discarded (2.9 ms of CPU), 0 budget waits. Media cache max 130.9 MB, media use max 134.2 MB |
+| Footprint during that scroll | 57.9 MB before opening; sampled max 248.8 MB (rusage peak 263.7 MB), end 234.7 MB; a second pass: max 249.8 MB. A plateau at the baseline plus the budget plus ~60 MB of CoreGraphics and allocator working set; it does not grow with pages visited |
+| Straight back up | 125 cache hits, 5,808 renders (hit rate 0.02): 200 pages of 27 MB tiles do not fit 128 MiB, only the last ~5 pages hit |
+| Scroll frames, on screen (`pdf-onscreen-frames.json`) | down p50 16.67 ms, p95 16.73 ms, max 16.76 ms; up p50 16.67 ms, max 32.96 ms; viewer paint p50 6.4 ms, p95 8.7 ms (30 tiles per page drawn) |
+| Zoom in and out, 6 gestures of 12 steps around page 100 | 0 renders started during the gestures (99 queued tiles dropped as each began); 24 renders after they settled, 108 cache hits (alternate zooms reuse); sharp p50 150 ms, max 240 ms after the last step (the settle is 150 ms); gesture frames p50 16.66 ms, max 16.72 ms |
+| 4× zoom, then 60 scroll frames | 444 tiles, 0 dropped or discarded; first viewport 248 ms |
+| Close | footprint 220.9 → 90.4 MB, media cache 130.5 MB → 0, documents open 0 |
+| Scan (24 pages, 300 dpi) | first viewport 453 ms; a fling through all pages: 32 renders, 1 discarded (22 ms of CPU), 18 dropped; last viewport 599 ms; tiles p50 31 ms |
+| Vector (16 pages, 3000 curves each) | first viewport 3.06 s (tiles p50 161 ms, max 370 ms); fling: 32 renders, 1 discarded (352 ms), last viewport 2.85 s |
+| Transparency (16 pages, nested groups) | first viewport 1.54 s (tiles p50 99 ms); fling: 32 renders, 1 discarded (148 ms), last viewport 1.38 s |
+| Critical pressure with the viewer open | cache trimmed to 0, footprint 123.3 → 95.9 MB, budget 33.5 MB for 60 s; 150 more scroll frames: 915 tiles at full density (a tile's reservation fits 75 % of the lowered budget), 0 waits, media use max 33.3 MB, last viewport 118 ms |
+| Idle, text page (baseline) | 0.15 % of a core, 5.9 wakeups/s (`pdf-onscreen-frames.json`); median 0.10 %, 6 wakeups/s (`pdf.json`, whose mean of 0.44 % comes from one 2-second burst, at seconds 14–15) |
+| Idle, viewer open and settled | 0.14 % (median 0.14 %), 5.5 wakeups/s (median 5), 11 threads; 0.17 % and 0.14 % in the two other full runs. No bursts in any run |
+| Idle, after closing | median 0.15 %, 5 wakeups/s (`pdf.json`; mean 1.10 % from one burst of 14.6 %, 3.1 % and 2.0 % at seconds 16–18); 0.19 % mean in `pdf-onscreen-frames.json` |
+
+- **Thrown-away renders during a fling.** A render cannot be interrupted,
+  so a tile started while the view flies past is wasted. Before the
+  viewer deferred heavy pages, a fling through the scan discarded 57 of
+  89 renders (1.3 s of CPU) and one through the vector document 30 renders
+  (8.7 s). With heavy pages (layers, images of 1 MP or more, content
+  streams over 64 KB) requested only once the view slows below a quarter
+  viewport per 100 ms for 150 ms: 1 per document. Text pages are never
+  deferred: the 200-page scroll keeps up at 16.7 ms frames.
+- **Idle bursts.** The one-off bursts above (about 70 ms and 200 ms of
+  CPU) appeared on the text page before any PDF was opened, too; with the
+  viewer open and settled no run had any. Their cause is not identified;
+  the bench window was covered for most of `pdf.json` (see below), and a
+  covered window that the system paints again redraws the note, whose card
+  thumbnails were trimmed by the pressure phase.
+- **The window was covered** for most of `pdf.json` and the heavy-document
+  phases of the other runs (`window_exposed_and_active_ratio` 0; see the
+  `*_unpainted_frames` keys). Those frames were painted offscreen through
+  the same code: counts and memory are valid, their timings are not and
+  are left out. In the first full run, whose heavy-document phase the
+  system did not paint, transparency tiles rendered ~7× slower than in
+  every run where it was painted; `--bench-arg app_nap=0` (now used) holds a
+  user-initiated activity so a covered bench window is not throttled.
+
 ## 7. Caveats
 
 * `QT_QPA_PLATFORM=offscreen` runs exercise the plumbing only: paint and

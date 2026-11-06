@@ -297,6 +297,13 @@ reservation covers that; the plateau benchmark shows it.
     images: when even a tile does not fit (a pressure cool-down, a huge
     scan), the page is drawn whole at a lower density and scaled up rather
     than not at all.
+  - **Measured: a fling wastes uninterruptible renders.** Scrolling through
+    the scan discarded 57 of 89 renders (1.3 s of CPU), through the vector
+    document 30 (8.7 s). Heavy pages (layers, an image of 1 MP or more, or
+    content streams over 64 KB, all from the `page_geom` hints) are now
+    requested only once the view moves slower than a quarter viewport per
+    100 ms for 150 ms; text pages render at once (the 200-page document
+    keeps up with 16.7 ms frames). Discarded: 1 per document.
 - **Release**: the document handle closes when the viewer closes, or after it
   has been hidden for a while. Text extraction (search, selection) is a later
   milestone, done lazily per page.
@@ -322,7 +329,8 @@ reservation covers that; the plateau benchmark shows it.
     document are serialized by construction. Imports read page geometry on
     the import worker, on a document object of their own.
 - **Cancellation is layered**, because neither ImageIO, `QImageReader` nor
-  `CGContextDrawPDFPage` can be interrupted mid-call:
+  `CGContextDrawPDFPage` can be interrupted mid-call (for PDFs, not
+  starting heavy pages during a fling, §4, comes before all of these):
   1. Stale requests are dropped from the queue before they start. This is the
      main mechanism.
   2. Between steps of a job (tile N → tile N+1), the job checks whether it is
@@ -330,7 +338,8 @@ reservation covers that; the plateau benchmark shows it.
      queue is re-examined between tiles, so a tile that scrolled away is
      dropped before it starts.
   3. Obsolete results are thrown away: no repaint, no caching beyond the LRU
-     rules.
+     rules. **Implemented:** a page or tile that finishes after its viewer
+     closed is not cached at all.
   4. Cooperative interruption is used only where a backend offers it. PDFium's
      progressive render has a pause callback; consider it only if profiling
      shows long, uninterruptible renders hurting.
@@ -399,6 +408,13 @@ Corrections to the first draft's figures:
 - "CoreGraphics uses the least memory" and "a long PDF takes 20–60 MB" are
   targets to demonstrate on comparable documents. Page count alone does not
   predict rendering cost.
+  - **Measured** (200-page text document at fit width on a 2× display,
+    27 MB of tiles per page): the viewer fills the budget, so the footprint
+    plateaus at the baseline plus ~131 MB of cached tiles plus ~60 MB of
+    CoreGraphics and allocator working set (58 → ~249 MB), the same on a
+    second pass, and closing returns it to 90 MB with the cache empty. What
+    a long PDF costs is set by the budget, not by its length. Comparing
+    with QtPdf waits for step 5.
 
 ## 7. Order of work
 
