@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Folia
+GenericName=Notes
+Comment=Programmable, lightweight local notes
+Exec=Folia %F
+Icon=folia
+Terminal=false
+Categories=Office;Utility;TextEditor;
+Keywords=notes;markdown;latex;math;
+StartupWMClass=Folia

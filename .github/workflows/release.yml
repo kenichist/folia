@@ -1,0 +1,160 @@
+# Builds Folia for macOS, Windows and Linux. Pushing a tag such as v0.1.0
+# also publishes a GitHub release with the packages attached; running the
+# workflow by hand, or a pull request, only builds, tests and uploads them
+# as workflow artifacts.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  QT_VERSION: '6.8.3'
+
+jobs:
+  macos:
+    name: macOS (universal)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+      - name: Version
+        run: echo "VERSION=$(sed -n 's/^project(Folia VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)" >> "$GITHUB_ENV"
+      - name: Build
+        run: |
+          brew install ninja || true
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DFOLIA_BUILD_TOOLS=OFF
+          cmake --build build
+      - name: Test
+        run: QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp -R build/src/Folia.app dist/
+          "$QT_ROOT_DIR/bin/macdeployqt" dist/Folia.app -always-overwrite
+          rm -rf dist/Folia.app/Contents/PlugIns/imageformats
+          codesign --force --deep --sign - dist/Folia.app
+          mkdir -p dmg && cp -R dist/Folia.app dmg/ && ln -s /Applications dmg/Applications
+          hdiutil create -volname Folia -srcfolder dmg -ov -format UDZO "Folia-$VERSION-macOS-universal.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folia-macos
+          path: Folia-*.dmg
+
+  windows:
+    name: Windows (x64)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          cache: true
+      - name: Version
+        shell: bash
+        run: echo "VERSION=$(sed -n 's/^project(Folia VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)" >> "$GITHUB_ENV"
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFOLIA_BUILD_TOOLS=OFF
+          cmake --build build
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build --output-on-failure
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist/Folia
+          cp build/src/Folia.exe dist/Folia/
+          cp -R presets dist/Folia/presets
+          "$QT_ROOT_DIR/bin/windeployqt.exe" --release --no-translations --no-opengl-sw --no-system-d3d-compiler dist/Folia/Folia.exe
+          (cd dist && 7z a -tzip "../Folia-$VERSION-windows-x64.zip" Folia)
+          iscc //DAppVersion="$VERSION" //DSourceDir="$PWD/dist/Folia" //DOutputDir="$PWD" packaging/windows/folia.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folia-windows
+          path: |
+            Folia-*.zip
+            Folia-*-setup.exe
+
+  linux:
+    name: Linux (x86_64)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libfuse2 file
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+      - name: Version
+        run: echo "VERSION=$(sed -n 's/^project(Folia VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)" >> "$GITHUB_ENV"
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DFOLIA_BUILD_TOOLS=OFF
+          cmake --build build
+      - name: Test
+        run: QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
+      - name: Package
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          base=https://github.com/linuxdeploy
+          curl -fsSLo linuxdeploy $base/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -fsSLo linuxdeploy-plugin-qt $base/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy linuxdeploy-plugin-qt
+          mkdir -p AppDir/usr/bin
+          cp -R presets AppDir/usr/bin/presets
+          cp packaging/linux/folia.png folia.png
+          export QMAKE="$QT_ROOT_DIR/bin/qmake" EXTRA_PLATFORM_PLUGINS="libqwayland-generic.so"
+          export LDAI_OUTPUT="Folia-$VERSION-linux-x86_64.AppImage"
+          ./linuxdeploy --appdir AppDir \
+            --executable build/src/Folia \
+            --desktop-file packaging/linux/folia.desktop \
+            --icon-file folia.png \
+            --plugin qt --output appimage
+          # Plain archive for people who prefer not to use AppImage.
+          mv AppDir Folia-$VERSION-linux-x86_64
+          tar -czf "Folia-$VERSION-linux-x86_64.tar.gz" "Folia-$VERSION-linux-x86_64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folia-linux
+          path: |
+            Folia-*.AppImage
+            Folia-*.tar.gz
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+      - name: Checksums
+        run: cd packages && sha256sum Folia-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Folia ${{ github.ref_name }}
+          body_path: packaging/RELEASE_NOTES.md
+          files: packages/*
