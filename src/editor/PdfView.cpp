@@ -446,6 +446,66 @@ bool PdfView::drawPlan(QPainter *p, int page, const Plan &plan, const QRectF &ta
     return all;
 }
 
+double PdfView::missingArea(int page, const Plan &plan, const QRectF &target, const QRectF &visible) const
+{
+    const QRectF vis = target & visible;
+    const double all = vis.width() * vis.height();
+    if (!m_media || plan.isNull() || vis.isEmpty())
+        return all;
+    if (!plan.tiles)
+        return m_media->contains(pageKey(m_hash, page, plan)) ? 0.0 : all;
+    int x0, x1, y0, y1;
+    if (!tileRange(plan, m_cfg.tileSize, target, vis, &x0, &x1, &y0, &y1))
+        return 0.0;
+    const double s = plan.width / target.width();
+    double missing = 0;
+    for (int ty = y0; ty <= y1; ++ty)
+        for (int tx = x0; tx <= x1; ++tx) {
+            QRect region;
+            if (m_media->contains(tileKey(m_hash, page, plan, m_cfg.tileSize, tx, ty, &region)))
+                continue;
+            const QRectF r = QRectF(target.left() + region.x() / s, target.top() + region.y() / s, region.width() / s,
+                                    region.height() / s) &
+                             vis;
+            missing += r.width() * r.height();
+        }
+    return missing;
+}
+
+PdfView::Coverage PdfView::viewportCoverage() const
+{
+    Coverage c;
+    if (!m_media || pageCount() == 0)
+        return c;
+    const QRectF view = visibleRect();
+    double total = 0, blank = 0, scaled = 0;
+    for (int i = pageAt(view.top()), last = pageAt(view.bottom()); i <= last; ++i) {
+        const QRectF pr = pageRect(i);
+        const QRectF vis = pr & view;
+        if (vis.isEmpty())
+            continue;
+        const double area = vis.width() * vis.height();
+        total += area;
+        const Plan want = planFor(i, m_zoom);
+        const double missing = m_zooming ? area : missingArea(i, want, pr, vis);
+        if (missing <= 0)
+            continue;
+        // As paintEvent draws it: the older plans under what is missing.
+        double older = 0;
+        for (const Plan &pl : m_shown.value(i))
+            if (!(pl == want) || m_zooming)
+                older = qMax(older, area - missingArea(i, pl, pr, vis));
+        const double s = qMin(missing, older);
+        scaled += s;
+        blank += missing - s;
+    }
+    if (total > 0) {
+        c.blank = blank / total;
+        c.scaled = scaled / total;
+    }
+    return c;
+}
+
 void PdfView::paintEvent(QPaintEvent *e)
 {
     QElapsedTimer t;

@@ -221,6 +221,8 @@ bool AppController::start(QString *error)
         MediaService::Config mc;
         if (m_opt.mediaBudgetBytes > 0)
             mc.budgetBytes = m_opt.mediaBudgetBytes;
+        if (m_opt.mediaCacheBytes > 0)
+            mc.cacheMaxBytes = m_opt.mediaCacheBytes;
         m_media = new MediaService(mc, this);
         m_ectx->attachments = m_attachments;
         m_ectx->media = m_media;

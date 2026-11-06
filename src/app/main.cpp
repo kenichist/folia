@@ -52,6 +52,10 @@ int main(int argc, char **argv)
     }
     if (benchMode) {
         o.startPage = benchArgMap.value(QStringLiteral("start_page")).toLongLong();
+        // media_budget_mib=N, media_cache_mib=N: run with another media
+        // budget (cache + in-flight work) or cache cap (cached pixels).
+        o.mediaBudgetBytes = benchArgMap.value(QStringLiteral("media_budget_mib")).toLongLong() << 20;
+        o.mediaCacheBytes = benchArgMap.value(QStringLiteral("media_cache_mib")).toLongLong() << 20;
         o.seedIfEmpty = p.value(bench) == QLatin1String("snapshot");
         o.restoreLastPage = false;
         folia::instr::setSamplingEnabled(true);

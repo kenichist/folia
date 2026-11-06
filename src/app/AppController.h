@@ -50,6 +50,7 @@ public:
         qint64 docCacheBytes = 48ll << 20;
         int docCacheEntries = 16;
         qint64 mediaBudgetBytes = 0;   // 0: MediaService's default
+        qint64 mediaCacheBytes = 0;    // cached pixels; 0: MediaService's default
         QString attachmentsDir;        // default: next to the workspace file
     };
 

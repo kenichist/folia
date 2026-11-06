@@ -682,15 +682,15 @@ MB = 10⁶ bytes. All runs with `app_nap=0`.
 | Import, 5 PDFs (0.35–48 MB) | 154 ms in total, page geometry read on the import worker; `page_geom` is 21 bytes for each uniform fixture, 161 bytes for the 8-page mixed one |
 | Card thumbnails, in-app render cost | text 8 ms / 0.4 MB peak, vector 103 ms / 1.0 MB, transparency 41 ms / 1.7 MB, scan 34 ms / 7.2 MB (cold). Reservation ÷ peak 1.40–15 |
 | One viewer tile (512 px), in-app | text 2.6 ms / 1.1 MB, vector 252 ms / 1.1 MB, transparency 218 ms / 5.6 MB, scan 55 ms / 68.9 MB (cold). Reservation ÷ peak ≥ 1.33 |
-| Typing 300 characters while a PDF view beside the note renders vector tiles at 3× | input → end of paint p50 0.51 ms, p95 2.17 ms, max 3.68 ms (20 tiles rendered meanwhile). The editor painted 300 times (once per key) and 0 times for PDF results; the PDF view painted 20 times, once per tile, 0 times for keys |
+| Typing 300 characters while a PDF view beside the note renders vector tiles at 3× | input → end of the editor's paint, in process (not pixels on the display: the backing-store flush, WindowServer composition and the display come after) p50 0.51 ms, p95 2.17 ms, p99 2.95 ms, max 3.68 ms (20 tiles rendered meanwhile). To the event-loop turn after the flush: see "Cache size" below. The editor painted 300 times (once per key) and 0 times for PDF results; the PDF view painted 20 times, once per tile, 0 times for keys |
 | 200-page document, open at fit width | first viewport sharp in 249 ms |
 | Scroll to the end (997 frames of 300 px) | 5,900 tile renders (p50 1.5 ms each), 70 dropped before starting, 3 discarded (2.9 ms of CPU), 0 budget waits. Media cache max 130.9 MB, media use max 134.2 MB |
-| Footprint during that scroll | 57.9 MB before opening; sampled max 248.8 MB (rusage peak 263.7 MB), end 234.7 MB; a second pass: max 249.8 MB. A plateau at the baseline plus the budget plus ~60 MB of CoreGraphics and allocator working set; it does not grow with pages visited |
+| Footprint during that scroll | 57.9 MB before opening; sampled max 248.8 MB (rusage peak 263.7 MB), end 234.7 MB; a second pass: max 249.8 MB. A plateau at the baseline plus the budget plus ~60 MB more; it does not grow with pages visited. Of those ~60 MB, ~28 MB is the window's backing store growing from one IOSurface buffer to three, and 13.6 MB the bench's own offscreen canvas (see "Cache size" below) |
 | Straight back up | 125 cache hits, 5,808 renders (hit rate 0.02): 200 pages of 27 MB tiles do not fit 128 MiB, only the last ~5 pages hit |
-| Scroll frames, on screen (`pdf-onscreen-frames.json`) | down p50 16.67 ms, p95 16.73 ms, max 16.76 ms; up p50 16.67 ms, max 32.96 ms; viewer paint p50 6.4 ms, p95 8.7 ms (30 tiles per page drawn) |
+| Scroll frames, on screen (`pdf-onscreen-frames.json`) | intervals between presented viewer paints (display-paced, 60 Hz): down p50 16.67 ms, p95 16.73 ms, p99 16.74 ms, max 16.76 ms, 0 of 997 over 25 ms; up p50 16.67 ms, p99 16.76 ms, 1 of 927 over 25 ms (32.96 ms). The paint work per frame is far smaller: p50 0.2 ms, p95 2.5 ms, p99 3.0 ms in a later, fully painted 997-frame pass of the same scroll (see "Cache size" below). **Correction:** the "viewer paint p50 6.4 ms, p95 8.7 ms" first given here were the memory-pressure phase's 150 frames, the only paint samples the scenario kept |
 | Zoom in and out, 6 gestures of 12 steps around page 100 | 0 renders started during the gestures (99 queued tiles dropped as each began); 24 renders after they settled, 108 cache hits (alternate zooms reuse); sharp p50 150 ms, max 240 ms after the last step (the settle is 150 ms); gesture frames p50 16.66 ms, max 16.72 ms |
 | 4× zoom, then 60 scroll frames | 444 tiles, 0 dropped or discarded; first viewport 248 ms |
-| Close | footprint 220.9 → 90.4 MB, media cache 130.5 MB → 0, documents open 0 |
+| Close | footprint 220.9 → 90.4 MB, media cache 130.5 MB → 0, documents open 0. Not the viewer's: of the 32 MB above the baseline, the window keeps its extra IOSurface buffers and the allocator the bench's freed canvas (see "Cache size" below) |
 | Scan (24 pages, 300 dpi) | first viewport 453 ms; a fling through all pages: 32 renders, 1 discarded (22 ms of CPU), 18 dropped; last viewport 599 ms; tiles p50 31 ms |
 | Vector (16 pages, 3000 curves each) | first viewport 3.06 s (tiles p50 161 ms, max 370 ms); fling: 32 renders, 1 discarded (352 ms), last viewport 2.85 s |
 | Transparency (16 pages, nested groups) | first viewport 1.54 s (tiles p50 99 ms); fling: 32 renders, 1 discarded (148 ms), last viewport 1.38 s |
@@ -721,6 +721,99 @@ MB = 10⁶ bytes. All runs with `app_nap=0`.
   system did not paint, transparency tiles rendered ~7× slower than in
   every run where it was painted; `--bench-arg app_nap=0` (now used) holds a
   user-initiated activity so a covered bench window is not throttled.
+
+### Cache size, frame and input timing, repeated close (same machine, 2026-11-06, later)
+
+Raw files and provenance: `bench/results/pdf-cache-2026-11-06/`; compare
+runs with `bench/scripts/pdf_cache_compare.py` and break footprints down with
+`bench/scripts/footprint_categories.py`. New in the scenario:
+`media_budget_mib`/`media_cache_mib`, the share of the visible page area
+each frame leaves white or scaled (`*_blank_permille`, `*_scaled_permille`,
+painted frames only), the PDF worker's own CPU per phase (`*_render_cpu_s`),
+`footprint -p` reports at each checkpoint, a warning-level pressure step,
+and phase 8: open → scroll → close of the 200-page document and the scan,
+12 times.
+
+**The cache is now capped at 64 MiB inside the 128 MiB budget.** The
+clean comparison is the scroll-only pair (`kinds_only=long`, both runs
+painted on screen throughout, 2,991 frames each):
+
+| 200-page document at fit width | Budget 128, no cap (before) | Budget 128, cache 64 (now) |
+|---|---:|---:|
+| Footprint during the scroll, sampled max / rusage peak | 245.7 / 249.5 MB | 187.9 / 201.5 MB |
+| Second pass, sampled max | 236.4 MB | 188.1 MB |
+| `footprint -p` at the plateau, without the window's IOSurfaces | 164.6 MB | 114.3 MB |
+| Media cache max | 131.2 MB | 67.1 MB |
+| Renders down / up (cache hits up) | 5,938 / 5,855 (129) | 5,970 / 5,926 (59) |
+| PDF worker CPU down / up | 4.59 / 4.52 s | 4.44 / 4.39 s |
+| Frames with any white area, down / up / second pass | 20.8 / 18.3 / 19.9 % | 0 / 0 / 0 % |
+| Longest run of frames with white area | 16 frames (~270 ms) | 0 |
+| Presented intervals down: p99, max, over 25 ms | 16.73, 33.35 ms, 3 | 16.73, 16.79 ms, 0 |
+| Viewer paint work down p50 / p95 / p99 | 0.2 / 2.2 / 2.5 ms | 2.0 / 2.4 / 2.6 ms |
+| Zoom, 6 gestures: renders / hits, settle → sharp p50 / max | 24 / 108, 150 / 250 ms | 78 / 148, 167 / 283 ms |
+
+- **Why a smaller cache costs no rendering here.** A linear pass through
+  200 pages of 27 MB misses the cache either way (hit rate 0.02 at
+  128 MiB); only revisits hit: scrolling straight back up found 129 tiles
+  at 128 MiB and 59 at 64 MiB. 70 tiles at ~1.5 ms is ~0.1 s, inside the
+  run-to-run noise of the worker CPU above. Zoomed back and forth,
+  one zoom level's tiles no longer stay beside the other's: 54 more
+  renders, 0.06 s more worker CPU, and 17 ms more to sharp at p50.
+- **Why the cap ended the white strips.** Prefetch (one viewport ahead)
+  runs only while the budget is under half used. A full 128 MiB cache kept
+  it off for the rest of any long scroll, so each frame's incoming strip
+  was white until rendered. With cached pixels capped at half the budget,
+  the worker prefetches whenever it is idle. This depends on the cache
+  sitting at or just under the cap. Prefetch stops if the cache is exactly
+  full (`used >= limit / 2`).
+- **Why the cap, not a smaller budget.** One render may reserve at most 75 %
+  of the budget, and a 300 dpi scan's tile reserves ~87 MB. With the whole
+  budget at 64 or 48 MiB, scans rendered as whole pages at about half
+  density (`scanned_plan` 1197×1549, `scanned_density` 0.52) and photos
+  come close (46 of 48 MB). With the cap, scans, vector and transparency
+  documents keep 512 px tiles at full density (`pdf-cache64.json`). The
+  image page (`images-*.json`) makes the same 29 decodes on the way down,
+  at the same 1520×1140, with the cache max 101.7 → 67.0 MB and the peak 221.8 →
+  210.9 MB.
+- **Reduced-density scans grow the footprint (CoreGraphics).** With the
+  budget at 64 MiB, the footprint after each close grew by ~17 MB a cycle
+  (136 → 321 MB in 12 cycles; `heap-budget64.*`: 16 live blocks of 8.24 MB,
+  132 MB, in `DefaultPurgeableMallocZone` after 6 cycles, non-volatile, kept
+  after the document closed). 8.24 MB is the scan's JPEG decoded at half
+  size. At 48 MiB (quarter size) it grew 126 → 134 MB, at 128 MiB and with
+  the cap not at all. The default configuration never draws scans this way
+  except during a pressure cool-down (budget ÷ 4), so the cause is left for
+  a follow-up.
+- **Repeated close is flat.** With the cap, the footprint after each close
+  of the 200-page document over 12 cycles: 109, 121, 122, 125, then 121–122;
+  after the scan: 106–108 (one 121). The allocator returns nothing more
+  (`malloc_zone_pressure_relief` frees 0 B at every checkpoint).
+- **What stays after closing is mostly not the viewer's.** `footprint -p`
+  before opening and after closing: the tiles (untagged mappings) go back
+  to 0.4 MB. The window's IOSurfaces grow from one 14.7 MB buffer to three
+  once the view updates every frame, and Qt never releases the third
+  (docs/RELEASE_REPORT.md). The bench's offscreen canvas (13.6 MB, only
+  when the system does not paint the window) stays in `MALLOC_LARGE` after
+  it is freed. Without the IOSurfaces, after closing: 34.6–49.3 MB in the
+  painted pair against 47–48 MB before opening.
+- **Timing endpoints.** "16.7 ms frames" are intervals between presented
+  viewer paints: the scenario steps once per frame, waits for the next
+  paint and steps again, so a frame over 25 ms is a missed one at 60 Hz.
+  The paint work itself is the much smaller `*_view_paint_us`. Typing beside
+  a rendering PDF (`pdf-budget128.json`, the editor painted 300 times):
+  key event → end of the editor's paint p50 0.52 ms, p95 2.06 ms, p99
+  3.30 ms, max 5.66 ms; key event → the event-loop turn after the
+  backing-store flush p50 1.45 ms, p95 3.95 ms, p99 5.00 ms, max 5.99 ms.
+  Both are in-process endpoints. WindowServer composition and the display's
+  refresh come after, typically another frame or more.
+- **Pressure.** A warning trims the cache to the 16 MiB floor and halves
+  the budget: 27.3 → 16.4 MB cached, footprint −11 MB. Critical behaves as
+  before (cache 0, budget 33.6 MB, 915 tiles at full density, 0 waits).
+- **Painting.** In the full runs (`pdf-budget*.json`, `pdf-cache64.json`)
+  the system painted the window only in some phases. Those runs give
+  counts, memory and density. Their timings and white-area figures are
+  limited to the frames each run painted (`*_unpainted_frames`). The two
+  `scroll-*.json` runs were painted throughout.
 
 ## 7. Caveats
 

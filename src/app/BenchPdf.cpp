@@ -19,7 +19,16 @@
 //      viewport and a scroll through every page;
 //   6. idle with the viewer open and settled, then memory pressure and
 //      scrolling on during the cool-down;
-//   7. closed: footprint released, documents closed, idle again.
+//   7. closed: footprint released, documents closed, idle again;
+//   8. open, scroll and close the 200-page and the scanned document
+//      `cycles` times (default 12): the footprint after each close, then
+//      after asking the allocator to return free pages.
+//
+// --bench-arg media_budget_mib=N / media_cache_mib=N run it with another
+// media budget or cache cap; kinds_only=long runs phases 2 and 4 only.
+// --bench-arg vm_snapshots=1 (default) writes `footprint -p` reports next to
+// the output file at the baseline, the plateau and after closing (2: also
+// `heap`, and `malloc_history` when run with MallocStackLogging).
 #include "app/AppController.h"
 #include "app/BenchDriver.h"
 #include "app/MediaFixtures.h"
@@ -37,12 +46,14 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QProcess>
 #include <QMainWindow>
 #include <QScrollBar>
 #include <QTextBlock>
 #include <QTextDocument>
 
 #include <cstdio>
+#include <unistd.h>
 
 namespace folia {
 
@@ -95,6 +106,7 @@ void BenchDriver::scenarioPdf()
                                       "first): footprints include the writer's freed memory"));
     const QString counterName = platform::sampleSelf().counterName;
     m_extra.insert(QStringLiteral("media_budget_bytes"), double(media->budget().base()));
+    m_extra.insert(QStringLiteral("media_cache_max_bytes"), double(media->config().cacheMaxBytes));
     // app_nap=0: hold a user-initiated activity, so a covered bench window
     // does not get its threads throttled by App Nap.
     const bool appNap = m_args.value(QStringLiteral("app_nap"), 1).toInt() != 0;
@@ -177,10 +189,22 @@ void BenchDriver::scenarioPdf()
     auto putCpu = [&](const QString &prefix, const platform::ProcessSample &a, const platform::ProcessSample &b) {
         m_extra.insert(prefix + QStringLiteral("_process_cpu_s"), (b.userSeconds + b.systemSeconds) - (a.userSeconds + a.systemSeconds));
     };
+    // The PDF worker's own CPU and wall time over the samples since the last
+    // take: what rendering cost, whether or not the system painted the window.
+    auto putRenderCpu = [&](const QString &prefix, const QHash<QString, QVector<qint64>> &samples) {
+        qint64 cpu = 0, wall = 0;
+        for (qint64 us : samples.value(QStringLiteral("pdf_render_cpu_us")))
+            cpu += us;
+        for (qint64 us : samples.value(QStringLiteral("pdf_render_us")))
+            wall += us;
+        m_extra.insert(prefix + QStringLiteral("_render_cpu_s"), cpu / 1e6);
+        m_extra.insert(prefix + QStringLiteral("_render_wall_s"), wall / 1e6);
+    };
     // The window may not be painted by the system (covered, another Space):
     // such frames are painted through the same code into a reused offscreen
     // image, so rendering and memory stay measured (timings excluded).
     QImage canvas;
+    bool offscreenNoted = false;
     QHash<QString, int> unpainted;
     auto ensureViewerPaint = [&](PdfView *v, int before, const QString &phase) {
         if (waitFor([&] { return v->paintCount() > before; }, 100))
@@ -188,9 +212,10 @@ void BenchDriver::scenarioPdf()
         ++unpainted[phase];
         const qreal dpr = m_app->window()->devicePixelRatioF();
         if (canvas.isNull() || canvas.size() != v->viewport()->size() * dpr) {
-            if (canvas.isNull())
+            if (!offscreenNoted)
                 m_notes.append(QStringLiteral("window not painted by the system: some frames painted offscreen "
-                                              "(see *_unpainted_frames; their timings are excluded)"));
+                                              "(see *_unpainted_frames; their timings and coverage are kept apart)"));
+            offscreenNoted = true;
             canvas = QImage(v->viewport()->size() * dpr, QImage::Format_ARGB32_Premultiplied);
             canvas.setDevicePixelRatio(dpr);
         }
@@ -218,14 +243,63 @@ void BenchDriver::scenarioPdf()
         return -1.0;
     };
     // One display-paced frame of the viewer: move, wait for its paint.
+    // Frames are display-paced and back to back, so step → end of paint is
+    // the interval between presented viewer paints; the paint work itself
+    // is pdf_view_paint_us. Every frame (painted on screen or offscreen)
+    // also records how much of the visible page area it left white or
+    // scaled from an older plan.
     auto viewerFrame = [&](PdfView *v, int to, const QString &metric) {
         const int before = v->paintCount();
         QElapsedTimer t;
         t.start();
         v->verticalScrollBar()->setValue(to);
-        if (ensureViewerPaint(v, before, metric))
+        const bool painted = ensureViewerPaint(v, before, metric);
+        if (painted)
             add(metric, t.nsecsElapsed() / 1e6, QStringLiteral("ms"),
                 QStringLiteral("scroll step to the end of the next viewer paint (main thread, includes waiting for the frame)"));
+        // An offscreen frame waited 100 ms for a paint that never came and
+        // requested its tiles only when drawn: its coverage is kept apart.
+        const PdfView::Coverage c = v->viewportCoverage();
+        QString base = metric;
+        base.chop(int(sizeof("_frame_ms")) - 1);
+        if (!painted)
+            base += QStringLiteral("_offscreen");
+        add(base + QStringLiteral("_blank_permille"), c.blank * 1000, QStringLiteral("ratio"),
+            QStringLiteral("visible page area still white after the frame's paint (per mille)"));
+        add(base + QStringLiteral("_scaled_permille"), c.scaled * 1000, QStringLiteral("ratio"),
+            QStringLiteral("visible page area drawn scaled from an older plan after the frame's paint (per mille)"));
+    };
+    // `footprint -p` of this process, written next to the output file
+    // (Dirty/Clean/Reclaimable per VM category: what the footprint is made of).
+    // vm_snapshots=2 adds `heap -s` (live malloc blocks by size: MALLOC_*
+    // dirty memory that is not live is kept by the allocator) and, when
+    // launched with MallocStackLogging, `malloc_history -allBySize`.
+    const int vmSnapshots = m_out.isEmpty() ? 0 : m_args.value(QStringLiteral("vm_snapshots"), 1).toInt();
+    auto vmSnapshot = [&](const QString &label) {
+        if (vmSnapshots <= 0)
+            return;
+        const QFileInfo fi(m_out);
+        auto run = [&](const QString &tool, const QStringList &args, const QString &kind) {
+            QProcess pr;
+            pr.start(tool, args);
+            if (!pr.waitForFinished(120000))
+                return;
+            QFile f(fi.dir().filePath(fi.completeBaseName() + QLatin1Char('.') + kind + QLatin1Char('-') + label +
+                                      QStringLiteral(".txt")));
+            if (f.open(QIODevice::WriteOnly))
+                f.write(pr.readAllStandardOutput());
+        };
+        const QString pid = QString::number(getpid());
+        run(QStringLiteral("/usr/bin/footprint"), {QStringLiteral("-p"), pid}, QStringLiteral("footprint"));
+        if (vmSnapshots >= 2) {
+            run(QStringLiteral("/usr/bin/heap"), {QStringLiteral("-s"), QStringLiteral("-z"), QStringLiteral("-H"), pid},
+                QStringLiteral("heap"));
+            run(QStringLiteral("/usr/bin/heap"),
+                {QStringLiteral("-s"), QStringLiteral("--noContent"), QStringLiteral("--addresses=all[256k-]"), pid},
+                QStringLiteral("heaplarge"));
+            if (qEnvironmentVariableIsSet("MallocStackLogging"))
+                run(QStringLiteral("/usr/bin/malloc_history"), {pid, QStringLiteral("-allBySize")}, QStringLiteral("mallochistory"));
+        }
     };
     auto openViewer = [&](const AttachmentInfo &info, const QString &name) -> PdfView * {
         if (!m_app->showPdf(info.hash, name))
@@ -368,6 +442,10 @@ void BenchDriver::scenarioPdf()
         for (qint64 v : samples.value(QStringLiteral("input_to_paint_us")))
             add(QStringLiteral("pdf_beside_typing_input_to_paint_us"), double(v), QStringLiteral("us"),
                 QStringLiteral("key event to end of editor paint while a PDF view beside it renders vector tiles"));
+        for (qint64 v : samples.value(QStringLiteral("input_to_flush_us")))
+            add(QStringLiteral("pdf_beside_typing_input_to_flush_us"), double(v), QStringLiteral("us"),
+                QStringLiteral("key event to the event-loop turn after the editor paint (backing store flushed to its "
+                               "layer); excludes WindowServer composition and the display"));
         for (qint64 v : samples.value(QStringLiteral("pdf_view_paint_us")))
             add(QStringLiteral("pdf_beside_view_paint_us"), double(v));
         // The editor paints once per key at most: PDF results never repaint it.
@@ -386,8 +464,9 @@ void BenchDriver::scenarioPdf()
     QScrollBar *vb = nullptr;
     PdfCounters c0 = PdfCounters::now();
     double maxUsed = 0;
-    if (kindsOnly.isEmpty()) {
+    if (kindsOnly.isEmpty() || kindsOnly.contains(QStringLiteral("long"))) {
     const double beforeViewer = footprint();
+    vmSnapshot(QStringLiteral("before-open"));
     v = openViewer(longInfo, QStringLiteral("long-200.pdf"));
     if (!v) {
         m_notes.append(QStringLiteral("viewer did not open"));
@@ -426,6 +505,14 @@ void BenchDriver::scenarioPdf()
     m_extra.insert(QStringLiteral("down_media_used_max"), maxUsed);
     putCounters(QStringLiteral("down"), PdfCounters::now() - c0);
     putCpu(QStringLiteral("down"), s0, platform::sampleSelf());
+    {
+        const auto samples = instr::takeSamples();
+        for (qint64 us : samples.value(QStringLiteral("pdf_view_paint_us")))
+            add(QStringLiteral("pdf_scroll_down_view_paint_us"), double(us), QStringLiteral("us"),
+                QStringLiteral("viewer paintEvent work per frame (main thread)"));
+        putRenderCpu(QStringLiteral("down"), samples);
+    }
+    vmSnapshot(QStringLiteral("plateau"));
     // Straight back up.
     c0 = PdfCounters::now();
     s0 = platform::sampleSelf();
@@ -440,6 +527,7 @@ void BenchDriver::scenarioPdf()
     m_extra.insert(QStringLiteral("up_footprint_end"), footprint());
     putCounters(QStringLiteral("up"), PdfCounters::now() - c0);
     putCpu(QStringLiteral("up"), s0, platform::sampleSelf());
+    putRenderCpu(QStringLiteral("up"), instr::takeSamples());
     // A second pass down: the plateau holds (no growth with pages visited).
     frames = 0;
     double secondMax = 0;
@@ -456,6 +544,7 @@ void BenchDriver::scenarioPdf()
     v->goToPage(100);
     waitViewport(v, QStringLiteral("zoom_start"), 30000);
     media->waitIdle();
+    instr::takeSamples();
     c0 = PdfCounters::now();
     s0 = platform::sampleSelf();
     int gestureRenders = 0, settles = 0;
@@ -492,6 +581,7 @@ void BenchDriver::scenarioPdf()
     m_extra.insert(QStringLiteral("zoom_footprint_end"), footprint());
     putCounters(QStringLiteral("zoom"), PdfCounters::now() - c0);
     putCpu(QStringLiteral("zoom"), s0, platform::sampleSelf());
+    putRenderCpu(QStringLiteral("zoom"), instr::takeSamples());
     // High zoom, then scroll: tiles only, bounded.
     v->setZoom(4.0);
     m_extra.insert(QStringLiteral("high_zoom_first_viewport_ms"), waitViewport(v, QStringLiteral("high_zoom"), 30000));
@@ -503,7 +593,10 @@ void BenchDriver::scenarioPdf()
     m_extra.insert(QStringLiteral("high_zoom_footprint_end"), footprint());
     v->fitWidth();
     media->waitIdle();
-    // Closing returns the bitmaps and the document.
+    // Closing returns the bitmaps and the document. (The bench's own
+    // offscreen canvas goes first, so it is not counted as left behind.)
+    m_extra.insert(QStringLiteral("long_close_offscreen_canvas_bytes"), double(canvas.sizeInBytes()));
+    canvas = QImage();
     const double beforeClose = footprint();
     const double cacheBeforeClose = double(media->cacheBytes());
     m_app->closePdf();
@@ -514,6 +607,10 @@ void BenchDriver::scenarioPdf()
     m_extra.insert(QStringLiteral("long_close_cache_before"), cacheBeforeClose);
     m_extra.insert(QStringLiteral("long_close_cache_after"), double(media->cacheBytes()));
     m_extra.insert(QStringLiteral("long_close_documents_open"), platform::PdfDocument::liveCount());
+    vmSnapshot(QStringLiteral("after-close"));
+    m_extra.insert(QStringLiteral("long_close_released_bytes"), double(platform::releaseFreedMemory()));
+    settle(200);
+    m_extra.insert(QStringLiteral("long_close_footprint_after_release"), footprint());
     } // phase 4
 
     // 5. Scanned, vector-heavy and transparency-heavy documents.
@@ -534,6 +631,15 @@ void BenchDriver::scenarioPdf()
         if (!kv)
             continue;
         m_extra.insert(kind + QStringLiteral("_first_viewport_ms"), waitViewport(kv, kind + QStringLiteral("_open"), 120000));
+        {
+            // Full density, or a whole page at a lower density because one
+            // tile's working set does not fit 75 % of the budget.
+            const PdfView::Plan pl = kv->planFor(kv->currentPage(), kv->zoom());
+            const int full = qRound(kv->pages().value(kv->currentPage()).w * kv->zoom() * kv->devicePixelRatioUsed());
+            m_extra.insert(kind + QStringLiteral("_plan"), QStringLiteral("%1 %2x%3").arg(pl.tiles ? QStringLiteral("tiles") : QStringLiteral("page"))
+                                                              .arg(pl.width).arg(pl.height));
+            m_extra.insert(kind + QStringLiteral("_density"), full > 0 ? double(pl.width) / full : 0.0);
+        }
         QScrollBar *kb = kv->verticalScrollBar();
         int kf = 0;
         double kmax = 0;
@@ -559,6 +665,7 @@ void BenchDriver::scenarioPdf()
         media->waitIdle();
         settle(500);
         m_extra.insert(kind + QStringLiteral("_footprint_after_close"), footprint());
+        vmSnapshot(kind + QStringLiteral("-after-close"));
     }
 
     // 6. Idle with the viewer open and settled; then memory pressure, and
@@ -569,6 +676,13 @@ void BenchDriver::scenarioPdf()
         waitViewport(v, QStringLiteral("idle_viewer_open"), 30000);
         media->waitIdle();
         idleWindow(QStringLiteral("idle_viewer"));
+        // Warning level first: trimmed to the floor, budget halved.
+        m_extra.insert(QStringLiteral("warning_cache_before"), double(media->cacheBytes()));
+        m_extra.insert(QStringLiteral("warning_footprint_before"), footprint());
+        m_app->reclaimMemory(false);
+        m_extra.insert(QStringLiteral("warning_cache_after_trim"), double(media->cacheBytes()));
+        m_extra.insert(QStringLiteral("warning_footprint_after_trim"), footprint());
+        m_extra.insert(QStringLiteral("warning_budget_limit"), double(media->budget().limit()));
         const double beforePressure = footprint();
         m_app->reclaimMemory(true);
         m_extra.insert(QStringLiteral("pressure_cache_after_trim"), double(media->cacheBytes()));
@@ -596,6 +710,55 @@ void BenchDriver::scenarioPdf()
     if (kindsOnly.isEmpty())
         idleWindow(QStringLiteral("idle_after_close"));
     m_extra.insert(QStringLiteral("documents_open_at_end"), platform::PdfDocument::liveCount());
+
+    // 8. Repeated open → scroll → close: does what stays after closing grow?
+    const int cycles = m_args.value(QStringLiteral("cycles"), 12).toInt();
+    const AttachmentInfo scanInfo = infos.value(QStringLiteral("scanned-24"));
+    if (cycles > 0 && (kindsOnly.isEmpty() || kindsOnly.contains(QStringLiteral("cycles")))) {
+        canvas = QImage();
+        media->trim(0);
+        settle(500);
+        m_extra.insert(QStringLiteral("cycles_footprint_before"), footprint());
+        const PdfCounters cc0 = PdfCounters::now();
+        const platform::ProcessSample cs0 = platform::sampleSelf();
+        for (int i = 0; i < cycles; ++i) {
+            struct Run { AttachmentInfo info; QString name, metric; int frames; };
+            for (const Run &r : {Run{longInfo, QStringLiteral("long-200.pdf"), QStringLiteral("long"), 40},
+                                 Run{scanInfo, QStringLiteral("scanned-24.pdf"), QStringLiteral("scanned"), 2000}}) {
+                if (!r.info.isPdf())
+                    continue;
+                PdfView *cv = openViewer(r.info, r.name);
+                if (!cv)
+                    continue;
+                waitViewport(cv, QStringLiteral("cycle_open"), 60000);
+                QScrollBar *cb = cv->verticalScrollBar();
+                cb->setValue(int(qint64(cb->maximum()) * i / qMax(1, cycles))); // a different part each time
+                for (int f = 0; f < r.frames && cb->value() < cb->maximum(); ++f)
+                    viewerFrame(cv, qMin(cb->maximum(), cb->value() + step), QStringLiteral("pdf_cycle_frame_ms"));
+                waitViewport(cv, QStringLiteral("cycle_end"), 60000);
+                media->waitIdle(60000);
+                add(QStringLiteral("cycle_") + r.metric + QStringLiteral("_open_footprint_bytes"), footprint(), QStringLiteral("bytes"),
+                    counterName);
+                canvas = QImage();
+                m_app->closePdf();
+                media->waitIdle();
+                settle(500);
+                add(QStringLiteral("cycle_") + r.metric + QStringLiteral("_close_footprint_bytes"), footprint(), QStringLiteral("bytes"),
+                    counterName);
+            }
+        }
+        putCounters(QStringLiteral("cycles"), PdfCounters::now() - cc0);
+        putCpu(QStringLiteral("cycles"), cs0, platform::sampleSelf());
+        m_extra.insert(QStringLiteral("cycles"), cycles);
+        m_extra.insert(QStringLiteral("cycles_cache_after"), double(media->cacheBytes()));
+        m_extra.insert(QStringLiteral("cycles_documents_open"), platform::PdfDocument::liveCount());
+        m_extra.insert(QStringLiteral("cycles_footprint_after"), footprint());
+        vmSnapshot(QStringLiteral("after-cycles"));
+        m_extra.insert(QStringLiteral("cycles_released_bytes"), double(platform::releaseFreedMemory()));
+        settle(500);
+        m_extra.insert(QStringLiteral("cycles_footprint_after_release"), footprint());
+        vmSnapshot(QStringLiteral("after-release"));
+    }
     for (auto it = unpainted.cbegin(); it != unpainted.cend(); ++it)
         m_extra.insert(it.key() + QStringLiteral("_unpainted_frames"), it.value());
     m_extra.insert(QStringLiteral("offscreen_canvas_bytes"), double(canvas.sizeInBytes()));

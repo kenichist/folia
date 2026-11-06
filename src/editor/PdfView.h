@@ -121,6 +121,14 @@ public:
     bool documentOpen() const { return m_doc != nullptr; }
     std::weak_ptr<platform::PdfDocument> document() const { return m_doc; }
     int paintCount() const { return m_paints; }
+    // What the viewport shows with the cache as it is now (benchmarks): the
+    // fraction of the visible page area with no pixels yet (white) and the
+    // fraction drawn only from an older plan, scaled (blurry until sharp).
+    struct Coverage {
+        double blank = 0;
+        double scaled = 0;
+    };
+    Coverage viewportCoverage() const;
 
 signals:
     void currentPageChanged(int page);
@@ -144,6 +152,8 @@ private:
     // Draws what the cache holds of `plan` into `target` (the page's rect at
     // the current zoom); returns true when it covered all of `visible`.
     bool drawPlan(QPainter *p, int page, const Plan &plan, const QRectF &target, const QRectF &visible, bool smooth);
+    // The part of `visible` (logical px²) that the cache holds nothing of `plan` for.
+    double missingArea(int page, const Plan &plan, const QRectF &target, const QRectF &visible) const;
     void arrived(const MediaKey &key);
     QRectF keyRect(const MediaKey &key) const; // content coordinates, at the current zoom
     QPointF contentPos() const { return QPointF(horizontalScrollBar()->value(), verticalScrollBar()->value()); }

@@ -1,6 +1,7 @@
 // Decoded-media cache and scheduler (docs/ATTACHMENTS.md §2, §3, §5).
 //
-//  * One MediaBudget covers cached pixels and reserved in-flight work.
+//  * One MediaBudget covers cached pixels and reserved in-flight work;
+//    cached pixels alone also stay under Config::cacheMaxBytes.
 //  * Two lanes, one scheduler: at most one image decode and at most one PDF
 //    render run at a time, concurrently only when both reservations fit.
 //  * The queue is owned here, not by QThreadPool: each owner (a layout)
@@ -66,6 +67,11 @@ public:
 
     struct Config {
         qint64 budgetBytes = 128ll << 20;  // cached pixels + reserved work
+        // Cached pixels alone stay under this (what a document or a page of
+        // photos leaves resident); the rest of the budget is headroom for
+        // work in flight (a scan's tile or a photo reserves ~46-90 MB).
+        // Pixels on screen are never evicted to meet it.
+        qint64 cacheMaxBytes = 64ll << 20;
         qint64 maxPixels = 16ll << 20;    // decoded bitmap clamp (16 MP)
         int maxResolutionsPerHash = 2;
         int workerExpiryMs = 30000;
