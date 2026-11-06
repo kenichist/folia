@@ -1,0 +1,30 @@
+Process:         Folia [72271]
+Path:            /private/tmp/*/Folia.app/Contents/MacOS/Folia
+Load Address:    0x104a28000
+Identifier:      org.folia.notes
+Version:         0.1.0 (0.1.0)
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  zsh [72267]
+Target Type:     corpse
+
+Date/Time:       2026-11-06 17:24:40.302 +0700
+Launch Time:     2026-11-06 17:21:53.501 +0700
+OS Version:      macOS 26.6.2 (25G83)
+Report Version:  7
+Analysis Tool:   /usr/bin/heap
+
+Physical footprint:         109.9M
+Physical footprint (peak):  208.2M
+Idle exit:                  untracked
+----
+
+Process 72271: 6 zones
+
+All zones: 53507 nodes malloced - Sizes: 2560KB[26] 2480KB[2] 400KB[6] 272KB[6] 160KB[1] 112KB[1] 96KB[2] 64KB[1] 48KB[6] 32KB[5] 28KB[4] 24KB[6] 20KB[2] 16KB[28] 14KB[33] 12KB[8] 10KB[26] 8KB[54] 7KB[41] 6KB[51] 5KB[38] 4KB[94] 3.5KB[85] 3KB[82] 2.5KB[117] 2KB[96] 1.75KB[170] 1.5KB[129] 1.25KB[108] 1KB[167] 896[187] 768[280] 640[575] 512[343] 448[334] 384[367] 320[685] 256[436] 228[3] 224[1061] 192[508] 160[1158] 144[3] 132[3] 128[2487] 112[2389] 110[3] 108[6] 104[3] 96[1680] 91[3] 88[3] 85[18] 84[6] 80[1887] 76[3] 74[3] 72[18] 67[15] 65[3] 64[6866] 63[3] 60[15] 58[3] 56[9] 53[3] 52[15] 50[3] 48[10161] 47[3] 44[6] 43[3] 40[9] 36[12] 34[3] 33[6] 32[16327] 31[3] 30[3] 28[63] 24[51] 20[6] 17[9] 16[3922] 12[6] 10[3] 8[93] 4[27] 1[9] 
+
+Found:  1036 ObjC classes  421 Swift classes  300 C++ classes  246 CFTypes
+Type names for non-objects could be derived from allocation backtraces if the process used MallocStackLogging
+
+Active blocks in all zones that match pattern 'all[256k-]':
+

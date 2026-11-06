@@ -308,8 +308,11 @@ reservation covers that; the plateau benchmark shows it.
     at 7 MiB already ~5×. So at fit width on a 2× display, pages are tiled.
   - One render never reserves more than 75 % of the current budget, as for
     images: when even a tile does not fit (a pressure cool-down, a huge
-    scan), the page is drawn whole at a lower density and scaled up rather
-    than not at all.
+    scan), the page is drawn at a lower density and scaled up rather
+    than not at all, in tiles unless that bitmap is small enough to be one
+    (2 MiB). A scan drawn whole at half density left its half-size JPEG
+    decode in CoreGraphics' image cache after every close, in memory that
+    never became purgeable (docs/BENCHMARKS.md §6b).
   - **Measured: a fling wastes uninterruptible renders.** Scrolling through
     the scan discarded 57 of 89 renders (1.3 s of CPU), through the vector
     document 30 (8.7 s). Heavy pages (layers, an image of 1 MP or more, or
