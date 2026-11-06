@@ -61,7 +61,10 @@ public:
         // big images, long content streams) are not requested until the view
         // slows down for this long: a render cannot be interrupted, and one
         // started mid-fling is thrown away when it finishes.
-        int flingSettleMs = 80;
+        // 150 ms, like the zoom settle: a fling whose frames come up to
+        // ~7 per second apart (a busy machine, a dragged scroll bar) still
+        // counts as one.
+        int flingSettleMs = 150;
         int closeHiddenAfterMs = 30000;          // hidden this long: the document closes
         qreal margin = 16;                       // logical px around the pages
         qreal gap = 12;                          // between pages
