@@ -374,7 +374,8 @@ scrolling screenshot, and a 6000×4000 noisy PNG (36 MB).
 Results are top-level "extra" keys (`down_decodes`, `up_cache_hit_rate`,
 `resize_decodes_during_drag`, `pressure_footprint_after_trim`, …) and
 metrics (`images_scroll_*_frame_ms`, `decode_peak_bytes_<format>`,
-`import_typing_input_to_paint_us`, …).
+`images_scroll_decode_ms` and `_cpu_ms` for every decode while scrolling and
+resizing, `import_typing_input_to_paint_us`, …).
 
 Peaks use rusage's `ri_interval_max_phys_footprint`
 (`platform::intervalPeakFootprint()`). The kernel resets it on every read,
@@ -815,7 +816,8 @@ painted on screen throughout, 2,991 frames each):
   tiles instead of one bitmap, ~1.6× the CPU in the probe (28 → 45 ms per
   page at 1197 px, measured beside another run). It only applies while one
   of the scan's tiles does not fit the budget.
-- **Not fixed: 600 dpi scans grow 10–15 MB per page drawn, whole or tiled.**
+- **600 dpi scans: 10–15 MB per page drawn in the probe, whole or tiled**
+  (fixed below, by the allocator setting, not in Folia's code).
   For each page, CoreGraphics copies the 8 MB JPEG stream into a CFData that
   `realloc` grows to 16 MB (`CGDataProviderCopyData` under
   `CGImageSourceCreateWithDataProvider`). Once freed, the chunk stays dirty
@@ -825,8 +827,54 @@ painted on screen throughout, 2,991 frames each):
   footprint to ~520 MB, where it levels off. With `MallocLargeCache=0` it
   stays at 0.9 MB, and a plain 8.3 MB `malloc` stays at 9 MB. Folia cannot
   reach those reallocs; the 300 dpi fixtures (2 MB streams) never trigger
-  it. Launching with `MallocLargeCache=0` ends both effects in the probes,
-  but its cost to speed is not measured.
+  it. Launching with `MallocLargeCache=0` ends both effects in the probes.
+- **Fixed: Folia runs without malloc's large cache.** Raw files and
+  provenance: `bench/results/malloc-large-cache-2026-11-06/`. On this 8 GB
+  M1 every `malloc` above ~32 KB is a "large" block, and the cache keeps
+  freed ones dirty and in the footprint; neither `malloc_zone_pressure_relief`
+  nor libmalloc's pressure-event handler empties it, so the only lever is
+  `MallocLargeCache=0`, which libmalloc reads at process start. `main()`
+  therefore sets it and re-executes the binary (same pid) when it is unset,
+  covering every launch (Info.plist's `LSEnvironment` would cover only
+  LaunchServices launches). `MallocLargeCache=1` opts out; setting it at all
+  skips the exec (debuggers stop at an exec). Bench JSON records it as
+  `env.malloc_large_cache`. A 600 dpi scan (`makescan` 5100×6600, 6 pages)
+  opened, scrolled and closed 12 times with the 200-page document, two runs
+  per mode:
+
+  | After each close of the scan | Cache on | Cache off |
+  |---|---:|---:|
+  | Window 1180 pt (tiles 2296×2971) | 117.8–221.2 MB (medians 121.8, 132.4) | 72.7–74.7 MB |
+  | Window 640 pt (`window_width=640`, tiles 1216×1574) | 94.8–113.1 MB (medians 101.8, 103.3) | 52.7–61.2 MB |
+  | After importing the five PDFs, before opening the scan | 78.7–99.0 MB | 50.5–70.7 MB |
+  | `MALLOC_LARGE` dirty after the cycles (`footprint -p`) | 40–50 MB | 0 |
+
+  In the app the scan does not keep growing per page as in the probe: other
+  allocations reuse the cached chunks, so the cache sits at 40–50 MB and
+  swings (up to +90 MB between closes in one run). After closing the
+  200-page document: 86.8 against 102.2 MB (3 runs each).
+  The cost, same machine, modes interleaved (load 2–25 and a pressure
+  warning for most runs, so in-process measures only):
+
+  | | Cache on | Cache off |
+  |---|---:|---:|
+  | PDF worker CPU, 200-page scroll down / up | 7.81 / 9.30 s | 7.22 / 8.87 s |
+  | Zoom settle → sharp p50 / p95 | 108 / 217 ms | 107 / 217 ms |
+  | Image scroll decodes (54 a run), wall p50 (CPU p50), 2 pairs | 64.6–65.5 (41.2–41.4) ms | 66.4–67.0 (42.0–42.9) ms |
+  | Typing, input → end of editor paint p50 / p95 | 2.07 / 8.77 ms | 2.27 / 10.06 ms |
+  | Editor scroll, frame work p50 / p95 | 6.55–6.59 / 7.87–7.88 ms | 6.56–6.61 / 7.93 ms |
+  | Open a page, uncached → editable p50 | 12.5 ms | 12.3 ms |
+  | Launch, process start → editable (median of 5) | 414 ms | 409 ms; 451 ms with the re-exec |
+
+  Typing pays because Qt's raster engine allocates ~41 KB of clip spans
+  (`QClipData::initialize`) about 21 times per keystroke's paint, under
+  clips Qt's text drawing sets: recycled blocks with the cache, fresh pages
+  without (`typing-large-allocations.txt`). Image decodes after a critical
+  pressure trim were 2–2.7× slower in the two runs whose window was covered
+  (App Nap; the images scenario has no `app_nap=0`), 0–13 % when painted.
+  Decided: the lower footprint after document work (15–59 MB, up to 48 %,
+  and no swings) outweighs +0.2 ms per keystroke at p50, 2–4 % per image
+  decode and ~40 ms at launch.
 - **Repeated close is flat.** With the cap, the footprint after each close
   of the 200-page document over 12 cycles: 109, 121, 122, 125, then 121–122;
   after the scan: 106–108 (one 121). The allocator returns nothing more

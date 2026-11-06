@@ -330,6 +330,16 @@ void BenchDriver::scenarioImages()
     win->resize(size0);
     settle(400);
     media->waitIdle();
+    // The decodes of phases 4-6, painted on screen or not.
+    {
+        const auto samples = instr::takeSamples();
+        for (qint64 us : samples.value(QStringLiteral("image_decode_us")))
+            add(QStringLiteral("images_scroll_decode_ms"), us / 1000.0, QStringLiteral("ms"),
+                QStringLiteral("one decode on the image lane (wall), scrolling down and up and resizing"));
+        for (qint64 us : samples.value(QStringLiteral("image_decode_cpu_us")))
+            add(QStringLiteral("images_scroll_decode_cpu_ms"), us / 1000.0, QStringLiteral("ms"),
+                QStringLiteral("one decode on the image lane (its thread's CPU), scrolling down and up and resizing"));
+    }
 
     // 7. A 36 MB PNG pasted while typing: input latency, and the RAM the
     // import holds while it copies (peak taken when the file is stored,

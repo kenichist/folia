@@ -277,6 +277,10 @@ QJsonObject BenchDriver::envJson() const
     e.insert(QStringLiteral("folia"), QStringLiteral(FOLIA_VERSION));
     e.insert(QStringLiteral("thermal_state"), platform::thermalState());
     e.insert(QStringLiteral("power_mode"), platform::powerSource());
+    // macOS: "0" unless the run opted out (main.cpp, docs/BENCHMARKS.md §6b).
+    e.insert(QStringLiteral("malloc_large_cache"), qEnvironmentVariableIsSet("MallocLargeCache")
+                                                       ? qEnvironmentVariable("MallocLargeCache")
+                                                       : QStringLiteral("unset"));
     e.insert(QStringLiteral("time"), QDateTime::currentDateTime().toString(Qt::ISODate));
     e.insert(QStringLiteral("window_size"), QStringLiteral("%1x%2").arg(m_app->window()->width()).arg(m_app->window()->height()));
     e.insert(QStringLiteral("device_pixel_ratio"), m_app->window()->devicePixelRatioF());

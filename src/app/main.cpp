@@ -8,8 +8,47 @@
 #include <QMessageBox>
 #include <QTimer>
 
+#ifdef Q_OS_MACOS
+#include <mach-o/dyld.h>
+
+#include <climits>
+#include <cstdlib>
+#include <unistd.h>
+#endif
+
+namespace {
+
+#ifdef Q_OS_MACOS
+// Run without malloc's large-block cache (docs/BENCHMARKS.md §6b). macOS keeps
+// freed blocks above ~32 KB dirty in that cache (up to ~520 MB on an 8 GB
+// Mac), counted in the footprint, and a purgeable block that CoreGraphics'
+// image cache gets from it can never become volatile. Imports and 600 dpi
+// scans leave 30-50 MB there. libmalloc reads MallocLargeCache once, at
+// process start, so when it is unset: set it and exec this binary again (same
+// pid). That covers every launch (Finder, Dock, a terminal, the benches);
+// Info.plist's LSEnvironment would cover only LaunchServices launches.
+// MallocLargeCache=1 opts out; setting it (0 or 1) also skips the exec, which
+// lldb otherwise stops at.
+void execWithoutLargeMallocCache(char **argv)
+{
+    if (getenv("MallocLargeCache"))
+        return;
+    char path[PATH_MAX];
+    uint32_t size = sizeof path;
+    if (_NSGetExecutablePath(path, &size) != 0 || setenv("MallocLargeCache", "0", 1) != 0)
+        return;
+    execv(path, argv);
+    unsetenv("MallocLargeCache"); // exec failed: carry on with the default allocator
+}
+#endif
+
+} // namespace
+
 int main(int argc, char **argv)
 {
+#ifdef Q_OS_MACOS
+    execWithoutLargeMallocCache(argv);
+#endif
     folia::BenchDriver::markMainEntered();
     QApplication::setApplicationName(QStringLiteral("Folia"));
     QApplication::setOrganizationName(QStringLiteral("Folia"));
