@@ -43,6 +43,7 @@
 #include "storage/AttachmentStore.h"
 #include "storage/Store.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
@@ -53,7 +54,6 @@
 #include <QTextDocument>
 
 #include <cstdio>
-#include <unistd.h>
 
 namespace folia {
 
@@ -289,7 +289,7 @@ void BenchDriver::scenarioPdf()
             if (f.open(QIODevice::WriteOnly))
                 f.write(pr.readAllStandardOutput());
         };
-        const QString pid = QString::number(getpid());
+        const QString pid = QString::number(QCoreApplication::applicationPid());
         run(QStringLiteral("/usr/bin/footprint"), {QStringLiteral("-p"), pid}, QStringLiteral("footprint"));
         if (vmSnapshots >= 2) {
             run(QStringLiteral("/usr/bin/heap"), {QStringLiteral("-s"), QStringLiteral("-z"), QStringLiteral("-H"), pid},
