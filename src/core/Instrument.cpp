@@ -23,7 +23,7 @@ const char *counterName(Counter c)
         "image_decodes", "image_cache_hits", "pdf_renders", "pdf_tiles", "pdf_cache_hits",
         "media_jobs_dropped_queued",
         "media_jobs_discarded", "media_cpu_us_discarded", "media_budget_waits", "media_too_large",
-        "attachment_imports", "attachment_gc_deleted",
+        "attachment_imports", "attachment_gc_deleted", "pdf_resize_settles",
     };
     return (c >= 0 && c < CounterCount) ? names[c] : "?";
 }

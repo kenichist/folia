@@ -135,6 +135,13 @@ No separate application journal is used: no requirement needed one.
 - `QTextEdit::setDocument` sends a whole-document relayout request. With an
   unchanged width and block count it is ignored, so warm page switches keep
   their layouts.
+- **Width changes** (window, sidebar, the split's divider) drop only the
+  lines already laid out (at most the cap) and keep every height, so a
+  resize step costs the visible lines, not the document: 0.17 ms per step on
+  a 50,000-line note, against 32 ms when every height was estimated again
+  per step. The other lines' heights are estimated again once, 150 ms after
+  the width stops changing, and only if the text column changed width (a
+  pane wider than the column + margins just moves it).
 - Display math renders below its source. Inline `$…$` renders in place,
   except the formula the caret touches, which shows its source (plus a
   floating preview). Source always stays editable, and errors are shown
@@ -164,6 +171,19 @@ See `presets/REFERENCE.md` (the language reference shipped with the presets).
 - Nodes are reconciled by stable key (explicit `id`, or a path), so widgets
   survive re-renders.
 - There is exactly one `EditorPane`. It is re-parented, never recreated.
+- **Split view.** The layout's editor slot holds a `PaneSplitter`, not the
+  editor itself: the note, plus at most one other tab (the PDF viewer) on
+  its left or right, with a draggable 1 px divider. With one tab the
+  splitter has no handle and draws nothing. The editor is never re-parented
+  by it (a swap moves the PDF), panes never collapse below 260 px, the
+  divider's position is written once per drag (`split.ratio`, `split.side`
+  workspace settings), and a window resize re-applies the user's ratio in
+  one pass. Each pane keeps its own resize cheap (Apple's live-resize rule:
+  draw cheaply while it moves, at full quality once it stops): the PDF view
+  draws its cached pixels scaled and renders once the width has been still
+  for 150 ms; the note re-lays out only what is drawn (§4). The PDF tab
+  claims Esc and Mod+W through `ShortcutOverride` while it has focus, so a
+  layout's own window-wide binding of those keys keeps working elsewhere.
 - Lists render native, paged data sources (tree, search, recent, children,
   ancestors) from a declarative row template. There are no per-row or
   per-frame Lua callbacks.

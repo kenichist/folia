@@ -25,6 +25,7 @@ class EditorContext;
 class EditorPane;
 class PageSession;
 class PreviewService;
+class PaneSplitter;
 class PdfViewerPage;
 class SettingsPage;
 class ShellHost;
@@ -94,12 +95,21 @@ public:
     void closeSettings();
     bool settingsOpen() const;
     SettingsPage *settingsPage() const;
-    // The PDF viewer (docs/ATTACHMENTS.md §4): takes the editor's place like
-    // Settings; closing it destroys it, which closes the document.
+    // The PDF viewer (docs/ATTACHMENTS.md §4): a second tab beside the note,
+    // in the editor slot's split (at most two tabs: the note and one PDF;
+    // opening another PDF replaces it). Closing it destroys it, which closes
+    // the document. pdfOpen() is true while the tab exists, even when
+    // Settings covers it.
     bool showPdf(const QString &hash, const QString &name);
     void closePdf();
     bool pdfOpen() const;
     PdfViewerPage *pdfViewer() const;
+    bool pdfHasFocus() const;
+    // The split: which side the PDF is on and its share of the width are
+    // workspace settings (split.side, split.ratio), written once per change.
+    PaneSplitter *splitter() const { return m_split; }
+    void swapPanes();
+    void focusOtherPane();
     // Appearance overrides layered over the layout theme: applied now,
     // written to the workspace shortly after (coalesced).
     void setThemeOverrides(const QVariantMap &overrides);
@@ -155,6 +165,7 @@ private:
     QMainWindow *m_window = nullptr;
     QWidget *m_shellContainer = nullptr;
     QStackedWidget *m_stack = nullptr; // the layout, or the Settings page
+    PaneSplitter *m_split = nullptr;   // the editor slot: the note, and the PDF tab beside it
     QPointer<SettingsPage> m_settings;
     QPointer<PdfViewerPage> m_pdf;
     QTimer m_prefsTimer;         // coalesces settings writes

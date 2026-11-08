@@ -5,6 +5,7 @@
 // whole-page vs tile plans, zoom settling, stale requests dropped before
 // they start, the document handle's lifetime and separate invalidation.
 #include "app/AppController.h"
+#include "app/PaneSplitter.h"
 #include "app/PdfViewerPage.h"
 #include "app/Platform.h"
 #include "core/Attachments.h"
@@ -18,13 +19,17 @@
 #include "editor/VirtualLayout.h"
 #include "storage/AttachmentStore.h"
 #include "shell/CommandRegistry.h"
+#include "shell/ShellHost.h"
 #include "storage/Store.h"
 
 #include <QApplication>
 #include <QMainWindow>
 #include <QDir>
 #include <QFile>
+#include <QLabel>
 #include <QMimeData>
+#include <QMouseEvent>
+#include <QSplitterHandle>
 #include <QMutex>
 #include <QScrollBar>
 #include <QSignalSpy>
@@ -952,7 +957,43 @@ private slots:
         ed.setSession(nullptr);
     }
 
-    void viewerTakesTheEditorsPlaceInTheApp()
+    // Imports `src` into the app's open page and returns its hash.
+    static QString importIntoApp(AppController *app, const QString &src, const QString &name)
+    {
+        NoteEditor *ed = app->editorPane()->editor();
+        AttachmentStore::Source s;
+        s.path = src;
+        s.name = name;
+        if (!ed->importImages({s}))
+            return QString();
+        app->attachments()->waitForImports();
+        if (!QTest::qWaitFor([&] { return !app->activeSession()->hasPendingImports(); }, 5000))
+            return QString();
+        QString hash;
+        for (QTextBlock b = app->activeSession()->document()->firstBlock(); b.isValid(); b = b.next())
+            if (PageSession::roleOf(b) == LineRole::Pdf)
+                hash = PageSession::imageHash(b);
+        return hash;
+    }
+
+    // Drags the split's divider by `dx` logical px in `steps` mouse moves
+    // (QSplitterHandle follows the global position).
+    static void dragDivider(PaneSplitter *split, int dx, int steps = 8)
+    {
+        QSplitterHandle *h = split->handle(1);
+        const QPoint g = h->mapToGlobal(h->rect().center());
+        auto send = [&](QEvent::Type t, int off, Qt::MouseButton b, Qt::MouseButtons bs) {
+            const QPoint gp = g + QPoint(off, 0);
+            QMouseEvent e(t, QPointF(h->mapFromGlobal(gp)), QPointF(gp), b, bs, Qt::NoModifier);
+            QApplication::sendEvent(h, &e);
+        };
+        send(QEvent::MouseButtonPress, 0, Qt::LeftButton, Qt::LeftButton);
+        for (int i = 1; i <= steps; ++i)
+            send(QEvent::MouseMove, dx * i / steps, Qt::NoButton, Qt::LeftButton);
+        send(QEvent::MouseButtonRelease, dx, Qt::LeftButton, Qt::NoButton);
+    }
+
+    void viewerOpensBesideTheNoteInTheApp()
     {
         if (!cg())
             QSKIP("CoreGraphics only");
@@ -964,50 +1005,86 @@ private slots:
         auto app = std::make_unique<AppController>(o);
         QString err;
         QVERIFY2(app->start(&err), qPrintable(err));
+        app->window()->resize(1180, 780);
         app->window()->show();
         QTRY_VERIFY(app->activeSession());
         const int docs = platform::PdfDocument::liveCount();
         NoteEditor *ed = app->editorPane()->editor();
-        AttachmentStore::Source s;
-        s.path = src;
-        s.name = QStringLiteral("app.pdf");
-        QVERIFY(ed->importImages({s}));
-        app->attachments()->waitForImports();
-        QTRY_VERIFY(!app->activeSession()->hasPendingImports());
-        QString hash;
-        for (QTextBlock b = app->activeSession()->document()->firstBlock(); b.isValid(); b = b.next())
-            if (PageSession::roleOf(b) == LineRole::Pdf)
-                hash = PageSession::imageHash(b);
+        PaneSplitter *split = app->splitter();
+        QCOMPARE(split->count(), 1); // one tab: the note alone, no divider
+        const QString hash = importIntoApp(app.get(), src, QStringLiteral("app.pdf"));
         QVERIFY(!hash.isEmpty());
         const QString title = app->window()->windowTitle();
-        // The card's click signal opens it inside the main window.
+        // The card's click signal opens it beside the note, on the right.
         emit ed->openPdfRequested(hash, QStringLiteral("app.pdf"));
         QVERIFY(app->pdfOpen());
         PdfViewerPage *page = app->pdfViewer();
         QCOMPARE(page->window(), static_cast<QWidget *>(app->window()));
-        QVERIFY(!app->editorPane()->isVisible());
-        QCOMPARE(app->window()->windowTitle(), QStringLiteral("app.pdf — Folia"));
+        QCOMPARE(page->parentWidget(), static_cast<QWidget *>(split));
+        QCOMPARE(split->count(), 2);
+        QCOMPARE(split->widget(0), static_cast<QWidget *>(app->editorPane()));
+        QCOMPARE(split->widget(1), static_cast<QWidget *>(page));
+        QVERIFY(app->editorPane()->isVisible());
+        QVERIFY(page->isVisible());
+        // The divider is the layout's border color, in light and dark.
+        QCOMPARE(split->lineColor(), QColor(app->shell()->namedColor(QStringLiteral("border"))));
+        app->setThemeOverrides({{QStringLiteral("mode"), QStringLiteral("dark")}});
+        QCOMPARE(split->lineColor(), QColor(60, 60, 66));
+        app->setThemeOverrides({});
+        QCOMPARE(split->lineColor(), QColor(222, 222, 226));
+        // Equal widths by default, each at least the minimum.
+        QTRY_VERIFY(qAbs(page->width() - app->editorPane()->width()) <= 2);
+        QVERIFY(page->width() >= PaneSplitter::kMinPaneWidth);
+        QCOMPARE(app->window()->windowTitle(), title); // the note's, as before
         QCOMPARE(page->view()->pageCount(), 6);
         QVERIFY(app->attachments()->isPinned(hash));
+        QVERIFY(app->pdfHasFocus());
+        // Undo belongs to the note, and only while the PDF is not focused.
         QVERIFY(!app->commands()->dispatchCommand(QStringLiteral("editor.undo"), {}).ok);
         page->view()->viewport()->repaint();
         app->media()->waitIdle();
         QTRY_VERIFY(app->media()->cacheEntries() > 1); // the card's thumbnail and the viewer's tiles
-        // Esc returns to the note; the viewer and its bitmaps are gone.
+        // The other pane, and back.
+        QVERIFY(app->commands()->dispatchCommand(QStringLiteral("pane.focus_other"), {}).ok);
+        QVERIFY(!app->pdfHasFocus());
+        QVERIFY(app->commands()->dispatchCommand(QStringLiteral("editor.undo"), {}).ok);
+        QVERIFY(app->commands()->dispatchCommand(QStringLiteral("pane.focus_other"), {}).ok);
+        QVERIFY(app->pdfHasFocus());
+        // Going to another page keeps the PDF open beside it.
+        QVERIFY(app->commands()->dispatchCommand(QStringLiteral("page.new"), {}).ok);
+        QTRY_VERIFY(app->activeSession() && app->activeSession()->title().isEmpty());
+        QVERIFY(app->pdfOpen());
+        QCOMPARE(app->pdfViewer(), page);
+        // Settings cover both; closing Settings shows both again.
+        app->showSettings();
+        QVERIFY(app->pdfOpen());
+        QVERIFY(!page->isVisible());
+        QVERIFY(!app->editorPane()->isVisible());
+        app->closeSettings();
+        QVERIFY(page->isVisible());
+        QVERIFY(app->editorPane()->isVisible());
+        // The same PDF again only focuses it; another replaces it (two tabs at most).
+        QVERIFY(app->showPdf(hash, QStringLiteral("app.pdf")));
+        QCOMPARE(app->pdfViewer(), page);
+        // Esc in the viewer closes it; the viewer and its bitmaps are gone.
+        page->setFocus();
         QTest::keyClick(page->view(), Qt::Key_Escape);
         QVERIFY(!app->pdfOpen());
         QVERIFY(!app->pdfViewer());
+        QCOMPARE(split->count(), 1);
         QVERIFY(app->editorPane()->isVisible());
-        QCOMPARE(app->window()->windowTitle(), title);
+        QCOMPARE(app->editorPane()->width(), split->width()); // the note takes the slot back
         app->media()->waitIdle();
-        QCOMPARE(app->media()->cacheEntries(), 1); // the thumbnail stays
         QTRY_COMPARE(platform::PdfDocument::liveCount(), docs);
-        // Going to a page closes it; so does the command.
-        QVERIFY(app->showPdf(hash, QStringLiteral("app.pdf")));
-        QVERIFY(app->commands()->dispatchCommand(QStringLiteral("page.new"), {}).ok);
-        QTRY_VERIFY(!app->pdfOpen());
+        QVERIFY(!app->attachments()->isPinned(hash) || app->activeSession()); // the open page may pin it
+        // The command closes it too; Mod+W in the viewer does too.
         QVERIFY(app->showPdf(hash, QStringLiteral("app.pdf")));
         QVERIFY(app->commands()->dispatchCommand(QStringLiteral("pdf.close"), {}).ok);
+        QVERIFY(!app->pdfOpen());
+        QVERIFY(!app->commands()->dispatchCommand(QStringLiteral("pdf.close"), {}).ok);
+        QVERIFY(!app->commands()->dispatchCommand(QStringLiteral("pane.swap"), {}).ok);
+        QVERIFY(app->showPdf(hash, QStringLiteral("app.pdf")));
+        QTest::keySequence(app->pdfViewer()->view(), QKeySequence::Close);
         QVERIFY(!app->pdfOpen());
         // Quitting with the viewer open tears down in order (the viewer
         // calls into the media service and attachment store as it goes).
@@ -1015,6 +1092,185 @@ private slots:
         app->pdfViewer()->view()->viewport()->repaint();
         app.reset();
         QTRY_COMPARE(platform::PdfDocument::liveCount(), docs);
+    }
+
+    void splitSideAndWidthAreAdjustableAndKept()
+    {
+        if (!cg())
+            QSKIP("CoreGraphics only");
+        QTemporaryDir home;
+        const QString src = fresh(QStringLiteral("split.pdf"));
+        QVERIFY(platform::writeFixturePdf(src, QStringLiteral("text"), 4));
+        QString hash;
+        {
+            AppController::Options o;
+            o.homeDir = home.path();
+            auto app = std::make_unique<AppController>(o);
+            QString err;
+            QVERIFY2(app->start(&err), qPrintable(err));
+            app->window()->resize(1180, 780);
+            app->window()->show();
+            QVERIFY(QTest::qWaitForWindowExposed(app->window()));
+            QTRY_VERIFY(app->activeSession());
+            hash = importIntoApp(app.get(), src, QStringLiteral("split.pdf"));
+            QVERIFY(!hash.isEmpty());
+            QVERIFY(app->showPdf(hash, QStringLiteral("split.pdf")));
+            PaneSplitter *split = app->splitter();
+            PdfViewerPage *page = app->pdfViewer();
+            QWidget *editor = app->editorPane();
+            QTRY_VERIFY(page->width() > 0);
+            // Swap: the PDF moves to the left; the editor keeps its parent
+            // (never re-parented: an IME composition or the caret survive).
+            QVERIFY(app->commands()->dispatchCommand(QStringLiteral("pane.swap"), {}).ok);
+            QCOMPARE(split->side(), PaneSplitter::Side::Left);
+            QCOMPARE(split->widget(0), static_cast<QWidget *>(page));
+            QCOMPARE(split->widget(1), editor);
+            QCOMPARE(editor->parentWidget(), static_cast<QWidget *>(split));
+            QVERIFY(page->geometry().right() < editor->geometry().left());
+            // Drag the divider 120 px to the right: the PDF (left) grows,
+            // and the ratio is written once, on release.
+            const int before = page->width();
+            QSignalSpy committed(split, &PaneSplitter::ratioCommitted);
+            dragDivider(split, 120);
+            QTRY_VERIFY(qAbs(page->width() - (before + 120)) <= 2);
+            QCOMPARE(committed.size(), 1);
+            const double ratio = split->ratio();
+            QVERIFY(ratio > 0.55 && ratio < 0.7);
+            // Never narrower than the minimum, however far it is dragged.
+            dragDivider(split, 2000);
+            QVERIFY(editor->width() >= PaneSplitter::kMinPaneWidth);
+            QCOMPARE(committed.size(), 2);
+            // Back to 40 % for the PDF.
+            dragDivider(split, int(0.4 * (page->width() + editor->width())) - page->width());
+            const double kept = split->ratio();
+            QVERIFY(qAbs(kept - 0.4) < 0.01);
+            // The window resizing keeps the ratio.
+            app->window()->resize(1500, 780);
+            QTRY_VERIFY(qAbs(double(page->width()) / (page->width() + editor->width()) - kept) < 0.01);
+            app->flushSaves();
+        }
+        // Restarted: the PDF reopens on the left at the kept width.
+        AppController::Options o;
+        o.homeDir = home.path();
+        auto app = std::make_unique<AppController>(o);
+        QString err;
+        QVERIFY2(app->start(&err), qPrintable(err));
+        app->window()->resize(1180, 780);
+        app->window()->show();
+        QTRY_VERIFY(app->activeSession());
+        QCOMPARE(app->splitter()->side(), PaneSplitter::Side::Left);
+        const double kept = app->splitter()->ratio();
+        QVERIFY(kept > PaneSplitter::kMinRatio && kept < 0.6);
+        QVERIFY(app->showPdf(hash, QStringLiteral("split.pdf")));
+        QCOMPARE(app->splitter()->widget(0), static_cast<QWidget *>(app->pdfViewer()));
+        QTRY_VERIFY(qAbs(double(app->pdfViewer()->width()) / (app->pdfViewer()->width() + app->editorPane()->width()) - kept)
+                    < 0.01);
+        // A double-click on the divider resets equal widths.
+        QSplitterHandle *h = app->splitter()->handle(1);
+        QTest::mouseDClick(h, Qt::LeftButton, Qt::NoModifier, h->rect().center());
+        QTRY_VERIFY(qAbs(app->pdfViewer()->width() - app->editorPane()->width()) <= 2);
+        QCOMPARE(app->splitter()->ratio(), 0.5);
+    }
+
+    void escapeClosesTheViewerOnlyWhenItHasFocus()
+    {
+        if (!cg())
+            QSKIP("CoreGraphics only");
+        // A layout binding Escape window-wide (as the keyboard preset does):
+        // the viewer still gets Esc while it has focus, and the layout gets
+        // it everywhere else.
+        QTemporaryDir home;
+        const QString shell = QDir(home.path()).filePath(QStringLiteral("esc.lua"));
+        {
+            QFile f(shell);
+            QVERIFY(f.open(QIODevice::WriteOnly));
+            f.write("return { version = 1, name = \"Esc\", state = { n = 0 },\n"
+                    "  keys = { [\"Escape\"] = function(ctx) ctx.set{ n = ctx.state.n + 1 } end },\n"
+                    "  view = function(state) return ui.column{ ui.text{ id = \"n\", text = tostring(state.n) }, ui.editor{} } end }\n");
+        }
+        const QString src = fresh(QStringLiteral("esc.pdf"));
+        QVERIFY(platform::writeFixturePdf(src, QStringLiteral("text"), 2));
+        AppController::Options o;
+        o.homeDir = home.path();
+        o.shellPath = shell;
+        auto app = std::make_unique<AppController>(o);
+        QString err;
+        QVERIFY2(app->start(&err), qPrintable(err));
+        app->window()->show();
+        app->window()->activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(app->window()));
+        QTRY_VERIFY(app->activeSession());
+        const QString hash = importIntoApp(app.get(), src, QStringLiteral("esc.pdf"));
+        QVERIFY(app->showPdf(hash, QStringLiteral("esc.pdf")));
+        auto counterText = [&] {
+            auto *l = qobject_cast<QLabel *>(app->shell()->widgetById(QStringLiteral("n")));
+            return l ? l->text() : QString();
+        };
+        QCOMPARE(counterText(), QStringLiteral("0"));
+        // The note has focus: the layout's Escape runs, the PDF stays.
+        app->focusOtherPane();
+        QVERIFY(!app->pdfHasFocus());
+        QTest::keyClick(app->editorPane()->editor(), Qt::Key_Escape);
+        QTRY_COMPARE(counterText(), QStringLiteral("1"));
+        QVERIFY(app->pdfOpen());
+        // The PDF has focus: Esc closes it, and the layout's binding does not run.
+        app->focusOtherPane();
+        QVERIFY(app->pdfHasFocus());
+        QTest::keyClick(app->pdfViewer()->view(), Qt::Key_Escape);
+        QVERIFY(!app->pdfOpen());
+        QTest::qWait(20);
+        QCOMPARE(counterText(), QStringLiteral("1"));
+        QVERIFY(app->editorPane()->editor()->hasFocus());
+    }
+
+    void resizingAtFitWidthRendersOnceSettled()
+    {
+        auto g = std::make_shared<Gate>();
+        Rig rig(fresh(QStringLiteral("ws.db")), fresh(QStringLiteral("att")), true, gated(g));
+        const QString h = fakeHash('7');
+        PdfView::Config cfg;
+        cfg.zoomSettleMs = 80;
+        PdfView v(&rig.ctx, pdfInfoFor(h, letterPages(30)), QStringLiteral("/nowhere.pdf"), cfg);
+        v.resize(600, 700);
+        v.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&v));
+        v.fitWidth();
+        v.viewport()->repaint();
+        QVERIFY(!v.lastWants().isEmpty());
+        QTRY_COMPARE(g->count(), 1);
+        const qint64 settles = counter(instr::PdfResizeSettles);
+        // A divider drag: the width changes every frame. Nothing new is
+        // asked for while it changes; the cached pixels are drawn scaled.
+        for (int i = 1; i <= 10; ++i) {
+            v.resize(600 + 15 * i, 700);
+            v.viewport()->repaint();
+            QVERIFY(v.zooming());
+            QVERIFY(v.lastWants().isEmpty());
+        }
+        QCOMPARE(counter(instr::PdfResizeSettles) - settles, qint64(1)); // one drag, one settle
+        QCOMPARE(rig.media->queuedJobs(), 0);
+        g->release();
+        rig.media->waitIdle();
+        QCOMPARE(g->count(), 1); // only the job that had already started
+        // Settled: the final width is rendered, at fit width.
+        QTRY_VERIFY(!v.zooming());
+        QVERIFY(qFuzzyCompare(v.zoom(), v.fitWidthZoom()));
+        v.viewport()->repaint();
+        QVERIFY(!v.lastWants().isEmpty());
+        rig.media->waitIdle();
+        QVERIFY(g->count() > 1);
+        // Off: every step asks for its own zoom at once.
+        cfg.settleResize = false;
+        PdfView w(&rig.ctx, pdfInfoFor(fakeHash('8'), letterPages(30)), QStringLiteral("/nowhere.pdf"), cfg);
+        w.resize(600, 700);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        w.fitWidth();
+        w.viewport()->repaint();
+        w.resize(640, 700);
+        w.viewport()->repaint();
+        QVERIFY(!w.zooming());
+        QVERIFY(!w.lastWants().isEmpty());
     }
 
     // ------------------------------------------------------- scheduler ----

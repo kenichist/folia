@@ -50,6 +50,7 @@ enum Counter : int {
     MediaTooLarge,          // jobs refused: estimate exceeds the whole budget
     AttachmentImports,
     AttachmentGcDeleted,
+    PdfResizeSettles,       // live resizes (divider, window) drawn scaled, rendered once settled
     CounterCount
 };
 

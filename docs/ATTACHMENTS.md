@@ -246,19 +246,25 @@ reservation covers that; the plateau benchmark shows it.
     one job and closed after it. Clicking the card (or Mod+Enter on its
     line) opens the viewer. Paste and drag-and-drop of `.pdf` files and
     Edit ▸ Insert PDF… go through the same import as images.
-- **The viewer** takes over the editor slot, like Settings. It is one custom
-  viewport, not a widget per page:
+- **The viewer** opens as a second tab beside the note, in the editor slot's
+  split (docs/ARCHITECTURE.md §5, "Split view"). It is one custom viewport,
+  not a widget per page:
   - Page offsets come from `page_geom`, with a prefix sum and a binary search
     for the visible pages.
   - Invalidation is kept separate from the note editor, so typing or the caret
     blink never repaints the PDF.
-  - **Implemented** (`PdfView` in a `PdfViewerPage`, shown in place of the
-    layout like Settings; Esc, Mod+W or the back button return to the note).
+  - **Implemented** (`PdfView` in a `PdfViewerPage`, beside the note on the
+    side the user last chose; Esc or Mod+W while it has focus, the × button
+    or `pdf.close` close it; opening a page keeps it open, and opening
+    another PDF replaces it: two tabs at most).
     The viewer reacts only to results for its own document's pages and
     tiles, and repaints only the rect they cover; the note's layout reacts
     only to image and thumbnail results. It opens at fit width and keeps
     fitting while the window resizes until the user zooms (pinch,
-    Mod+wheel, Mod+=/−/0, the header buttons).
+    Mod+wheel, Mod+=/−/0, the header buttons). While its width changes (the
+    divider dragged, the window resized) it draws its cached pixels scaled
+    and renders the new width once it has been still for 150 ms, like a
+    pinch (`docs/BENCHMARKS.md` §6c).
 - **Render strategy by output size:**
 
   | Output needed | Strategy |

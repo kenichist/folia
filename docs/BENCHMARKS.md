@@ -143,7 +143,9 @@ Use a fresh copy of the fixture per run for scenarios that write. Scenarios
 `stress`, `presentation`, `idle` (`seconds=60`, `settle_ms`), `navigate`
 (`batches=5`, `per_batch=100`), `integration`, `snapshot`, `recovery`,
 `settings` (`reps=10`, `window=0|1`, `apply=0|1`, `close_settle_ms`; see below),
-`images` (`photos=24`, `idle_seconds=20`, `media_dir`, `step=40`; see §6).
+`images` (`photos=24`, `idle_seconds=20`, `media_dir`, `step=40`; see §6),
+`pdf` (§6b), `split` (`pdf_dir`, `idle_seconds=10`, `drag_steps=120`,
+`step_px=6`, `note_lines=100`, `demo_hold_ms`; see §6c).
 Every scenario takes `painter_clip=1`: paint the editor under QTextEdit's own
 painter clip, as before 2026-11-08 (§6b; recorded as `editor_painter_clip`).
 Bench JSON schema:
@@ -937,6 +939,46 @@ painted on screen throughout, 2,991 frames each):
   counts, memory and density. Their timings and white-area figures are
   limited to the frames each run painted (`*_unpainted_frames`). The two
   `scroll-*.json` runs were painted throughout.
+
+## 6c. Split view (the note and a PDF side by side)
+
+`--bench split --bench-arg pdf_dir=<dir>` (fixtures from `folia_mediaprobe
+--make-pdf <dir>`), in `src/app/BenchSplit.cpp`: idle with one tab, the
+200-page document opened beside a note, idle with two tabs, the divider
+dragged at frame rate (`drag_steps` moves of `step_px`, right and back,
+16 ms apart) with the viewer's resize settle and without it, typing beside
+the open PDF, and closed. Raw files: `bench/results/split-2026-11-06/`.
+
+### Measured (M1 MacBook Air 8 GB, macOS 26.6.2, Release, on battery, 2026-11-06)
+
+Window 1180×780 pt at 2×, default layout; each pane 457 pt wide. Runs whose
+window the system did not paint (0 or few paints) were set aside
+(`PROVENANCE.md`).
+
+| Divider dragged 120 steps (3.2 s) | Renders on settle (shipped) | Every step renders (off) |
+|---|---|---|
+| PDF renders started (during + after release) | 5 + 8 | 239 + 1 |
+| Jobs dropped queued / discarded after rendering | 0 / 0 | 16 / 8 |
+| PDF worker CPU | 0.018 s | 0.23 s |
+| Process CPU over the drag | 0.81 s | 1.58 s |
+| Peak footprint (lifetime peak after the phase) | 107 MB | 183 MB |
+| Main-thread time per divider step, p50 / p90 | 0.21 / 0.27 ms | 0.20 / 0.27 ms |
+
+The 5 renders during the settled drag are whole pages drawn while the
+narrowing PDF pane sat at its 260 pt minimum: its width had stopped changing
+for 150 ms, though the mouse kept moving.
+
+| Note of 50,000 lines beside the PDF | Per-step estimates (before) | Estimates once settled (shipped) |
+|---|---|---|
+| Main-thread time per divider step, p50 / p90 / max | 32.5 / 35.9 / 69.0 ms | 0.17 / 0.27 / 0.96 ms |
+| Process CPU over the drag | 3.08 s | 0.74 s |
+
+| Other measures (100-line note) | Result |
+|---|---|
+| Open the PDF beside the note → fully drawn viewport | 107–108 ms |
+| Footprint: one tab → two tabs → closed | 70.6 → 78.3 → 74.8 MB (5.6 MB of tiles while open) |
+| Idle CPU / wakeups: one tab, two tabs, closed | 0.10 / 0.13 / 0.08 % of a core; 4.6 / 4.5 / 4.2 per s |
+| Typing 200 keys beside the open PDF | 0 viewer paints, 0 PDF renders; input to paint p50 0.68 ms |
 
 ## 7. Caveats
 

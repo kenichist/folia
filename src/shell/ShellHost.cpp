@@ -704,7 +704,7 @@ ShellHost::ShellHost(const Deps &deps, QObject *parent) : QObject(parent), m_d(d
     outer->addWidget(m_shellArea, 1);
     m_editorParking = new QWidget(m_d.container);
     m_editorParking->hide();
-    m_d.editor->setParent(m_editorParking);
+    slot()->setParent(m_editorParking);
 
     m_reloadTimer.setSingleShot(true);
     m_reloadTimer.setInterval(120);
@@ -746,6 +746,13 @@ ShellHost::~ShellHost()
 size_t ShellHost::luaMemory() const
 {
     return m_rt ? m_rt->memoryUsed() : 0;
+}
+
+QWidget *ShellHost::slot() const
+{
+    if (m_d.editorSlot)
+        return m_d.editorSlot;
+    return m_d.editor;
 }
 
 QWidget *ShellHost::widgetById(const QString &id) const
@@ -1245,8 +1252,10 @@ void ShellHost::apply(const UiNode &rootIn)
     t.start();
     UiNode root = rootIn;
     assignKeys(root, QStringLiteral("root"), 0);
-    QWidget *focused = QApplication::focusWidget();
-    const bool editorHadFocus = focused && (focused == m_d.editor || m_d.editor->isAncestorOf(focused));
+    QPointer<QWidget> focused = QApplication::focusWidget();
+    // The slot holds the editor and, in a split, the PDF tab: whichever had
+    // focus keeps it if a reload re-parents the slot.
+    const bool slotHadFocus = focused && (focused == slot() || slot()->isAncestorOf(focused));
     QSet<QString> seen;
     QWidget *w = realize(root, seen, m_shellArea);
     if (m_rootWidget != w) {
@@ -1259,7 +1268,7 @@ void ShellHost::apply(const UiNode &rootIn)
     // Remove widgets that are no longer in the layout.
     for (auto it = m_live.begin(); it != m_live.end();) {
         if (!seen.contains(it.key())) {
-            if (it->w && it->w != m_d.editor) {
+            if (it->w && it->w != slot()) {
                 it->w->hide();
                 it->w->deleteLater();
             }
@@ -1269,10 +1278,14 @@ void ShellHost::apply(const UiNode &rootIn)
         }
     }
     if (!seen.contains(QStringLiteral("editor")))
-        m_d.editor->setParent(m_editorParking);
+        slot()->setParent(m_editorParking);
     applyFocusOrder(root);
-    if (editorHadFocus && m_d.editor->isVisible() && !QApplication::focusWidget())
-        m_d.editor->editor()->setFocus(Qt::OtherFocusReason);
+    if (slotHadFocus && !QApplication::focusWidget()) {
+        if (focused && focused->isVisible() && !m_d.editor->isAncestorOf(focused))
+            focused->setFocus(Qt::OtherFocusReason);
+        else if (m_d.editor->isVisible())
+            m_d.editor->editor()->setFocus(Qt::OtherFocusReason);
+    }
     applyPendingFocus();
     // A changed style sheet above re-polishes the editor, and Qt's style-sheet
     // style then restores the palettes it saw at the previous polish (the old
@@ -1389,7 +1402,7 @@ QWidget *ShellHost::realize(const UiNode &n, QSet<QString> &seen, QWidget *paren
     seen.insert(n.key);
     Live &lv = m_live[n.key]; // valid only until children are realized (rehash)
     const bool reuse = lv.w && lv.type == n.type;
-    if (!reuse && lv.w && lv.w != m_d.editor)
+    if (!reuse && lv.w && lv.w != slot())
         lv.w->deleteLater();
     lv.type = n.type;
     const QVariantMap &p = n.props;
@@ -1398,7 +1411,7 @@ QWidget *ShellHost::realize(const UiNode &n, QSet<QString> &seen, QWidget *paren
     instr::add(reuse ? instr::WidgetsReused : instr::WidgetsCreated);
 
     if (n.type == QLatin1String("editor")) {
-        w = m_d.editor;
+        w = slot();
     } else if (n.type == QLatin1String("row") || n.type == QLatin1String("column")) {
         const bool horiz = n.type == QLatin1String("row");
         auto *box = static_cast<ShellBox *>(w);
