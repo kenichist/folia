@@ -64,8 +64,11 @@ Native text editing with IME support, undo/redo and full keyboard navigation. Au
 ### 🔗 Links
 Bare URLs are clickable. Select text and press Mod+K, or paste an address onto a selection, to make a named link. Links are stored as plain Markdown.
 
+### 🖼️ Images
+Paste or drop an image into a page, or use **Edit ▸ Insert Image…**. Images are decoded only while near the screen, within a fixed memory budget.
+
 ### 📑 PDFs beside your notes
-Paste or drop a PDF into a page, then click its card: it opens as a second tab next to the note, so you can read and write side by side. Drag the divider to resize (double-click for equal widths), swap sides with the ⇄ button or **View ▸ Swap Panes**, and close it with × or Esc. Side and width are remembered. The note stays open as you move between pages.
+Paste or drop a PDF into a page, then click its card: it opens as a second tab next to the note, so you can read and write side by side. Drag the divider to resize (double-click for equal widths), swap sides with the ⇄ button or **View ▸ Swap Panes**, and close it with × or Esc. Side and width are remembered. The note stays open as you move between pages. The Windows and Linux builds don't display PDFs yet.
 
 </td>
 <td width="50%" valign="top">
