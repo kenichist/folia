@@ -82,6 +82,14 @@ public:
     // viewport ahead in the scroll direction). Normally done after a paint.
     void updateMediaWants();
     qreal devicePixelRatio() const { return m_dpr; }
+    // The painter's clip adds nothing to the paint system's clip (NoteEditor
+    // sets this around its viewport paint, where QTextEdit clips to the
+    // bounding rect of the update region). draw() then paints with clipping
+    // off. On a 2x screen Qt turns antialiasing on and off around every text
+    // item, and each change re-applies an enabled clip: a new QClipData whose
+    // spans (41 KB for a two-rect region) are allocated again by the first
+    // clipped glyph. Without a painter clip that rebuild is skipped.
+    void setRedundantClip(bool redundant) { m_redundantClip = redundant; }
 protected:
     void documentChanged(int from, int charsRemoved, int charsAdded) override;
     void resizeInlineObject(QTextInlineObject item, int posInDocument, const QTextFormat &format) override;
@@ -139,6 +147,7 @@ private:
     qreal m_viewTop = 0, m_viewBottom = 0;
     mutable bool m_inPaint = false;
     mutable bool m_heightChangedInPaint = false;
+    bool m_redundantClip = false;
     // Inline formulas: caret position, renders in flight (deduplicated) and
     // a generation bumped per arrival so waiting lines re-probe once.
     int m_caret = -1;

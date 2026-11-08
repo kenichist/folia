@@ -676,6 +676,57 @@ private slots:
         QTRY_VERIFY(counter(instr::PdfTiles) > 0);
     }
 
+    void lowBudgetTilesScansAtALowerDensity()
+    {
+        // A 300 dpi scan's tile reserves more than 75 % of a 64 MiB budget,
+        // so the viewer falls back to a lower density, tiled like full
+        // density: drawn whole there, CoreGraphics would keep each page's
+        // half-size JPEG decode after the document closes, in memory that
+        // never becomes purgeable (docs/BENCHMARKS.md §6b).
+        MediaService::Config mc;
+        mc.budgetBytes = 64ll << 20;
+        mc.coolDownMs = 3600000;
+        Rig rig(fresh(QStringLiteral("ws.db")), fresh(QStringLiteral("att")), true, instant(), mc);
+        QVector<PdfPageGeom> pages = letterPages(10);
+        for (PdfPageGeom &p : pages) {
+            p.imagePixels = 2550u * 3300u;
+            p.flags = PdfPageGeom::ReducibleImage;
+        }
+        PdfView v(&rig.ctx, pdfInfoFor(fakeHash('c'), pages), QStringLiteral("/nowhere.pdf"));
+        v.resize(1000, 800);
+        v.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&v));
+        const qreal dpr = v.devicePixelRatioUsed();
+        const qreal zoom = 2394.0 / (612 * dpr); // fit width on a 2× display, as in the bench
+        const int full = qRound(612 * zoom * dpr);
+        const int t = v.config().tileSize;
+        auto room = [&] { return double(rig.media->budget().limit()) * MediaService::kMaxDecodeShare; };
+        QVERIFY(MediaService::pdfEstimate(pages[0], full, t, t) > room()); // a full-density tile does not fit
+        const PdfView::Plan pl = v.planFor(0, zoom);
+        QVERIFY(pl.tiles);
+        QVERIFY(pl.width < full);
+        QVERIFY(4ll * pl.width * pl.height > v.config().wholePageMaxBytes);
+        v.setZoom(zoom);
+        v.viewport()->repaint();
+        QVERIFY(!v.lastWants().isEmpty());
+        for (const MediaService::Request &r : v.lastWants()) {
+            QCOMPARE(r.key.kind, quint8(MediaKey::PdfTile));
+            QCOMPARE(r.key.level, pl.width);
+            QVERIFY(r.key.width <= t && r.key.height <= t);
+            QVERIFY(r.estimate <= room()); // runs now, not after the cool-down
+        }
+        // A critical pressure cool-down (budget ÷ 4): lower still, and a whole
+        // page only once it is as small as any other single bitmap.
+        rig.media->memoryPressure(true);
+        const PdfView::Plan low = v.planFor(0, zoom);
+        QVERIFY(low.width < pl.width);
+        QVERIFY(low.tiles || 4ll * low.width * low.height <= v.config().wholePageMaxBytes);
+        v.viewport()->repaint();
+        QVERIFY(!v.lastWants().isEmpty());
+        for (const MediaService::Request &r : v.lastWants())
+            QVERIFY(r.estimate <= room());
+    }
+
     void zoomGestureDrawsCachedPixelsAndRendersOnceSettled()
     {
         auto g = std::make_shared<Gate>();

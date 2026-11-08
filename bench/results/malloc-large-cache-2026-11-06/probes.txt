@@ -1,0 +1,55 @@
+# Standalone probes, 2026-11-06 17:36-17:38, M1 MacBook Air 8 GB, macOS 26.6.2, battery,
+# load average 15-18 (Spotlight indexing, other sessions), pressure level 2 (warning).
+# Tools: ../pdf-scan-pin-2026-11-06/repro/{cgprobe.mm,makescan.mm,realloc.c}, repro/allocbench.c here.
+
+## cgprobe scan600.pdf 1197 8 512 3  (makescan scan600.pdf 5100 6600 6: 6 pages, 49.7 MB)
+## 512 px tiles at 1197 px, 3 pages per document, 8 open/draw/close cycles
+default:
+cycle  1 footprint=44.1MB purgeable_zone in_use=7.9MB blocks=3 alloc=7.9MB
+cycle  2 footprint=90.2MB purgeable_zone in_use=15.7MB blocks=6 alloc=15.7MB
+cycle  3 footprint=127.5MB purgeable_zone in_use=23.6MB blocks=9 alloc=23.6MB
+cycle  4 footprint=173.5MB purgeable_zone in_use=31.5MB blocks=12 alloc=31.5MB
+cycle  5 footprint=194.3MB purgeable_zone in_use=39.3MB blocks=15 alloc=39.3MB
+cycle  6 footprint=240.4MB purgeable_zone in_use=47.2MB blocks=18 alloc=47.2MB
+cycle  7 footprint=277.7MB purgeable_zone in_use=55.1MB blocks=21 alloc=55.1MB
+cycle  8 footprint=265.7MB purgeable_zone in_use=62.9MB blocks=24 alloc=62.9MB
+cpu_ms_per_cycle=161.4
+MallocLargeCache=0:
+cycle  1 footprint=5.2MB purgeable_zone in_use=7.9MB blocks=3 alloc=7.9MB
+cycle  2 footprint=5.3MB purgeable_zone in_use=15.7MB blocks=6 alloc=15.7MB
+cycle  3 footprint=5.3MB purgeable_zone in_use=23.6MB blocks=9 alloc=23.6MB
+cycle  4 footprint=5.4MB purgeable_zone in_use=31.5MB blocks=12 alloc=31.5MB
+cycle  5 footprint=5.5MB purgeable_zone in_use=39.3MB blocks=15 alloc=39.3MB
+cycle  6 footprint=5.5MB purgeable_zone in_use=47.2MB blocks=18 alloc=47.2MB
+cycle  7 footprint=5.6MB purgeable_zone in_use=55.1MB blocks=21 alloc=55.1MB
+cycle  8 footprint=5.6MB purgeable_zone in_use=62.9MB blocks=24 alloc=62.9MB
+cpu_ms_per_cycle=161.2
+(The purgeable zone holds CoreGraphics' decode cache either way; with the large cache off its
+blocks are volatile and not in the footprint.)
+
+## realloc 8.3 1 60: which values of MallocLargeCache disable the cache
+unset    cycle 60 footprint 488.0 MB
+1        cycle 60 footprint 488.0 MB
+0        cycle 60 footprint 0.9 MB
+garbage  cycle 60 footprint 0.9 MB
+(Any value other than 1 disables it; MallocLargeCache=1 is the default behaviour, so it is the opt-out.)
+
+## allocbench <MB> <cycles> 1: malloc, write one byte per 16 KB page, free; time per cycle
+## (the worst case for MallocLargeCache=0: every cycle maps and faults fresh pages)
+   size     default mean / min        MallocLargeCache=0 mean / min
+  0.016 MB      0.1 /   0.0 us           0.0 /    0.0 us     (tiny/small: unaffected)
+  0.033 MB      0.1 /   0.0 us           3.0 /    2.0 us
+  0.065 MB      0.2 /   0.0 us           4.6 /    3.0 us
+  0.13 MB       0.2 /   0.0 us           7.0 /    5.0 us
+  0.26 MB       0.3 /   0.0 us          12.2 /   10.0 us
+  0.4 MB        0.4 /   0.0 us          20.1 /   15.0 us
+  0.5 MB        1.8 /   0.0 us          37.1 /   32.0 us
+  2 MB          3.4 /   1.0 us         116.3 /   81.0 us
+  8.3 MB        8.6 /   3.0 us         980.8 /  536.0 us
+  33 MB        55.8 /  13.0 us        5368.6 / 2337.0 us
+  48 MB        78.0 /  19.0 us       10042.7 / 3449.0 us
+footprint after the loop, default: 2.0 MB (0.5 MB) ... 49.0 MB (48 MB): the last freed block stays.
+footprint after the loop, MallocLargeCache=0: 0.9 MB for every size.
+So on this machine every malloc above ~32 KB is a "large" allocation; without the cache each
+one costs ~60-200 us per MB in page faults and zero fill (more under this load), and its
+memory leaves the footprint as soon as it is freed.

@@ -1,0 +1,44 @@
+Process:         Folia [71759]
+Path:            /private/tmp/*/Folia.app/Contents/MacOS/Folia
+Load Address:    0x102158000
+Identifier:      org.folia.notes
+Version:         0.1.0 (0.1.0)
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  zsh [71753]
+Target Type:     corpse
+
+Date/Time:       2026-11-06 17:19:14.919 +0700
+Launch Time:     2026-11-06 17:19:09.597 +0700
+OS Version:      macOS 26.6.2 (25G83)
+Report Version:  7
+Analysis Tool:   /usr/bin/heap
+
+Physical footprint:         120.5M
+Physical footprint (peak):  158.0M
+Idle exit:                  untracked
+----
+
+Process 71759: 6 zones
+Zone DefaultMallocZone_0x1055ec000: Overall size: 69264KB; 52924 nodes malloced for 14604KB (21% of capacity)
+Zone AttributeGraph graph data_0x106b6c000: Overall size: 32KB; 9 nodes malloced for 3KB (9% of capacity)
+Zone AttributeGraph_0xa070315e0: Overall size: 1024KB; 720 nodes malloced for 26KB (2% of capacity)
+Zone DefaultPurgeableMallocZone_0x1059d4000: Overall size: 24928KB; 4 nodes malloced for 24880KB (99% of capacity)
+Zone LSBindingEvaluator_0x1056c4000: Overall size: 192KB
+Zone QuartzCore_0x1056a4000: Overall size: 656KB; 1281 nodes malloced for 91KB (13% of capacity)
+All zones: 54938 nodes malloced - 39603KB
+
+Zone DefaultMallocZone_0x1055ec000: 52924 nodes - Sizes: 400KB[7] 272KB[7] 112KB[1] 96KB[2] 64KB[1] 48KB[6] 32KB[4] 28KB[4] 24KB[6] 20KB[2] 16KB[24] 14KB[8] 12KB[9] 10KB[28] 8KB[59] 7KB[41] 6KB[51] 5KB[36] 4KB[92] 3.5KB[85] 3KB[81] 2.5KB[130] 2KB[122] 1.75KB[169] 1.5KB[135] 1.25KB[119] 1KB[169] 896[191] 768[292] 640[591] 512[342] 448[353] 384[430] 320[589] 256[415] 224[1062] 192[486] 160[1149] 128[2442] 112[2370] 96[1646] 80[1837] 64[7500] 48[10180] 32[15949] 16[3702] 
+
+Zone AttributeGraph graph data_0x106b6c000: 9 nodes - Sizes: 320[6] 192[3] 
+
+Zone AttributeGraph_0xa070315e0: 720 nodes - Sizes: 228[3] 144[3] 132[3] 128[3] 110[3] 108[6] 104[3] 91[3] 88[3] 85[18] 84[6] 76[3] 74[3] 72[18] 67[15] 65[3] 64[24] 63[3] 60[15] 58[3] 56[9] 53[3] 52[15] 50[3] 48[42] 47[3] 44[6] 43[3] 40[9] 36[12] 34[3] 33[6] 32[96] 31[3] 30[3] 28[63] 24[51] 20[6] 17[9] 16[96] 12[6] 10[3] 8[93] 4[27] 1[9] 
+
+Zone DefaultPurgeableMallocZone_0x1059d4000: 4 nodes - Sizes: 8240KB[3] 160KB[1] 
+
+Zone LSBindingEvaluator_0x1056c4000: 0 nodes
+
+Zone QuartzCore_0x1056a4000: 1281 nodes - Sizes: 12KB[1] 448[1] 320[123] 256[1] 192[13] 128[21] 96[13] 80[22] 64[36] 48[30] 32[783] 16[237] 
+
+All zones: 54938 nodes malloced - Sizes: 8240KB[3] 400KB[7] 272KB[7] 160KB[1] 112KB[1] 96KB[2] 64KB[1] 48KB[6] 32KB[4] 28KB[4] 24KB[6] 20KB[2] 16KB[24] 14KB[8] 12KB[10] 10KB[28] 8KB[59] 7KB[41] 6KB[51] 5KB[36] 4KB[92] 3.5KB[85] 3KB[81] 2.5KB[130] 2KB[122] 1.75KB[169] 1.5KB[135] 1.25KB[119] 1KB[169] 896[191] 768[292] 640[591] 512[342] 448[354] 384[430] 320[718] 256[416] 228[3] 224[1062] 192[502] 160[1149] 144[3] 132[3] 128[2466] 112[2370] 110[3] 108[6] 104[3] 96[1659] 91[3] 88[3] 85[18] 84[6] 80[1859] 76[3] 74[3] 72[18] 67[15] 65[3] 64[7560] 63[3] 60[15] 58[3] 56[9] 53[3] 52[15] 50[3] 48[10252] 47[3] 44[6] 43[3] 40[9] 36[12] 34[3] 33[6] 32[16828] 31[3] 30[3] 28[63] 24[51] 20[6] 17[9] 16[4035] 12[6] 10[3] 8[93] 4[27] 1[9] 
+

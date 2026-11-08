@@ -26,6 +26,7 @@
 //
 // --bench-arg media_budget_mib=N / media_cache_mib=N run it with another
 // media budget or cache cap; kinds_only=long runs phases 2 and 4 only.
+// --bench-arg window_width=N runs it in a window N points wide (default 1180).
 // --bench-arg vm_snapshots=1 (default) writes `footprint -p` reports next to
 // the output file at the baseline, the plateau and after closing (2: also
 // `heap`, and `malloc_history` when run with MallocStackLogging).
@@ -308,6 +309,14 @@ void BenchDriver::scenarioPdf()
         settle(50);
         return v;
     };
+
+    // window_width=N (points): a narrower window, so the viewer's fit width,
+    // and the density pages render at, are smaller.
+    if (const int ww = m_args.value(QStringLiteral("window_width"), 0).toInt(); ww > 0) {
+        m_app->window()->resize(ww, m_app->window()->height());
+        settle(300);
+    }
+    m_extra.insert(QStringLiteral("window_width_pt"), m_app->window()->width());
 
     // 0. Render cost per document kind, in this process, before anything
     // else runs (the peak is process-wide): the card thumbnail, and one
@@ -632,8 +641,8 @@ void BenchDriver::scenarioPdf()
             continue;
         m_extra.insert(kind + QStringLiteral("_first_viewport_ms"), waitViewport(kv, kind + QStringLiteral("_open"), 120000));
         {
-            // Full density, or a whole page at a lower density because one
-            // tile's working set does not fit 75 % of the budget.
+            // Full density, or a lower density because one tile's working
+            // set does not fit 75 % of the budget.
             const PdfView::Plan pl = kv->planFor(kv->currentPage(), kv->zoom());
             const int full = qRound(kv->pages().value(kv->currentPage()).w * kv->zoom() * kv->devicePixelRatioUsed());
             m_extra.insert(kind + QStringLiteral("_plan"), QStringLiteral("%1 %2x%3").arg(pl.tiles ? QStringLiteral("tiles") : QStringLiteral("page"))

@@ -745,6 +745,75 @@ private slots:
         QCOMPARE(vl->documentSize().height(), wide);
         ed.setSession(nullptr);
     }
+
+    void textPaintsSameWithoutPainterClip()
+    {
+        // The editor drops QTextEdit's painter clip (the bounding rect of the
+        // update region) while the layout draws. The paint system's clip must
+        // still bound every pixel, and no pixel may change.
+        PageContent pc;
+        pc.id = 9;
+        pc.found = true;
+        const QStringList kinds = {
+            QStringLiteral("# Heading over the text"),
+            QStringLiteral("Plain words with **bold**, *italic* and `code` in one line that wraps around the column "
+                           "edge at least once, so a paragraph spans several lines."),
+            QStringLiteral("> A quoted line"),
+            QStringLiteral("- A list item with a [link](https://example.com)"),
+            QStringLiteral("Unicode: ünïcødé 漢字 🙂 and more words to fill the line."),
+        };
+        BlockId id = 1;
+        for (int i = 0; i < 40; ++i) {
+            BlockRecord r;
+            r.id = id++;
+            r.text = kinds[i % kinds.size()];
+            pc.blocks << r;
+        }
+        BlockId next = 1000;
+        PageSession ses(9, m_ctx, [&next] { return next++; });
+        ses.load(pc);
+        NoteEditor ed(m_ctx);
+        ed.resize(700, 400);
+        ed.show();
+        ed.setSession(&ses);
+        QTest::qWait(50);
+        QTextCursor sel(ses.document()->findBlockByNumber(1));
+        sel.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor); // a selection, drawn under its own clip
+        ed.setTextCursor(sel);
+        ed.clearFocus(); // no caret to blink between the renders
+        QWidget *vp = ed.viewport();
+        // Two rects whose bounding rect is the whole viewport, as when the
+        // transient scroll bar repaints with the edited line.
+        const QRegion region = QRegion(vp->width() - 120, 0, 120, vp->height() - 60)
+                               + QRegion(0, vp->height() - 60, vp->width(), 23);
+        QCOMPARE(region.rectCount(), 2);
+        const QColor fill(255, 0, 255);
+        auto render = [&](bool drop, const QRegion &rgn) {
+            ed.setDropRedundantClip(drop);
+            QImage img(vp->size() * 2, QImage::Format_ARGB32_Premultiplied);
+            img.setDevicePixelRatio(2); // a scaled painter, as on a Retina screen
+            img.fill(fill);
+            vp->render(&img, QPoint(), rgn, QWidget::RenderFlags());
+            return img;
+        };
+        auto count = [&](const QImage &img, int *inside, int *outside) {
+            *inside = *outside = 0;
+            for (int y = 0; y < img.height(); ++y)
+                for (int x = 0; x < img.width(); ++x)
+                    if (img.pixelColor(x, y) != fill)
+                        ++(region.contains(QPoint(x / 2, y / 2)) ? *inside : *outside);
+        };
+        int inside = 0, outside = 0;
+        count(render(true, QRegion(region.boundingRect())), &inside, &outside);
+        QVERIFY(outside > 0); // there is text outside the two rects to clip away
+        const QImage kept = render(false, region);
+        const QImage dropped = render(true, region);
+        ed.setDropRedundantClip(true);
+        QCOMPARE(dropped, kept);
+        count(dropped, &inside, &outside);
+        QVERIFY(inside > 0);
+        QCOMPARE(outside, 0);
+    }
 };
 
 QTEST_MAIN(CoreTests)

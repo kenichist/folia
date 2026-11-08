@@ -13,6 +13,7 @@
 #include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QPaintDevice>
+#include <QPaintEngine>
 #include <QScreen>
 #include <QPainter>
 #include <QPainterPath>
@@ -1374,6 +1375,20 @@ void VirtualLayout::paintBlockDecorations(QPainter *p, const QTextBlock &block, 
 void VirtualLayout::draw(QPainter *painter, const PaintContext &ctx)
 {
     instr::add(instr::PaintEvents);
+    // Paint without the caller's clip when it is redundant (setRedundantClip);
+    // the paint engine's system clip still bounds every pixel.
+    struct ClipOff {
+        QPainter *p;
+        bool off;
+        ~ClipOff()
+        {
+            if (off)
+                p->setClipping(true);
+        }
+    } clipOff{painter, m_redundantClip && painter->hasClipping() && painter->paintEngine()
+                           && !painter->paintEngine()->systemClip().isEmpty()};
+    if (clipOff.off)
+        painter->setClipping(false);
     QTextDocument *doc = document();
     if (m_h.empty() || int(m_h.size()) != doc->blockCount())
         fullInvalidate();

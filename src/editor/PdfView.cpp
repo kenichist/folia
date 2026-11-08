@@ -286,20 +286,27 @@ PdfView::Plan PdfView::planFor(int page, qreal zoom) const
     // One render never needs more than kMaxDecodeShare of the current
     // (possibly lowered) budget, as for images.
     const double room = m_media ? double(m_media->budget().limit()) * MediaService::kMaxDecodeShare : 1e18;
-    const qint64 bytes = 4ll * pl.width * pl.height;
-    if (bytes <= m_cfg.wholePageMaxBytes && double(MediaService::pdfEstimate(g, pl.width, pl.width, pl.height)) <= room)
-        return pl; // one bitmap
     const int t = m_cfg.tileSize;
-    if (double(MediaService::pdfEstimate(g, pl.width, qMin(t, pl.width), qMin(t, pl.height))) <= room) {
-        pl.tiles = true;
-        return pl;
-    }
-    // Not even a tile fits (a pressure cool-down, a huge scan): the whole
-    // page at a lower density, drawn scaled up, rather than nothing at all.
-    for (int i = 0; i < 64 && pl.width > 16 && double(MediaService::pdfEstimate(g, pl.width, pl.width, pl.height)) > room; ++i) {
+    // One bitmap while it is small, otherwise tiles.
+    auto wholeFits = [&] {
+        return 4ll * pl.width * pl.height <= m_cfg.wholePageMaxBytes
+               && double(MediaService::pdfEstimate(g, pl.width, pl.width, pl.height)) <= room;
+    };
+    auto tileFits = [&] {
+        return double(MediaService::pdfEstimate(g, pl.width, qMin(t, pl.width), qMin(t, pl.height))) <= room;
+    };
+    // Not even a tile fits (a pressure cool-down, a huge scan): a lower
+    // density, drawn scaled up, rather than nothing at all, tiled by the
+    // same rule. Drawn whole at 0.35-0.5 of its native width, a 300 dpi JPEG
+    // scan is decoded at half size, and CoreGraphics' image cache keeps that
+    // decode after the document closes, in a recycled malloc block that
+    // cannot be made purgeable: +8 MB per close (docs/BENCHMARKS.md §6b,
+    // "Reduced-density scans grow the footprint"). Tiles decode it in parts.
+    for (int i = 0; i < 64 && pl.width > 16 && !wholeFits() && !tileFits(); ++i) {
         pl.width = qMax(16, int(pl.width * 0.85));
         pl.height = qMax(16, qRound(double(pl.width) * g.h / g.w));
     }
+    pl.tiles = !wholeFits();
     return pl;
 }
 
@@ -539,7 +546,7 @@ void PdfView::paintEvent(QPaintEvent *e)
         p.fillRect(pr.adjusted(-1, -1, 1, 1), edge);
         p.fillRect(vis, Qt::white);
         const Plan want = planFor(i, m_zoom);
-        const bool reduced = !want.tiles && want.width != qRound(m_pages[i].w * m_zoom * m_dpr);
+        const bool reduced = want.width != qRound(m_pages[i].w * m_zoom * m_dpr);
         QVector<Plan> &shown = m_shown[i];
         if (!m_zooming && drawPlan(nullptr, i, want, pr, vis, false)) {
             drawPlan(&p, i, want, pr, vis, reduced); // all there: drawn as is

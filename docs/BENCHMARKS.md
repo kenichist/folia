@@ -146,6 +146,8 @@ Use a fresh copy of the fixture per run for scenarios that write. Scenarios
 `images` (`photos=24`, `idle_seconds=20`, `media_dir`, `step=40`; see §6),
 `pdf` (§6b), `split` (`pdf_dir`, `idle_seconds=10`, `drag_steps=120`,
 `step_px=6`, `note_lines=100`, `demo_hold_ms`; see §6c).
+Every scenario takes `painter_clip=1`: paint the editor under QTextEdit's own
+painter clip, as before 2026-11-08 (§6b; recorded as `editor_painter_clip`).
 Bench JSON schema:
 
 ```json
@@ -376,7 +378,8 @@ scrolling screenshot, and a 6000×4000 noisy PNG (36 MB).
 Results are top-level "extra" keys (`down_decodes`, `up_cache_hit_rate`,
 `resize_decodes_during_drag`, `pressure_footprint_after_trim`, …) and
 metrics (`images_scroll_*_frame_ms`, `decode_peak_bytes_<format>`,
-`import_typing_input_to_paint_us`, …).
+`images_scroll_decode_ms` and `_cpu_ms` for every decode while scrolling and
+resizing, `import_typing_input_to_paint_us`, …).
 
 Peaks use rusage's `ri_interval_max_phys_footprint`
 (`platform::intervalPeakFootprint()`). The kernel resets it on every read,
@@ -784,8 +787,128 @@ painted on screen throughout, 2,991 frames each):
   after the document closed). 8.24 MB is the scan's JPEG decoded at half
   size. At 48 MiB (quarter size) it grew 126 → 134 MB, at 128 MiB and with
   the cap not at all. The default configuration never draws scans this way
-  except during a pressure cool-down (budget ÷ 4), so the cause is left for
-  a follow-up.
+  except during a pressure cool-down (budget ÷ 4). Cause and fix below.
+- **Why: CoreGraphics caches the decode in a recycled block that cannot be
+  purgeable.** Raw files: `bench/results/pdf-scan-pin-2026-11-06/`. Drawn
+  whole at 0.35–0.5 of its native width (900–1274 px of 2550), the scan's
+  JPEG is decoded at half size on ImageIO's hardware path
+  (`AppleJPEGReadPlugin::createImageBlockSetWithHardwareDecode`), which
+  scales it with vImage through an 8.24 MB malloc buffer, freed at once into
+  malloc's large-block cache. CoreGraphics' process-wide image cache
+  (`get_cache.image_cache`, filled by `ripc_AcquireRIPImageData`) then keeps
+  the decode in an 8.24 MB block of `DefaultPurgeableMallocZone`, and malloc
+  serves it from that recycled chunk. `vmmap` shows the block without
+  `PURGE=V`, so marking it purgeable does nothing. The entry outlives its
+  image and document (`leaks --traceTree` finds only `image_cache` holding
+  it) and goes only on memory pressure. A CoreGraphics-only probe
+  (`repro/cgprobe.mm`, no Qt) shows the same: +8.5 MB per open → draw →
+  close at 900–1274 px, 1.6 → 273 MB in 30 cycles. It stays flat at every
+  other width, in 512 px tiles at every width, and with `MallocLargeCache=0`
+  (the cache entries are then `PURGE=V`; `probe-sweeps.txt`).
+- **Fixed: the lower density is tiled too.** `PdfView::planFor` applies one
+  rule at every density: one bitmap only up to 2 MiB, otherwise 512 px tiles.
+  At 64 MiB the scan keeps its density (0.52), now as `tiles 1197x1549`. The
+  footprint after each close of the scan over 12 cycles was 153.9 → 341.6 MB
+  before (`before-budget64.json`). It is now 115.0, then 123.3–128.1 MB
+  (`after-budget64.json`). In `footprint -p` after the cycles, MALLOC_LARGE
+  went 237 → 21 MB, and the purgeable zone went from 28 × 8.24 MB
+  (non-volatile) to 28 × 2.5 MB (volatile). At 128 MiB (full-density tiles,
+  unchanged) it was 83.6–100.2 MB; the steps are one more 14.7 MB window
+  IOSurface. At 48 MiB the scan now gets the same `tiles 1197x1549`, where it
+  used to get whole pages at about a quarter density, and the footprint
+  after each close is 82.5–85.6 MB (`after-budget48.json`). The cost: a page at that density is 12
+  tiles instead of one bitmap, ~1.6× the CPU in the probe (28 → 45 ms per
+  page at 1197 px, measured beside another run). It only applies while one
+  of the scan's tiles does not fit the budget.
+- **600 dpi scans: 10–15 MB per page drawn in the probe, whole or tiled**
+  (fixed below, by the allocator setting, not in Folia's code).
+  For each page, CoreGraphics copies the 8 MB JPEG stream into a CFData that
+  `realloc` grows to 16 MB (`CGDataProviderCopyData` under
+  `CGImageSourceCreateWithDataProvider`). Once freed, the chunk stays dirty
+  in malloc's large cache, and the next page does not reuse it. Plain C does
+  the same without CoreGraphics (`repro/realloc.c`): growing a buffer by
+  doubling `realloc` to 8.3 MB and freeing it, 120 times, raises the
+  footprint to ~520 MB, where it levels off. With `MallocLargeCache=0` it
+  stays at 0.9 MB, and a plain 8.3 MB `malloc` stays at 9 MB. Folia cannot
+  reach those reallocs; the 300 dpi fixtures (2 MB streams) never trigger
+  it. Launching with `MallocLargeCache=0` ends both effects in the probes.
+- **Fixed: Folia runs without malloc's large cache.** Raw files and
+  provenance: `bench/results/malloc-large-cache-2026-11-06/`. On this 8 GB
+  M1 every `malloc` above ~32 KB is a "large" block, and the cache keeps
+  freed ones dirty and in the footprint; neither `malloc_zone_pressure_relief`
+  nor libmalloc's pressure-event handler empties it, so the only lever is
+  `MallocLargeCache=0`, which libmalloc reads at process start. `main()`
+  therefore sets it and re-executes the binary (same pid) when it is unset,
+  covering every launch (Info.plist's `LSEnvironment` would cover only
+  LaunchServices launches). `MallocLargeCache=1` opts out; setting it at all
+  skips the exec (debuggers stop at an exec). Bench JSON records it as
+  `env.malloc_large_cache`. A 600 dpi scan (`makescan` 5100×6600, 6 pages)
+  opened, scrolled and closed 12 times with the 200-page document, two runs
+  per mode:
+
+  | After each close of the scan | Cache on | Cache off |
+  |---|---:|---:|
+  | Window 1180 pt (tiles 2296×2971) | 117.8–221.2 MB (medians 121.8, 132.4) | 72.7–74.7 MB |
+  | Window 640 pt (`window_width=640`, tiles 1216×1574) | 94.8–113.1 MB (medians 101.8, 103.3) | 52.7–61.2 MB |
+  | After importing the five PDFs, before opening the scan | 78.7–99.0 MB | 50.5–70.7 MB |
+  | `MALLOC_LARGE` dirty after the cycles (`footprint -p`) | 40–50 MB | 0 |
+
+  In the app the scan does not keep growing per page as in the probe: other
+  allocations reuse the cached chunks, so the cache sits at 40–50 MB and
+  swings (up to +90 MB between closes in one run). After closing the
+  200-page document: 86.8 against 102.2 MB (3 runs each).
+  The cost, same machine, modes interleaved (load 2–25 and a pressure
+  warning for most runs, so in-process measures only):
+
+  | | Cache on | Cache off |
+  |---|---:|---:|
+  | PDF worker CPU, 200-page scroll down / up | 7.81 / 9.30 s | 7.22 / 8.87 s |
+  | Zoom settle → sharp p50 / p95 | 108 / 217 ms | 107 / 217 ms |
+  | Image scroll decodes (54 a run), wall p50 (CPU p50), 2 pairs | 64.6–65.5 (41.2–41.4) ms | 66.4–67.0 (42.0–42.9) ms |
+  | Typing, input → end of editor paint p50 / p95 | 2.07 / 8.77 ms | 2.27 / 10.06 ms |
+  | Editor scroll, frame work p50 / p95 | 6.55–6.59 / 7.87–7.88 ms | 6.56–6.61 / 7.93 ms |
+  | Open a page, uncached → editable p50 | 12.5 ms | 12.3 ms |
+  | Launch, process start → editable (median of 5) | 414 ms | 409 ms; 451 ms with the re-exec |
+
+  Typing paid because Qt's raster engine allocated ~41 KB of clip spans
+  (`QClipData::initialize`) about 21 times per keystroke's paint: recycled
+  blocks with the cache, fresh pages without (`typing-large-allocations.txt`).
+  Fixed since (next item): typing now costs the same with the cache off.
+  Image decodes after a critical
+  pressure trim were 2–2.7× slower in the two runs whose window was covered
+  (App Nap; the images scenario has no `app_nap=0`), 0–13 % when painted.
+  Decided: the lower footprint after document work (15–59 MB, up to 48 %,
+  and no swings) outweighs +0.2 ms per keystroke at p50, 2–4 % per image
+  decode and ~40 ms at launch.
+- **Fixed: typing no longer rebuilds the clip per text item.** Raw files and
+  provenance: `bench/results/painter-clip-2026-11-08/`. QTextEdit clips the
+  painter to the paint event's bounding rect (`QWidgetTextControl::drawContents`).
+  On a 2× screen `QPainterPrivate::drawTextItem` turns antialiasing on and
+  off around every text item, and each change makes the raster engine drop
+  the clip and replay it (`renderHintsChanged` → `updateClipping`): a new
+  `QClipData`, whose spans the first clipped glyph allocates again. About 1
+  in 9 keystroke paints covers the edited line plus a 17 pt strip at the
+  viewport's right edge, where the transient scroll bar repaints after a
+  height change. Its bounding rect is the whole viewport, so every visible
+  block is drawn under a two-rect clip, and each of ~185 text items allocates
+  41.7 KB of spans (2 rects × 1,302 rows × 16 B). Since the paint system
+  already clips to the update region, `NoteEditor::paintEvent` marks its
+  viewport paint and `VirtualLayout::draw` paints with painter clipping off
+  (`VirtualLayout::setRedundantClip`); the system clip is built once per
+  paint. A test renders the editor through a two-rect region at 2× both
+  ways: identical pixels, none outside the region.
+  `--bench-arg painter_clip=1` keeps Qt's clip, for A/B runs. Allocations of
+  32 KB or more per keystroke (1000- minus 200-key run, interposer): 21.1 →
+  0.28. Typing, 1000 keys, modes interleaved, 3–4 runs each:
+
+  | ms, p50 / p95 | Cache on | Cache off |
+  |---|---:|---:|
+  | Input → end of editor paint, before (`painter_clip=1`) | 2.15 / 8.74 | 2.13 / 9.93 |
+  | Input → end of editor paint, now | 2.16 / 8.06 | 2.08 / 7.98 |
+  | Editor paint, before / now | 0.47 / 5.77, 0.46 / 5.17 | 0.46 / 7.14, 0.45 / 5.11 |
+
+  With the cache off, typing is now as fast as with it, and p95 is below the
+  old cache-on figure (8.74 here, 8.77 on 2026-11-06).
 - **Repeated close is flat.** With the cap, the footprint after each close
   of the 200-page document over 12 cycles: 109, 121, 122, 125, then 121–122;
   after the scan: 106–108 (one 121). The allocator returns nothing more
