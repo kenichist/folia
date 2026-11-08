@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 # Must precede project(). Homebrew's Qt 6.12 frameworks are built with
 # minos 14.4 (SDK 26.5), so that is the effective minimum macOS for this build.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "14.4" CACHE STRING "Minimum macOS")
-project(Folia VERSION 0.1.0 LANGUAGES C CXX)
+project(Folia VERSION 0.2.0 LANGUAGES C CXX)
 if(APPLE)
   enable_language(OBJCXX)
 endif()

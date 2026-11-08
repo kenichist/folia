@@ -1,5 +1,12 @@
 Folia is a lightweight, local notes app with nested pages, LaTeX math and code blocks, whose whole window layout is a Lua file you can redesign without recompiling.
 
+## What's new in 0.2.0
+
+- **Images in notes.** Paste, drop or use **Edit ▸ Insert Image…**. Originals are kept in the workspace folder, and images are decoded only near the screen, within a fixed memory budget.
+- **PDFs beside your notes** (macOS). Paste, drop or use **Edit ▸ Insert PDF…**, then click the card: the PDF opens as a second tab next to the note, with a divider you can drag, double-click or swap with ⇄. The Windows and Linux builds don't display PDFs yet.
+- **Lighter on memory.** Cached image and PDF pixels are capped at 64 MiB, scanned PDFs no longer add memory each time they are opened, and on macOS memory freed after closing a large document goes back to the system.
+- **Less work while you type and resize.** The editor no longer keeps a text layout for every line, skips a redundant clip on every paint, and the window skips style updates that change nothing.
+
 ## Downloads
 
 | Platform | File | Notes |
