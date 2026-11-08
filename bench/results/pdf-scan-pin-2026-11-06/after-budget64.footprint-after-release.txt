@@ -1,0 +1,48 @@
+======================================================================
+Folia [72271]: 64-bit    Footprint: 110 MB (16384 bytes per page)
+======================================================================
+
+  Dirty      Clean  Reclaimable    Regions    Category
+    ---        ---          ---        ---    ---
+  55 MB        0 B          0 B          8    IOSurface
+  37 MB        0 B        96 KB         32    MALLOC_SMALL
+8064 KB        0 B          0 B         30    MALLOC_LARGE
+1694 KB        0 B          0 B        865    __DATA_DIRTY
+1504 KB        0 B        16 KB         13    MALLOC metadata
+1467 KB        0 B          0 B        978    __DATA
+ 771 KB        0 B          0 B          1    page table
+ 656 KB        0 B          0 B          5    CoreUI image data
+ 640 KB        0 B          0 B         28    stack
+ 400 KB        0 B          0 B         27    untagged (VM_ALLOCATE)
+ 320 KB    1200 KB          0 B         32    mapped file
+ 304 KB        0 B          0 B          1    libdispatch
+ 272 KB        0 B          0 B          1    MALLOC_TINY
+ 270 KB        0 B          0 B        625    __AUTH
+ 256 KB        0 B          0 B       2513    unused dyld shared cache area
+ 224 KB        0 B          0 B         15    CoreAnimation
+ 185 KB     400 KB          0 B       1041    __DATA_CONST
+ 128 KB        0 B          0 B          1    Accelerate image backing stores
+ 112 KB        0 B          0 B       1008    __AUTH_CONST
+ 112 KB        0 B          0 B          2    __TPRO_CONST
+  64 KB        0 B          0 B          2    IOAccelerator
+  48 KB        0 B          0 B          1    dyld private memory
+  48 KB        0 B          0 B          7    IOKit
+  32 KB        0 B          0 B          1    Activity Tracing
+  32 KB        0 B          0 B          2    CoreGraphics
+  32 KB        0 B          0 B          1    Owned physical footprint (unmapped)
+  16 KB        0 B          0 B          1    IOAccelerator (graphics)
+  16 KB        0 B          0 B          1    tag 22
+  16 KB        0 B          0 B          1    os_alloc_once
+  16 KB        0 B          0 B          1    Foundation
+  16 KB        0 B          0 B          1    ColorSync
+    0 B    7456 KB          0 B       1064    __TEXT
+    0 B        0 B          0 B         32    __LINKEDIT
+    0 B        0 B          0 B          1    __FONT_DATA
+    0 B        0 B          0 B          1    __CTF
+    ---        ---          ---        ---    ---
+ 110 MB    9056 KB       112 KB       8345    TOTAL
+
+Auxiliary data:
+    phys_footprint: 110 MB
+    phys_footprint_peak: 208 MB
+

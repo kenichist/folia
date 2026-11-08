@@ -1,0 +1,70 @@
+# cgprobe: footprint growth per open/draw/close cycle (one page per document), c3->c8, M1 macOS 26.6.2
+## scanned-24.pdf (2550x3300 JPEG per page), tile=0 (0 = whole page)
+  w=  320 growth c3->c8   0.06 MB/cycle  cpu   21.3 ms/page
+  w=  636 growth c3->c8   0.08 MB/cycle  cpu   18.5 ms/page
+  w=  800 growth c3->c8   0.06 MB/cycle  cpu   24.3 ms/page
+  w=  900 growth c3->c8   8.50 MB/cycle  cpu   28.1 ms/page  <-- pinned
+  w= 1000 growth c3->c8   8.50 MB/cycle  cpu   25.9 ms/page  <-- pinned
+  w= 1197 growth c3->c8   8.50 MB/cycle  cpu   27.9 ms/page  <-- pinned
+  w= 1249 growth c3->c8   8.52 MB/cycle  cpu   28.4 ms/page  <-- pinned
+  w= 1274 growth c3->c8   8.48 MB/cycle  cpu   26.9 ms/page  <-- pinned
+  w= 1275 growth c3->c8   0.08 MB/cycle  cpu   48.0 ms/page
+  w= 1700 growth c3->c8   0.06 MB/cycle  cpu   57.8 ms/page
+  w= 2296 growth c3->c8   0.08 MB/cycle  cpu   76.9 ms/page
+  w= 2550 growth c3->c8   0.08 MB/cycle  cpu   23.9 ms/page
+## scanned-24.pdf (2550x3300 JPEG per page), tile=512 (0 = whole page)
+  w=  320 growth c3->c8   0.06 MB/cycle  cpu   19.3 ms/page
+  w=  636 growth c3->c8   0.04 MB/cycle  cpu   34.2 ms/page
+  w=  800 growth c3->c8   0.24 MB/cycle  cpu   31.3 ms/page
+  w=  900 growth c3->c8   0.10 MB/cycle  cpu   41.8 ms/page
+  w= 1000 growth c3->c8   0.04 MB/cycle  cpu   43.2 ms/page
+  w= 1197 growth c3->c8   0.00 MB/cycle  cpu   44.9 ms/page
+  w= 1249 growth c3->c8   0.06 MB/cycle  cpu   54.1 ms/page
+  w= 1274 growth c3->c8  -0.18 MB/cycle  cpu   41.7 ms/page
+  w= 1275 growth c3->c8   0.00 MB/cycle  cpu   87.4 ms/page
+  w= 1700 growth c3->c8   0.04 MB/cycle  cpu  102.2 ms/page
+  w= 2296 growth c3->c8   0.04 MB/cycle  cpu  132.0 ms/page
+  w= 2550 growth c3->c8   0.02 MB/cycle  cpu   85.3 ms/page
+## scan600.pdf, whole page
+  w=  150 growth c3->c8  14.20 MB/cycle  cpu   61.7 ms/page  <-- pinned
+  w=  636 growth c3->c8  14.16 MB/cycle  cpu   59.5 ms/page  <-- pinned
+  w= 1197 growth c3->c8   0.86 MB/cycle  cpu   33.6 ms/page
+  w= 2600 growth c3->c8   9.98 MB/cycle  cpu  231.9 ms/page  <-- pinned
+## scan600.pdf, tile=512
+  w=  636 growth c3->c8  14.14 MB/cycle  cpu  115.5 ms/page  <-- pinned
+  w= 1197 growth c3->c8  14.14 MB/cycle  cpu   63.7 ms/page  <-- pinned
+  w= 2600 growth c3->c8  -5.00 MB/cycle  cpu  498.5 ms/page
+## scan150.pdf, whole page
+  w=  150 growth c3->c8   0.06 MB/cycle  cpu    4.7 ms/page
+  w=  636 growth c3->c8   0.06 MB/cycle  cpu    7.4 ms/page
+  w= 1197 growth c3->c8   0.08 MB/cycle  cpu   23.9 ms/page
+  w= 2600 growth c3->c8   0.02 MB/cycle  cpu   68.1 ms/page
+## scan150.pdf, tile=512
+  w=  636 growth c3->c8   0.24 MB/cycle  cpu   12.4 ms/page
+  w= 1197 growth c3->c8   0.00 MB/cycle  cpu   34.6 ms/page
+  w= 2600 growth c3->c8   0.02 MB/cycle  cpu   67.7 ms/page
+## scanned-24.pdf whole 1197, MallocLargeCache=0
+  w= 1197 growth c3->c8   0.04 MB/cycle  cpu   28.3 ms/page
+## scan600.pdf whole 636, MallocLargeCache=0
+  w=  636 growth c3->c8   0.04 MB/cycle  cpu   60.2 ms/page
+## realloc.c: grow a buffer by doubling realloc to 8.3 MB, free; footprint every 20 cycles
+cycle 20 footprint 164.7 MB
+cycle 40 footprint 326.3 MB
+cycle 60 footprint 488.0 MB
+cycle 80 footprint 520.1 MB
+cycle 100 footprint 519.8 MB
+cycle 120 footprint 519.7 MB
+## same, MallocLargeCache=0
+cycle 20 footprint 0.9 MB
+cycle 40 footprint 0.9 MB
+cycle 60 footprint 0.9 MB
+cycle 80 footprint 0.9 MB
+cycle 100 footprint 0.9 MB
+cycle 120 footprint 0.9 MB
+## plain malloc of 8.3 MB, free
+cycle 20 footprint 9.0 MB
+cycle 40 footprint 9.0 MB
+cycle 60 footprint 9.0 MB
+cycle 80 footprint 9.0 MB
+cycle 100 footprint 9.0 MB
+cycle 120 footprint 9.0 MB
