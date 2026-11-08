@@ -142,7 +142,9 @@ engine, ~41 KB of per-scanline clip spans, allocated whenever glyphs or
 backgrounds are drawn under a new non-rectangular clip during the editor's
 paint (`VirtualLayout::draw` → `QTextLayout::draw`). With the cache, each is a
 recycled block; without it, fresh pages (`allocbench`: ~3–7 µs each plus page
-faults). Folia sets no clip there itself.
+faults). Folia sets no clip there itself. Cause and fix (2026-11-08): the clip is
+QTextEdit's, rebuilt around every text item on a 2× screen;
+`../painter-clip-2026-11-08/` (21.1 → 0.28 such allocations per key).
 
 ## Discarded runs (`invalid/`)
 

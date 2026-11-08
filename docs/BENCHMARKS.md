@@ -144,6 +144,8 @@ Use a fresh copy of the fixture per run for scenarios that write. Scenarios
 (`batches=5`, `per_batch=100`), `integration`, `snapshot`, `recovery`,
 `settings` (`reps=10`, `window=0|1`, `apply=0|1`, `close_settle_ms`; see below),
 `images` (`photos=24`, `idle_seconds=20`, `media_dir`, `step=40`; see §6).
+Every scenario takes `painter_clip=1`: paint the editor under QTextEdit's own
+painter clip, as before 2026-11-08 (§6b; recorded as `editor_painter_clip`).
 Bench JSON schema:
 
 ```json
@@ -866,15 +868,45 @@ painted on screen throughout, 2,991 frames each):
   | Open a page, uncached → editable p50 | 12.5 ms | 12.3 ms |
   | Launch, process start → editable (median of 5) | 414 ms | 409 ms; 451 ms with the re-exec |
 
-  Typing pays because Qt's raster engine allocates ~41 KB of clip spans
-  (`QClipData::initialize`) about 21 times per keystroke's paint, under
-  clips Qt's text drawing sets: recycled blocks with the cache, fresh pages
-  without (`typing-large-allocations.txt`). Image decodes after a critical
+  Typing paid because Qt's raster engine allocated ~41 KB of clip spans
+  (`QClipData::initialize`) about 21 times per keystroke's paint: recycled
+  blocks with the cache, fresh pages without (`typing-large-allocations.txt`).
+  Fixed since (next item): typing now costs the same with the cache off.
+  Image decodes after a critical
   pressure trim were 2–2.7× slower in the two runs whose window was covered
   (App Nap; the images scenario has no `app_nap=0`), 0–13 % when painted.
   Decided: the lower footprint after document work (15–59 MB, up to 48 %,
   and no swings) outweighs +0.2 ms per keystroke at p50, 2–4 % per image
   decode and ~40 ms at launch.
+- **Fixed: typing no longer rebuilds the clip per text item.** Raw files and
+  provenance: `bench/results/painter-clip-2026-11-08/`. QTextEdit clips the
+  painter to the paint event's bounding rect (`QWidgetTextControl::drawContents`).
+  On a 2× screen `QPainterPrivate::drawTextItem` turns antialiasing on and
+  off around every text item, and each change makes the raster engine drop
+  the clip and replay it (`renderHintsChanged` → `updateClipping`): a new
+  `QClipData`, whose spans the first clipped glyph allocates again. About 1
+  in 9 keystroke paints covers the edited line plus a 17 pt strip at the
+  viewport's right edge, where the transient scroll bar repaints after a
+  height change. Its bounding rect is the whole viewport, so every visible
+  block is drawn under a two-rect clip, and each of ~185 text items allocates
+  41.7 KB of spans (2 rects × 1,302 rows × 16 B). Since the paint system
+  already clips to the update region, `NoteEditor::paintEvent` marks its
+  viewport paint and `VirtualLayout::draw` paints with painter clipping off
+  (`VirtualLayout::setRedundantClip`); the system clip is built once per
+  paint. A test renders the editor through a two-rect region at 2× both
+  ways: identical pixels, none outside the region.
+  `--bench-arg painter_clip=1` keeps Qt's clip, for A/B runs. Allocations of
+  32 KB or more per keystroke (1000- minus 200-key run, interposer): 21.1 →
+  0.28. Typing, 1000 keys, modes interleaved, 3–4 runs each:
+
+  | ms, p50 / p95 | Cache on | Cache off |
+  |---|---:|---:|
+  | Input → end of editor paint, before (`painter_clip=1`) | 2.15 / 8.74 | 2.13 / 9.93 |
+  | Input → end of editor paint, now | 2.16 / 8.06 | 2.08 / 7.98 |
+  | Editor paint, before / now | 0.47 / 5.77, 0.46 / 5.17 | 0.46 / 7.14, 0.45 / 5.11 |
+
+  With the cache off, typing is now as fast as with it, and p95 is below the
+  old cache-on figure (8.74 here, 8.77 on 2026-11-06).
 - **Repeated close is flat.** With the cap, the footprint after each close
   of the 200-page document over 12 cycles: 109, 121, 122, 125, then 121–122;
   after the scan: 106–108 (one 121). The allocator returns nothing more

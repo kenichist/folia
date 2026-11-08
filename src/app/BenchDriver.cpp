@@ -335,6 +335,11 @@ void BenchDriver::run()
     // Let startup work (initial page open, tree load) finish first.
     waitFor([this] { return m_app->activeSession() != nullptr || m_paints > 0; }, 3000);
     settle(m_args.value(QStringLiteral("startup_settle_ms"), 300).toInt());
+    // A/B: painter_clip=1 paints the editor under QTextEdit's own clip, as
+    // before it was dropped (docs/BENCHMARKS.md §6b).
+    const bool painterClip = m_args.value(QStringLiteral("painter_clip")).toBool();
+    m_app->editorPane()->editor()->setDropRedundantClip(!painterClip);
+    m_extra.insert(QStringLiteral("editor_painter_clip"), painterClip);
     const QString s = m_scenario;
     if (s == QLatin1String("snapshot")) scenarioSnapshot();
     else if (s == QLatin1String("launch")) scenarioLaunch();

@@ -70,6 +70,10 @@ public:
     // The image sources a clipboard or drop carries (empty: treat as text).
     static QList<AttachmentStore::Source> imageSources(const QMimeData *data);
 
+    // Paint the text without QTextEdit's painter clip (on by default; the
+    // bench turns it off to compare, docs/BENCHMARKS.md §6b).
+    void setDropRedundantClip(bool on) { m_dropRedundantClip = on; }
+
 signals:
     void openPageRequested(folia::PageId id);
     // A PDF card was clicked (or Mod+Enter on its line).
@@ -121,6 +125,7 @@ private:
     QPointer<PageSession> m_session;
     bool m_preedit = false;
     bool m_pendingInput = false;
+    bool m_dropRedundantClip = true;
     QElapsedTimer m_inputTimer;
 
     // Inline math bubble
