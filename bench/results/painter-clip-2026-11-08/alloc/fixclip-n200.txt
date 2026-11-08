@@ -1,0 +1,401 @@
+large allocations (>= 32 KB): 2452, 146.0 MB
+
+#0 count 1675, 70.0 MB, avg 41 KB
+   0   QtGui                               0x0000000106c1ad7c _ZN9QClipData10initializeEv + 204
+   1   QtGui                               0x0000000106ea4a34 _ZL22qt_alphamapblit_argb32P13QRasterBufferiiRK7QRgba64PKhiiiPK9QClipDatab + 288
+   2   QtGui                               0x0000000106c21370 _ZN18QRasterPaintEngine11alphaPenBltEPKviiiiiib + 884
+   3   QtGui                               0x0000000106c21dfc _ZN18QRasterPaintEngine16drawCachedGlyphsEiPKjPK11QFixedPointP11QFontEngine + 1340
+   4   QtGui                               0x0000000106c22724 _ZN18QRasterPaintEngine12drawTextItemERK7QPointFRK9QTextItem + 352
+   5   QtGui                               0x0000000106c360fc _ZN15QPainterPrivate12drawTextItemERK7QPointFRK9QTextItemP11QTextEngine + 1288
+   6   QtGui                               0x0000000106d5cb1c _ZNK9QTextLine13draw_internalEP8QPainterRK7QPointFPKN11QTextLayout11FormatRangeE + 2676
+   7   QtGui                               0x0000000106d5bf38 _ZNK11QTextLayout4drawEP8QPainterRK7QPointFRK5QListINS_11FormatRangeEERK6QRectF + 2956
+   8   Folia                               0x0000000104e538a0 _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 1824
+   9   QtWidgets                           0x0000000105e965f4 _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+   10  QtWidgets                           0x0000000105e6e7cc _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+   11  QtWidgets                           0x0000000105e6e960 _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+   12  Folia                               0x0000000104e258b0 _ZN5folia10NoteEditor10paintEventEP11QPaintEvent + 136
+   13  QtWidgets                           0x0000000105cfea08 _ZN7QWidget5eventEP6QEvent + 2852
+
+#1 count 206, 8.6 MB, avg 41 KB
+   0   QtGui                               0x0000000106c1ad7c _ZN9QClipData10initializeEv + 204
+   1   QtGui                               0x0000000106ea4a34 _ZL22qt_alphamapblit_argb32P13QRasterBufferiiRK7QRgba64PKhiiiPK9QClipDatab + 288
+   2   QtGui                               0x0000000106c21370 _ZN18QRasterPaintEngine11alphaPenBltEPKviiiiiib + 884
+   3   QtGui                               0x0000000106c21dfc _ZN18QRasterPaintEngine16drawCachedGlyphsEiPKjPK11QFixedPointP11QFontEngine + 1340
+   4   QtGui                               0x0000000106c22724 _ZN18QRasterPaintEngine12drawTextItemERK7QPointFRK9QTextItem + 352
+   5   QtGui                               0x0000000106c35f1c _ZN15QPainterPrivate12drawTextItemERK7QPointFRK9QTextItemP11QTextEngine + 808
+   6   QtGui                               0x0000000106d5cb1c _ZNK9QTextLine13draw_internalEP8QPainterRK7QPointFPKN11QTextLayout11FormatRangeE + 2676
+   7   QtGui                               0x0000000106d5bf38 _ZNK11QTextLayout4drawEP8QPainterRK7QPointFRK5QListINS_11FormatRangeEERK6QRectF + 2956
+   8   Folia                               0x0000000104e538a0 _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 1824
+   9   QtWidgets                           0x0000000105e965f4 _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+   10  QtWidgets                           0x0000000105e6e7cc _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+   11  QtWidgets                           0x0000000105e6e960 _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+   12  Folia                               0x0000000104e258b0 _ZN5folia10NoteEditor10paintEventEP11QPaintEvent + 136
+   13  QtWidgets                           0x0000000105cfea08 _ZN7QWidget5eventEP6QEvent + 2852
+
+#2 count 104, 4.3 MB, avg 41 KB
+   0   QtGui                               0x0000000106c1ad7c _ZN9QClipData10initializeEv + 204
+   1   QtGui                               0x0000000106c25190 _ZL18qt_intersect_spansPK9QClipDataPiPK11QT_FT_Span_S5_PPS3_i + 48
+   2   QtGui                               0x0000000106c23d34 _ZL20qt_span_fill_clippediPK11QT_FT_Span_Pv + 120
+   3   QtGui                               0x0000000106c1c498 _ZL19fillRect_normalizedRK5QRectP9QSpanDataP25QRasterPaintEnginePrivate + 516
+   4   QtGui                               0x0000000106c1f170 _ZN18QRasterPaintEngine9drawImageERK7QPointFRK6QImage + 696
+   5   QtGui                               0x0000000106c21d90 _ZN18QRasterPaintEngine16drawCachedGlyphsEiPKjPK11QFixedPointP11QFontEngine + 1232
+   6   QtGui                               0x0000000106c22724 _ZN18QRasterPaintEngine12drawTextItemERK7QPointFRK9QTextItem + 352
+   7   QtGui                               0x0000000106c360fc _ZN15QPainterPrivate12drawTextItemERK7QPointFRK9QTextItemP11QTextEngine + 1288
+   8   QtGui                               0x0000000106d5cb1c _ZNK9QTextLine13draw_internalEP8QPainterRK7QPointFPKN11QTextLayout11FormatRangeE + 2676
+   9   QtGui                               0x0000000106d5bf38 _ZNK11QTextLayout4drawEP8QPainterRK7QPointFRK5QListINS_11FormatRangeEERK6QRectF + 2956
+   10  Folia                               0x0000000104e538a0 _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 1824
+   11  QtWidgets                           0x0000000105e965f4 _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+   12  QtWidgets                           0x0000000105e6e7cc _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+   13  QtWidgets                           0x0000000105e6e960 _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+
+#3 count 83, 14.7 MB, avg 173 KB
+   0   libsystem_malloc.dylib              0x00000001864ef73c _malloc_type_calloc_outlined + 104
+   1   CoreGraphics                        0x000000018d4eb83c RIPLayerCreate + 272
+   2   CoreGraphics                        0x000000018d5063bc ripc_BeginLayer + 1080
+   3   CoreGraphics                        0x000000018d505acc CGContextBeginTransparencyLayerWithRect + 120
+   4   libqmacstyle.dylib                  0x0000000107491db4 _ZNK9QMacStyle18drawComplexControlEN6QStyle14ComplexControlEPK19QStyleOptionComplexP8QPainterPK7QWidget + 7392
+   5   AppKit                              0x000000018abc1b6c +[NSAppearance _performWithCurrentAppearance:usingBlock:] + 72
+   6   libqmacstyle.dylib                  0x00000001074953b4 _ZNK18QMacApperanceStyleI9QMacStyle12QStyleOption19QStyleOptionComplexE18drawComplexControlEN6QStyle14ComplexControlEPKS2_P8QPainterPK7QWidget + 140
+   7   QtWidgets                           0x0000000105d60cf8 _ZNK16QStyleSheetStyle18drawComplexControlEN6QStyle14ComplexControlEPK19QStyleOptionComplexP8QPainterPK7QWidget + 3116
+   8   QtWidgets                           0x0000000105e43880 _ZN10QScrollBar10paintEventEP11QPaintEvent + 268
+   9   QtWidgets                           0x0000000105cfea08 _ZN7QWidget5eventEP6QEvent + 2852
+   10  QtWidgets                           0x0000000105e4368c _ZN10QScrollBar5eventEP6QEvent + 496
+   11  QtWidgets                           0x0000000105cbbd9c _ZN19QApplicationPrivate13notify_helperEP7QObjectP6QEvent + 252
+   12  QtWidgets                           0x0000000105cbcd5c _ZN12QApplication6notifyEP7QObjectP6QEvent + 504
+   13  QtCore                              0x00000001063eb4b4 _ZN16QCoreApplication15notifyInternal2EP7QObjectP6QEvent + 164
+
+#4 count 57, 2.4 MB, avg 41 KB
+   0   QtGui                               0x0000000106c1ad7c _ZN9QClipData10initializeEv + 204
+   1   QtGui                               0x0000000106ea4a34 _ZL22qt_alphamapblit_argb32P13QRasterBufferiiRK7QRgba64PKhiiiPK9QClipDatab + 288
+   2   QtGui                               0x0000000106c21370 _ZN18QRasterPaintEngine11alphaPenBltEPKviiiiiib + 884
+   3   QtGui                               0x0000000106c21dfc _ZN18QRasterPaintEngine16drawCachedGlyphsEiPKjPK11QFixedPointP11QFontEngine + 1340
+   4   QtGui                               0x0000000106c22724 _ZN18QRasterPaintEngine12drawTextItemERK7QPointFRK9QTextItem + 352
+   5   QtGui                               0x0000000106c360fc _ZN15QPainterPrivate12drawTextItemERK7QPointFRK9QTextItemP11QTextEngine + 1288
+   6   QtGui                               0x0000000106c351d0 _ZN8QPainter8drawTextERK7QPointFRK7QStringii + 1172
+   7   Folia                               0x000000010504adbc _ZNK5folia15MathDisplayList5paintEP8QPainterRK7QPointFRK6QColor + 320
+   8   Folia                               0x0000000104e5399c _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 2076
+   9   QtWidgets                           0x0000000105e965f4 _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+   10  QtWidgets                           0x0000000105e6e7cc _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+   11  QtWidgets                           0x0000000105e6e960 _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+   12  Folia                               0x0000000104e258b0 _ZN5folia10NoteEditor10paintEventEP11QPaintEvent + 136
+   13  QtWidgets                           0x0000000105cfea08 _ZN7QWidget5eventEP6QEvent + 2852
+
+#5 count 38, 1.6 MB, avg 41 KB
+   0   QtGui                               0x0000000106c1ad7c _ZN9QClipData10initializeEv + 204
+   1   QtGui                               0x0000000106c25190 _ZL18qt_intersect_spansPK9QClipDataPiPK11QT_FT_Span_S5_PPS3_i + 48
+   2   QtGui                               0x0000000106c23d34 _ZL20qt_span_fill_clippediPK11QT_FT_Span_Pv + 120
+   3   QtGui                               0x0000000106c1c498 _ZL19fillRect_normalizedRK5QRectP9QSpanDataP25QRasterPaintEnginePrivate + 516
+   4   QtGui                               0x0000000106c1d49c _ZN18QRasterPaintEngine8fillRectERK6QRectFP9QSpanData + 208
+   5   QtGui                               0x0000000106c373c4 _ZN8QPainter8fillRectERK5QRectRK6QBrush + 332
+   6   QtGui                               0x0000000106d5f940 _ZL14drawBackgroundP8QPainterRK15QTextCharFormatRK6QRectF + 152
+   7   QtGui                               0x0000000106d5c380 _ZNK9QTextLine13draw_internalEP8QPainterRK7QPointFPKN11QTextLayout11FormatRangeE + 728
+   8   QtGui                               0x0000000106d5bf38 _ZNK11QTextLayout4drawEP8QPainterRK7QPointFRK5QListINS_11FormatRangeEERK6QRectF + 2956
+   9   Folia                               0x0000000104e538a0 _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 1824
+   10  QtWidgets                           0x0000000105e965f4 _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+   11  QtWidgets                           0x0000000105e6e7cc _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+   12  QtWidgets                           0x0000000105e6e960 _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+   13  Folia                               0x0000000104e258b0 _ZN5folia10NoteEditor10paintEventEP11QPaintEvent + 136
+
+#6 count 19, 0.8 MB, avg 41 KB
+   0   QtGui                               0x0000000106c1ad7c _ZN9QClipData10initializeEv + 204
+   1   QtGui                               0x0000000106c25190 _ZL18qt_intersect_spansPK9QClipDataPiPK11QT_FT_Span_S5_PPS3_i + 48
+   2   QtGui                               0x0000000106c23d34 _ZL20qt_span_fill_clippediPK11QT_FT_Span_Pv + 120
+   3   QtGui                               0x0000000106bf697c gray_convert_glyph + 1232
+   4   QtGui                               0x0000000106c1b11c _ZN25QRasterPaintEnginePrivate9rasterizeEP14QT_FT_Outline_PFviPK11QT_FT_Span_PvES5_P13QRasterBuffer + 348
+   5   QtGui                               0x0000000106c1d38c _ZN18QRasterPaintEngine4fillERK11QVectorPathRK6QBrush + 888
+   6   QtGui                               0x0000000106c29380 _ZN14QPaintEngineEx4drawERK11QVectorPath + 92
+   7   Folia                               0x000000010504ad60 _ZNK5folia15MathDisplayList5paintEP8QPainterRK7QPointFRK6QColor + 228
+   8   Folia                               0x0000000104e5399c _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 2076
+   9   QtWidgets                           0x0000000105e965f4 _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+   10  QtWidgets                           0x0000000105e6e7cc _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+   11  QtWidgets                           0x0000000105e6e960 _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+   12  Folia                               0x0000000104e258b0 _ZN5folia10NoteEditor10paintEventEP11QPaintEvent + 136
+   13  QtWidgets                           0x0000000105cfea08 _ZN7QWidget5eventEP6QEvent + 2852
+
+#7 count 19, 0.8 MB, avg 41 KB
+   0   QtGui                               0x0000000106c1ad7c _ZN9QClipData10initializeEv + 204
+   1   QtGui                               0x0000000106c25190 _ZL18qt_intersect_spansPK9QClipDataPiPK11QT_FT_Span_S5_PPS3_i + 48
+   2   QtGui                               0x0000000106c23d34 _ZL20qt_span_fill_clippediPK11QT_FT_Span_Pv + 120
+   3   QtGui                               0x0000000106c1c498 _ZL19fillRect_normalizedRK5QRectP9QSpanDataP25QRasterPaintEnginePrivate + 516
+   4   QtGui                               0x0000000106c1d49c _ZN18QRasterPaintEngine8fillRectERK6QRectFP9QSpanData + 208
+   5   Folia                               0x0000000104e53078 _ZNK5folia13VirtualLayout21paintBlockDecorationsEP8QPainterRK10QTextBlockNS_8LineRoleERK6QRectFRKN27QAbstractTextDocumentLayout12PaintContextE + 412
+   6   Folia                               0x0000000104e534f8 _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 888
+   7   QtWidgets                           0x0000000105e965f4 _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+   8   QtWidgets                           0x0000000105e6e7cc _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+   9   QtWidgets                           0x0000000105e6e960 _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+   10  Folia                               0x0000000104e258b0 _ZN5folia10NoteEditor10paintEventEP11QPaintEvent + 136
+   11  QtWidgets                           0x0000000105cfea08 _ZN7QWidget5eventEP6QEvent + 2852
+   12  QtWidgets                           0x0000000105d43ffc _ZN6QFrame5eventEP6QEvent + 56
+   13  QtCore                              0x00000001063eb78c _ZN23QCoreApplicationPrivate29sendThroughObjectEventFiltersEP7QObjectP6QEvent + 196
+
+#8 count 19, 0.8 MB, avg 41 KB
+   0   QtGui                               0x0000000106c1ad7c _ZN9QClipData10initializeEv + 204
+   1   QtGui                               0x0000000106c25190 _ZL18qt_intersect_spansPK9QClipDataPiPK11QT_FT_Span_S5_PPS3_i + 48
+   2   QtGui                               0x0000000106c23d34 _ZL20qt_span_fill_clippediPK11QT_FT_Span_Pv + 120
+   3   QtGui                               0x0000000106c1c498 _ZL19fillRect_normalizedRK5QRectP9QSpanDataP25QRasterPaintEnginePrivate + 516
+   4   QtGui                               0x0000000106c1d49c _ZN18QRasterPaintEngine8fillRectERK6QRectFP9QSpanData + 208
+   5   Folia                               0x0000000104e53040 _ZNK5folia13VirtualLayout21paintBlockDecorationsEP8QPainterRK10QTextBlockNS_8LineRoleERK6QRectFRKN27QAbstractTextDocumentLayout12PaintContextE + 356
+   6   Folia                               0x0000000104e534f8 _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 888
+   7   QtWidgets                           0x0000000105e965f4 _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+   8   QtWidgets                           0x0000000105e6e7cc _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+   9   QtWidgets                           0x0000000105e6e960 _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+   10  Folia                               0x0000000104e258b0 _ZN5folia10NoteEditor10paintEventEP11QPaintEvent + 136
+   11  QtWidgets                           0x0000000105cfea08 _ZN7QWidget5eventEP6QEvent + 2852
+   12  QtWidgets                           0x0000000105d43ffc _ZN6QFrame5eventEP6QEvent + 56
+   13  QtCore                              0x00000001063eb78c _ZN23QCoreApplicationPrivate29sendThroughObjectEventFiltersEP7QObjectP6QEvent + 196
+
+#9 count 19, 1.8 MB, avg 92 KB
+   0   libsystem_malloc.dylib              0x00000001864ef8b8 _malloc_type_zone_malloc_outlined + 72
+   1   Foundation                          0x0000000188001828 -[NSData(NSData) _initWithBase64EncodedObject:options:] + 116
+   2   libFontParser.dylib                 0x00000001933b1aa4 _ZL16MetadataFromFontPK13FTHeader_metajPK10__CFStringP24FTAppleSubtableData_metaPPK14__CFDictionary + 580
+   3   libFontParser.dylib                 0x00000001933b1828 _ZL16MetadataFromFontPK8__CFDataPK10__CFStringP24FTAppleSubtableData_metaPPK14__CFDictionary + 104
+   4   libFontParser.dylib                 0x00000001933b5204 _ZNK7TFPFont12CopyMetadataEv + 196
+   5   libFontParser.dylib                 0x00000001933f2e2c FPFontCopyMetadata + 44
+   6   CoreText                            0x000000018972a95c _ZNK9TBaseFont12CopyMetadataEb + 76
+   7   CoreText                            0x000000018972bd84 _ZNK9TBaseFont34CopySupportedLanguagesFromMetadataEv + 156
+   8   CoreText                            0x000000018972be78 _ZNK9TBaseFont11CopyLocalesEv + 132
+   9   CoreText                            0x000000018960bc94 _ZNK9TBaseFont13CopyAttributeEm + 356
+   10  CoreText                            0x000000018960b6c4 CTFontDescriptorCopyAttribute + 48
+   11  QtGui                               0x0000000106dbe7b8 _ZL18getFontDescriptionPK18__CTFontDescriptorP15FontDescription + 984
+   12  QtGui                               0x0000000106dbd128 _ZN21QCoreTextFontDatabase22populateFromDescriptorEPK18__CTFontDescriptorRK7QStringPN20QFontDatabasePrivate15ApplicationFontENS_22PopulateDescriptorFlagE + 128
+   13  QtGui                               0x0000000106dbbfcc _ZN21QCoreTextFontDatabase20populateFontDatabaseEv + 12272
+
+#10 count 19, 0.8 MB, avg 41 KB
+   0   QtGui                               0x0000000106c1ad7c _ZN9QClipData10initializeEv + 204
+   1   QtGui                               0x0000000106c25190 _ZL18qt_intersect_spansPK9QClipDataPiPK11QT_FT_Span_S5_PPS3_i + 48
+   2   QtGui                               0x0000000106c23d34 _ZL20qt_span_fill_clippediPK11QT_FT_Span_Pv + 120
+   3   QtGui                               0x0000000106c77ef8 _ZN11QRasterizer13rasterizeLineERK7QPointFS2_db + 5312
+   4   QtGui                               0x0000000106c1c6ec _ZN18QRasterPaintEngine9drawRectsEPK6QRectFi + 464
+   5   Folia                               0x000000010504ad38 _ZNK5folia15MathDisplayList5paintEP8QPainterRK7QPointFRK6QColor + 188
+   6   Folia                               0x0000000104e5399c _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 2076
+   7   QtWidgets                           0x0000000105e965f4 _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+   8   QtWidgets                           0x0000000105e6e7cc _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+   9   QtWidgets                           0x0000000105e6e960 _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+   10  Folia                               0x0000000104e258b0 _ZN5folia10NoteEditor10paintEventEP11QPaintEvent + 136
+   11  QtWidgets                           0x0000000105cfea08 _ZN7QWidget5eventEP6QEvent + 2852
+   12  QtWidgets                           0x0000000105d43ffc _ZN6QFrame5eventEP6QEvent + 56
+   13  QtCore                              0x00000001063eb78c _ZN23QCoreApplicationPrivate29sendThroughObjectEventFiltersEP7QObjectP6QEvent + 196
+
+#11 count 19, 0.8 MB, avg 41 KB
+   0   QtGui                               0x0000000106c1ad7c _ZN9QClipData10initializeEv + 204
+   1   QtGui                               0x0000000106c25190 _ZL18qt_intersect_spansPK9QClipDataPiPK11QT_FT_Span_S5_PPS3_i + 48
+   2   QtGui                               0x0000000106c23d34 _ZL20qt_span_fill_clippediPK11QT_FT_Span_Pv + 120
+   3   QtGui                               0x0000000106c77ef8 _ZN11QRasterizer13rasterizeLineERK7QPointFS2_db + 5312
+   4   QtGui                               0x0000000106c1c6ec _ZN18QRasterPaintEngine9drawRectsEPK6QRectFi + 464
+   5   Folia                               0x000000010504ad38 _ZNK5folia15MathDisplayList5paintEP8QPainterRK7QPointFRK6QColor + 188
+   6   Folia                               0x0000000104e53b2c _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 2476
+   7   QtWidgets                           0x0000000105e965f4 _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+   8   QtWidgets                           0x0000000105e6e7cc _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+   9   QtWidgets                           0x0000000105e6e960 _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+   10  Folia                               0x0000000104e258b0 _ZN5folia10NoteEditor10paintEventEP11QPaintEvent + 136
+   11  QtWidgets                           0x0000000105cfea08 _ZN7QWidget5eventEP6QEvent + 2852
+   12  QtWidgets                           0x0000000105d43ffc _ZN6QFrame5eventEP6QEvent + 56
+   13  QtCore                              0x00000001063eb78c _ZN23QCoreApplicationPrivate29sendThroughObjectEventFiltersEP7QObjectP6QEvent + 196
+
+#12 count 19, 1.8 MB, avg 92 KB
+   0   libsystem_malloc.dylib              0x00000001864ef6a8 _malloc_type_malloc_outlined + 68
+   1   CoreFoundation                      0x0000000186828310 __CFDataInit + 444
+   2   libFontParser.dylib                 0x00000001933b1ac4 _ZL16MetadataFromFontPK13FTHeader_metajPK10__CFStringP24FTAppleSubtableData_metaPPK14__CFDictionary + 612
+   3   libFontParser.dylib                 0x00000001933b1828 _ZL16MetadataFromFontPK8__CFDataPK10__CFStringP24FTAppleSubtableData_metaPPK14__CFDictionary + 104
+   4   libFontParser.dylib                 0x00000001933b5204 _ZNK7TFPFont12CopyMetadataEv + 196
+   5   libFontParser.dylib                 0x00000001933f2e2c FPFontCopyMetadata + 44
+   6   CoreText                            0x000000018972a95c _ZNK9TBaseFont12CopyMetadataEb + 76
+   7   CoreText                            0x000000018972bd84 _ZNK9TBaseFont34CopySupportedLanguagesFromMetadataEv + 156
+   8   CoreText                            0x000000018972be78 _ZNK9TBaseFont11CopyLocalesEv + 132
+   9   CoreText                            0x000000018960bc94 _ZNK9TBaseFont13CopyAttributeEm + 356
+   10  CoreText                            0x000000018960b6c4 CTFontDescriptorCopyAttribute + 48
+   11  QtGui                               0x0000000106dbe7b8 _ZL18getFontDescriptionPK18__CTFontDescriptorP15FontDescription + 984
+   12  QtGui                               0x0000000106dbd128 _ZN21QCoreTextFontDatabase22populateFromDescriptorEPK18__CTFontDescriptorRK7QStringPN20QFontDatabasePrivate15ApplicationFontENS_22PopulateDescriptorFlagE + 128
+   13  QtGui                               0x0000000106dbbfcc _ZN21QCoreTextFontDatabase20populateFontDatabaseEv + 12272
+
+#13 count 13, 0.6 MB, avg 47 KB
+   0   libcompression.dylib                0x0000000196802098 BrotliEnsureRingBuffer + 64
+   1   libcompression.dylib                0x00000001968005c4 BrotliDecoderDecompressStream + 3128
+   2   libcompression.dylib                0x0000000196836bac brotli_stream_process + 76
+   3   libcompression.dylib                0x00000001967e6060 compression_stream_process + 216
+   4   Foundation                          0x00000001889e7f44 -[_NSDataCompressor processBytes:size:flags:] + 136
+   5   Foundation                          0x00000001889e8248 __84-[NSData(NSDataCompression) _produceDataWithCompressionOperation:algorithm:handler:]_block_invoke.371 + 36
+   6   Foundation                          0x0000000187fce484 -[NSData(NSData) enumerateByteRangesUsingBlock:] + 120
+   7   Foundation                          0x00000001889e814c -[NSData(NSDataCompression) _produceDataWithCompressionOperation:algorithm:handler:] + 288
+   8   Foundation                          0x00000001889e8434 -[NSData(NSDataCompression) _decompressedDataUsingCompressionAlgorithm:error:] + 188
+   9   libFontRegistry.dylib               0x0000000190c2335c -[XTFontStaticRegistry normalizeProperty:forKey:] + 900
+   10  libFontRegistry.dylib               0x0000000190c22970 -[XTFontStaticRegistry propertyForKey:andFontRef:] + 228
+   11  libFontRegistry.dylib               0x0000000190c03aec _ZNK22TGlobalFontRegistryImp30CopyPropertyFromStaticRegistryEPK10__CFStringjb + 176
+   12  libFontRegistry.dylib               0x0000000190c03e60 _ZNK22TGlobalFontRegistryImp21CopyPropertiesForFontEPK7__CFURLPK7__CFSetRK17TFontQueryOptions + 244
+   13  libFontRegistry.dylib               0x0000000190be6550 XTCopyPropertiesForFont + 184
+
+#14 count 12, 3.7 MB, avg 302 KB
+   0   QtGui                               0x0000000106ecc9ec _ZL22_hb_qt_reference_tableP9hb_face_tjPv + 76
+   1   libharfbuzz.0.dylib                 0x000000010587dae0 hb_face_reference_table + 28
+   2   libharfbuzz.0.dylib                 0x00000001058b2264 _ZN21hb_sanitize_context_t15reference_tableIN2OT6Layout4GPOSEEEP9hb_blob_tPK9hb_face_tj + 68
+   3   libharfbuzz.0.dylib                 0x00000001058b21ac _ZN2OT8GSUBGPOS13accelerator_tINS_6Layout4GPOSEEC2EP9hb_face_t + 80
+   4   libharfbuzz.0.dylib                 0x0000000105908d80 _ZN16hb_lazy_loader_tIN2OT18GPOS_accelerator_tE21hb_face_lazy_loader_tIS1_Lj27EE9hb_face_tLj27ES1_E6createEPS4_ + 40
+   5   libharfbuzz.0.dylib                 0x00000001058b2138 _ZNK16hb_lazy_loader_tIN2OT18GPOS_accelerator_tE21hb_face_lazy_loader_tIS1_Lj27EE9hb_face_tLj27ES1_E10get_storedEv + 76
+   6   libharfbuzz.0.dylib                 0x00000001058a3650 _ZNK2OT4GDEF14is_blocklistedEP9hb_blob_tP9hb_face_t + 72
+   7   libharfbuzz.0.dylib                 0x0000000105867eb8 _ZN2OT4GDEF13accelerator_tC2EP9hb_face_t + 196
+   8   libharfbuzz.0.dylib                 0x00000001058dc8b0 _ZN16hb_lazy_loader_tIN2OT18GDEF_accelerator_tE21hb_face_lazy_loader_tIS1_Lj25EE9hb_face_tLj25ES1_E6createEPS4_ + 40
+   9   libharfbuzz.0.dylib                 0x0000000105867db0 _ZNK16hb_lazy_loader_tIN2OT18GDEF_accelerator_tE21hb_face_lazy_loader_tIS1_Lj25EE9hb_face_tLj25ES1_E10get_storedEv + 76
+   10  libharfbuzz.0.dylib                 0x00000001058a47d4 _Z48_hb_ot_layout_table_get_feature_variations_stateP9hb_face_tjPKijPjP11hb_vector_tIjLb0EE + 60
+   11  libharfbuzz.0.dylib                 0x00000001058d685c _ZN22hb_ot_shape_plan_key_t4initEP9hb_face_tPKij + 92
+   12  libharfbuzz.0.dylib                 0x00000001058d65dc _ZN19hb_shape_plan_key_t4initEbP9hb_face_tPK23hb_segment_properties_tPK12hb_feature_tjPKijPKPKc + 216
+   13  libharfbuzz.0.dylib                 0x0000000105918638 hb_shape_plan_create_cached2 + 140
+
+#15 count 11, 0.4 MB, avg 32 KB
+   0   libsystem_malloc.dylib              0x00000001864ef6a8 _malloc_type_malloc_outlined + 68
+   1   libPng.dylib                        0x0000000198d1eb54 png_malloc_warn + 44
+   2   libPng.dylib                        0x0000000198d21ccc png_zalloc + 32
+   3   libz.1.dylib                        0x000000019648b474 inflatePrime + 244
+   4   libz.1.dylib                        0x0000000196486068 inflate + 5976
+   5   libPng.dylib                        0x0000000198d22fbc png_read_IDAT_data + 200
+   6   libPng.dylib                        0x0000000198d3780c png_read_row_indexed + 216
+   7   ImageIO                             0x000000019384b3c4 _ZN13PNGReadPlugin19DecodeFrameStandardEP19IIOImageReadSessionRK14ReadPluginDataRK13PNGPluginDataR20IIODecodeFrameParams + 1580
+   8   ImageIO                             0x00000001938ca1f4 _ZN13PNGReadPlugin22DecodeUncomposedFramesEP12IIOImageReadP13GlobalPNGInfoRK14ReadPluginDataRK13PNGPluginDataRNSt3__16vectorI20IIODecodeFrameParamsNSA_9allocatorISC_EEEE + 120
+   9   ImageIO                             0x000000019385bed4 _ZN13PNGReadPlugin25copyImageBlockSetStandardEP7InfoRecP15CGImageProvider6CGRect6CGSizePK14__CFDictionary + 992
+   10  ImageIO                             0x00000001938ca4f0 _ZN13PNGReadPlugin14decodeImageImpEP18IIODecodeParameter12IIOImageTypePP11__IOSurfacePP10__CVBufferPP15CGImageBlockSet + 480
+   11  ImageIO                             0x00000001938ee288 _ZN13IIOReadPlugin15callDecodeImageEP18IIODecodeParameter12IIOImageTypePP11__IOSurfacePP10__CVBufferPP15CGImageBlockSet + 1008
+   12  ImageIO                             0x0000000193839b04 _ZN10IIO_Reader21CopyImageBlockSetProcEPvP15CGImageProvider6CGRect6CGSizePK14__CFDictionary + 708
+   13  ImageIO                             0x00000001938559b4 _ZN20IIOImageProviderInfo28copyImageBlockSetWithOptionsEP15CGImageProvider6CGRect6CGSizePK14__CFDictionary + 408
+
+#16 count 10, 0.6 MB, avg 61 KB
+   0   QtGui                               0x0000000106af8e04 _ZN10QImageData6createERK5QSizeN6QImage6FormatE + 304
+   1   QtGui                               0x0000000106af9f9c _ZNK6QImage4copyERK5QRect + 372
+   2   QtGui                               0x0000000106c84444 _ZN23QImageTextureGlyphCache17resizeTextureDataEii + 68
+   3   QtGui                               0x0000000106c84188 _ZN18QTextureGlyphCache19fillInPendingGlyphsEv + 468
+   4   QtGui                               0x0000000106c21b84 _ZN18QRasterPaintEngine16drawCachedGlyphsEiPKjPK11QFixedPointP11QFontEngine + 708
+   5   QtGui                               0x0000000106c22724 _ZN18QRasterPaintEngine12drawTextItemERK7QPointFRK9QTextItem + 352
+   6   QtGui                               0x0000000106c360fc _ZN15QPainterPrivate12drawTextItemERK7QPointFRK9QTextItemP11QTextEngine + 1288
+   7   QtGui                               0x0000000106d5cb1c _ZNK9QTextLine13draw_internalEP8QPainterRK7QPointFPKN11QTextLayout11FormatRangeE + 2676
+   8   QtGui                               0x0000000106d5bf38 _ZNK11QTextLayout4drawEP8QPainterRK7QPointFRK5QListINS_11FormatRangeEERK6QRectF + 2956
+   9   Folia                               0x0000000104e538a0 _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 1824
+   10  QtWidgets                           0x0000000105e965f4 _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+   11  QtWidgets                           0x0000000105e6e7cc _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+   12  QtWidgets                           0x0000000105e6e960 _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+   13  Folia                               0x0000000104e258b0 _ZN5folia10NoteEditor10paintEventEP11QPaintEvent + 136
+
+#17 count 8, 0.4 MB, avg 44 KB
+   0   libsystem_malloc.dylib              0x00000001864ef790 _malloc_type_realloc_outlined + 68
+   1   CoreFoundation                      0x0000000186834ec8 __CFSafelyReallocateImpl + 36
+   2   Foundation                          0x0000000187fd6620 _NSMutableDataGrowBytes + 336
+   3   Foundation                          0x0000000187fb8f10 -[NSConcreteMutableData appendBytes:length:] + 344
+   4   Foundation                          0x00000001889e7f70 -[_NSDataCompressor processBytes:size:flags:] + 180
+   5   Foundation                          0x00000001889e8164 -[NSData(NSDataCompression) _produceDataWithCompressionOperation:algorithm:handler:] + 312
+   6   Foundation                          0x00000001889e8434 -[NSData(NSDataCompression) _decompressedDataUsingCompressionAlgorithm:error:] + 188
+   7   libFontRegistry.dylib               0x0000000190c2335c -[XTFontStaticRegistry normalizeProperty:forKey:] + 900
+   8   libFontRegistry.dylib               0x0000000190c22970 -[XTFontStaticRegistry propertyForKey:andFontRef:] + 228
+   9   libFontRegistry.dylib               0x0000000190c03aec _ZNK22TGlobalFontRegistryImp30CopyPropertyFromStaticRegistryEPK10__CFStringjb + 176
+   10  libFontRegistry.dylib               0x0000000190c03e60 _ZNK22TGlobalFontRegistryImp21CopyPropertiesForFontEPK7__CFURLPK7__CFSetRK17TFontQueryOptions + 244
+   11  libFontRegistry.dylib               0x0000000190be6550 XTCopyPropertiesForFont + 184
+   12  CoreText                            0x000000018960dfd8 _ZNK9TBaseFont16CopyXTPropertiesEPK7__CFSetb + 100
+   13  CoreText                            0x0000000189624380 _ZNK9TBaseFont22CopyLanguagePropertiesEv + 328
+
+#18 count 7, 0.9 MB, avg 128 KB
+   0   CoreUI                              0x0000000190c5d9fc _BOMFileCompressionLibrary_Setup + 72
+   1   CoreUI                              0x0000000190c5d80c _BOMFileInit + 392
+   2   CoreUI                              0x0000000190c5d594 BOMFileNewFromFDWithSys + 148
+   3   CoreUI                              0x0000000190c5d4f0 _BOMFileNewFromCFReadStreamSys + 32
+   4   CoreUI                              0x0000000190c5d058 __69-[_CSIRenditionBlockData expandCSIBitmapData:fromSlice:makeReadOnly:]_block_invoke + 160
+   5   libdispatch.dylib                   0x000000018653d4c8 _dispatch_client_callout2 + 16
+   6   libdispatch.dylib                   0x00000001865381a4 _dispatch_apply_invoke3 + 336
+   7   libdispatch.dylib                   0x000000018653d4b0 _dispatch_client_callout + 16
+   8   libdispatch.dylib                   0x0000000186526630 _dispatch_once_callout + 32
+   9   libdispatch.dylib                   0x00000001865372f4 _dispatch_apply_invoke + 248
+   10  libdispatch.dylib                   0x000000018653d4b0 _dispatch_client_callout + 16
+   11  libdispatch.dylib                   0x000000018655ad6c _dispatch_channel_invoke.cold.9 + 28
+   12  libdispatch.dylib                   0x0000000186535adc _dispatch_root_queue_drain + 708
+   13  libdispatch.dylib                   0x0000000186536120 _dispatch_worker_thread2 + 184
+
+#19 count 7, 1.9 MB, avg 269 KB
+   0   QtGui                               0x0000000106ecc9ec _ZL22_hb_qt_reference_tableP9hb_face_tjPv + 76
+   1   libharfbuzz.0.dylib                 0x000000010587dae0 hb_face_reference_table + 28
+   2   libharfbuzz.0.dylib                 0x0000000105868170 _ZN21hb_sanitize_context_t15reference_tableIN2OT4GDEFEEEP9hb_blob_tPK9hb_face_tj + 68
+   3   libharfbuzz.0.dylib                 0x0000000105867e78 _ZN2OT4GDEF13accelerator_tC2EP9hb_face_t + 132
+   4   libharfbuzz.0.dylib                 0x00000001058dc8b0 _ZN16hb_lazy_loader_tIN2OT18GDEF_accelerator_tE21hb_face_lazy_loader_tIS1_Lj25EE9hb_face_tLj25ES1_E6createEPS4_ + 40
+   5   libharfbuzz.0.dylib                 0x0000000105867db0 _ZNK16hb_lazy_loader_tIN2OT18GDEF_accelerator_tE21hb_face_lazy_loader_tIS1_Lj25EE9hb_face_tLj25ES1_E10get_storedEv + 76
+   6   libharfbuzz.0.dylib                 0x00000001058a47d4 _Z48_hb_ot_layout_table_get_feature_variations_stateP9hb_face_tjPKijPjP11hb_vector_tIjLb0EE + 60
+   7   libharfbuzz.0.dylib                 0x00000001058d685c _ZN22hb_ot_shape_plan_key_t4initEP9hb_face_tPKij + 92
+   8   libharfbuzz.0.dylib                 0x00000001058d65dc _ZN19hb_shape_plan_key_t4initEbP9hb_face_tPK23hb_segment_properties_tPK12hb_feature_tjPKijPKPKc + 216
+   9   libharfbuzz.0.dylib                 0x0000000105918638 hb_shape_plan_create_cached2 + 140
+   10  libharfbuzz.0.dylib                 0x0000000105918ac0 hb_shape_full + 152
+   11  QtGui                               0x0000000106d395d0 _ZNK11QTextEngine23shapeTextWithHarfbuzzNGERK11QScriptItemPKtiiiP11QFontEngine5QSpanIjLm18446744073709551615EEbbRK4QMapIN5QFont3TagEjE + 1184
+   12  QtGui                               0x0000000106d382f4 _ZNK11QTextEngine9shapeTextEi + 1852
+   13  QtGui                               0x0000000106d5da14 _ZN9QTextLine13layout_helperEi + 420
+
+#20 count 7, 2.6 MB, avg 357 KB
+   0   QtGui                               0x0000000106ecc9ec _ZL22_hb_qt_reference_tableP9hb_face_tjPv + 76
+   1   libharfbuzz.0.dylib                 0x000000010587dae0 hb_face_reference_table + 28
+   2   libharfbuzz.0.dylib                 0x000000010586a374 _ZN21hb_sanitize_context_t15reference_tableIN3AAT4morxEEEP9hb_blob_tPK9hb_face_tj + 68
+   3   libharfbuzz.0.dylib                 0x000000010586a294 _ZN3AAT8mortmorxINS_4morxENS_13ExtendedTypesELj1836020344EE13accelerator_tC2EP9hb_face_t + 84
+   4   libharfbuzz.0.dylib                 0x00000001058e12d4 _ZN16hb_lazy_loader_tIN3AAT18morx_accelerator_tE21hb_face_lazy_loader_tIS1_Lj29EE9hb_face_tLj29ES1_E6createEPS4_ + 40
+   5   libharfbuzz.0.dylib                 0x000000010586a1fc _ZNK16hb_lazy_loader_tIN3AAT18morx_accelerator_tE21hb_face_lazy_loader_tIS1_Lj29EE9hb_face_tLj29ES1_E10get_storedEv + 76
+   6   libharfbuzz.0.dylib                 0x0000000105866e04 hb_aat_layout_has_substitution + 24
+   7   libharfbuzz.0.dylib                 0x00000001058cdd74 _ZN21hb_ot_shape_planner_tC2EP9hb_face_tRK23hb_segment_properties_t + 92
+   8   libharfbuzz.0.dylib                 0x00000001058ced44 _ZN18hb_ot_shape_plan_t5init0EP9hb_face_tPK19hb_shape_plan_key_t + 76
+   9   libharfbuzz.0.dylib                 0x0000000105918270 hb_shape_plan_create2 + 212
+   10  libharfbuzz.0.dylib                 0x00000001059186f8 hb_shape_plan_create_cached2 + 332
+   11  libharfbuzz.0.dylib                 0x0000000105918ac0 hb_shape_full + 152
+   12  QtGui                               0x0000000106d395d0 _ZNK11QTextEngine23shapeTextWithHarfbuzzNGERK11QScriptItemPKtiiiP11QFontEngine5QSpanIjLm18446744073709551615EEbbRK4QMapIN5QFont3TagEjE + 1184
+   13  QtGui                               0x0000000106d382f4 _ZNK11QTextEngine9shapeTextEi + 1852
+
+#21 count 7, 11.3 MB, avg 1582 KB
+   0   libcompression.dylib                0x00000001967e593c realloc_stream_state + 76
+   1   libcompression.dylib                0x00000001967e9094 lzfseStreamDecodeInit + 76
+   2   CoreUI                              0x0000000190c5da40 _BOMFileCompressionLibrary_Setup + 140
+   3   CoreUI                              0x0000000190c5d80c _BOMFileInit + 392
+   4   CoreUI                              0x0000000190c5d594 BOMFileNewFromFDWithSys + 148
+   5   CoreUI                              0x0000000190c5d4f0 _BOMFileNewFromCFReadStreamSys + 32
+   6   CoreUI                              0x0000000190c5d058 __69-[_CSIRenditionBlockData expandCSIBitmapData:fromSlice:makeReadOnly:]_block_invoke + 160
+   7   libdispatch.dylib                   0x000000018653d4c8 _dispatch_client_callout2 + 16
+   8   libdispatch.dylib                   0x00000001865381a4 _dispatch_apply_invoke3 + 336
+   9   libdispatch.dylib                   0x000000018653d4b0 _dispatch_client_callout + 16
+   10  libdispatch.dylib                   0x0000000186526630 _dispatch_once_callout + 32
+   11  libdispatch.dylib                   0x00000001865372f4 _dispatch_apply_invoke + 248
+   12  libdispatch.dylib                   0x000000018653d4b0 _dispatch_client_callout + 16
+   13  libdispatch.dylib                   0x000000018655ad6c _dispatch_channel_invoke.cold.9 + 28
+
+#22 count 6, 0.3 MB, avg 41 KB
+   0   QtGui                               0x0000000106c1ad7c _ZN9QClipData10initializeEv + 204
+   1   QtGui                               0x0000000106c25190 _ZL18qt_intersect_spansPK9QClipDataPiPK11QT_FT_Span_S5_PPS3_i + 48
+   2   QtGui                               0x0000000106c23d34 _ZL20qt_span_fill_clippediPK11QT_FT_Span_Pv + 120
+   3   QtGui                               0x0000000106c77ef8 _ZN11QRasterizer13rasterizeLineERK7QPointFS2_db + 5312
+   4   QtGui                               0x0000000106c1ccc8 _ZN18QRasterPaintEngine6strokeERK11QVectorPathRK4QPen + 952
+   5   QtGui                               0x0000000106c29f80 _ZN14QPaintEngineEx9drawLinesEPK6QLineFi + 144
+   6   QtGui                               0x0000000106d5d594 _ZNK11QTextLayout10drawCursorEP8QPainterRK7QPointFii + 1164
+   7   Folia                               0x0000000104e540e8 _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 3944
+   8   QtWidgets                           0x0000000105e965f4 _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+   9   QtWidgets                           0x0000000105e6e7cc _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+   10  QtWidgets                           0x0000000105e6e960 _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+   11  Folia                               0x0000000104e258b0 _ZN5folia10NoteEditor10paintEventEP11QPaintEvent + 136
+   12  QtWidgets                           0x0000000105cfea08 _ZN7QWidget5eventEP6QEvent + 2852
+   13  QtWidgets                           0x0000000105d43ffc _ZN6QFrame5eventEP6QEvent + 56
+
+#23 count 5, 0.2 MB, avg 46 KB
+   0   libcompression.dylib                0x00000001967ea4fc compression_decode_buffer + 156
+   1   CoreUI                              0x0000000190c71d04 __compress_data_stream + 120
+   2   CoreUI                              0x0000000190c7efc4 -[_CUIThemeSVGRendition rawData] + 64
+   3   CoreUI                              0x0000000190c72544 -[_CUIThemeSVGRendition svgDocument] + 88
+   4   CoreUI                              0x0000000190c72300 -[_CUIThemeSVGRendition canvasSize] + 56
+   5   CoreUI                              0x0000000190c817c8 __36-[CUINamedVectorGlyph contentBounds]_block_invoke + 68
+   6   CoreUI                              0x0000000190d37db0 -[CUINamedVectorGlyph _performWithLockedRenditions:] + 188
+   7   CoreUI                              0x0000000190c72448 -[CUINamedVectorGlyph contentBounds] + 140
+   8   AppKit                              0x000000018bc2a490 getMetricsFromVectorGlyph + 60
+   9   AppKit                              0x000000018bc2c508 -[NSImageSymbolRepProvider _bestRepresentationForImage:hints:] + 1768
+   10  AppKit                              0x000000018ba04d50 -[_NSSimpleLRUCache objectForKey:creationBlock:] + 304
+   11  AppKit                              0x000000018bc2be00 -[NSImageSymbolRepProvider bestRepresentationForImage:hints:] + 148
+   12  AppKit                              0x000000018b58c3d0 __38-[NSImage bestRepresentationForHints:]_block_invoke + 84
+   13  AppKit                              0x000000018b58c300 -[NSImage bestRepresentationForHints:] + 168
+
+#24 count 5, 0.7 MB, avg 144 KB
+   0   QtGui                               0x0000000106ecc9ec _ZL22_hb_qt_reference_tableP9hb_face_tjPv + 76
+   1   libharfbuzz.0.dylib                 0x000000010587dae0 hb_face_reference_table + 28
+   2   libharfbuzz.0.dylib                 0x00000001058694bc _ZN21hb_sanitize_context_t15reference_tableIN2OT6Layout4GSUBEEEP9hb_blob_tPK9hb_face_tj + 68
+   3   libharfbuzz.0.dylib                 0x00000001058693c0 _ZN2OT8GSUBGPOS13accelerator_tINS_6Layout4GSUBEEC2EP9hb_face_t + 88
+   4   libharfbuzz.0.dylib                 0x00000001058de68c _ZN16hb_lazy_loader_tIN2OT18GSUB_accelerator_tE21hb_face_lazy_loader_tIS1_Lj26EE9hb_face_tLj26ES1_E6createEPS4_ + 40
+   5   libharfbuzz.0.dylib                 0x0000000105869324 _ZNK16hb_lazy_loader_tIN2OT18GSUB_accelerator_tE21hb_face_lazy_loader_tIS1_Lj26EE9hb_face_tLj26ES1_E10get_storedEv + 76
+   6   libharfbuzz.0.dylib                 0x00000001058a3e54 _ZL18get_gsubgpos_tableP9hb_face_tj + 60
+   7   libharfbuzz.0.dylib                 0x00000001058a47c8 _Z48_hb_ot_layout_table_get_feature_variations_stateP9hb_face_tjPKijPjP11hb_vector_tIjLb0EE + 48
+   8   libharfbuzz.0.dylib                 0x00000001058d685c _ZN22hb_ot_shape_plan_key_t4initEP9hb_face_tPKij + 92
+   9   libharfbuzz.0.dylib                 0x00000001058d65dc _ZN19hb_shape_plan_key_t4initEbP9hb_face_tPK23hb_segment_properties_tPK12hb_feature_tjPKijPKPKc + 216
+   10  libharfbuzz.0.dylib                 0x0000000105918638 hb_shape_plan_create_cached2 + 140
+   11  libharfbuzz.0.dylib                 0x0000000105918ac0 hb_shape_full + 152
+   12  QtGui                               0x0000000106d395d0 _ZNK11QTextEngine23shapeTextWithHarfbuzzNGERK11QScriptItemPKtiiiP11QFontEngine5QSpanIjLm18446744073709551615EEbbRK4QMapIN5QFont3TagEjE + 1184
+   13  QtGui                               0x0000000106d382f4 _ZNK11QTextEngine9shapeTextEi + 1852

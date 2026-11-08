@@ -517,7 +517,17 @@ void NoteEditor::mouseMoveEvent(QMouseEvent *e)
 void NoteEditor::paintEvent(QPaintEvent *e)
 {
     instr::Scope paintScope("editor_paint_us");
-    QTextEdit::paintEvent(e);
+    {
+        // QTextEdit clips the painter to e->rect(), the bounding rect of the
+        // update region, which the paint system already clips to. The layout
+        // may drop that clip for this paint (VirtualLayout::setRedundantClip).
+        auto *vl = qobject_cast<VirtualLayout *>(document()->documentLayout());
+        if (vl)
+            vl->setRedundantClip(m_dropRedundantClip);
+        QTextEdit::paintEvent(e);
+        if (vl)
+            vl->setRedundantClip(false);
+    }
 #ifdef FOLIA_WITH_MATH
     if (m_inlineStart >= 0 && (m_inlineList || !m_inlineError.isEmpty()) && hasFocus()) {
         const EditorTheme &t = m_ctx->theme();

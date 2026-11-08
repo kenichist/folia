@@ -1,0 +1,85 @@
+# Allocations of 32 KB or more by call stack (repro/bigalloc.c interposer, DYLD_INSERT_LIBRARIES),
+# Folia --bench typing doc=ordinary n=1000, MallocLargeCache=1, top 5 stacks. Whole run, startup included.
+large allocations (>= 32 KB): 19329, 866.3 MB
+
+#0 count 14639, 611.8 MB, avg 41 KB
+ 0 QtGui _ZN9QClipData10initializeEv + 204
+ 1 QtGui _ZL22qt_alphamapblit_argb32P13QRasterBufferiiRK7QRgba64PKhiiiPK9QClipDatab + 288
+ 2 QtGui _ZN18QRasterPaintEngine11alphaPenBltEPKviiiiiib + 884
+ 3 QtGui _ZN18QRasterPaintEngine16drawCachedGlyphsEiPKjPK11QFixedPointP11QFontEngine + 1340
+ 4 QtGui _ZN18QRasterPaintEngine12drawTextItemERK7QPointFRK9QTextItem + 352
+ 5 QtGui _ZN15QPainterPrivate12drawTextItemERK7QPointFRK9QTextItemP11QTextEngine + 1288
+ 6 QtGui _ZNK9QTextLine13draw_internalEP8QPainterRK7QPointFPKN11QTextLayout11FormatRangeE + 2676
+ 7 QtGui _ZNK11QTextLayout4drawEP8QPainterRK7QPointFRK5QListINS_11FormatRangeEERK6QRectF + 2956
+ 8 Folia _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 1676
+ 9 QtWidgets _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+ 10 QtWidgets _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+ 11 QtWidgets _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+ 12 Folia _ZN5folia10NoteEditor10paintEventEP11QPaintEvent + 92
+ 13 QtWidgets _ZN7QWidget5eventEP6QEvent + 2852
+
+#1 count 2514, 105.1 MB, avg 41 KB
+ 0 QtGui _ZN9QClipData10initializeEv + 204
+ 1 QtGui _ZL22qt_alphamapblit_argb32P13QRasterBufferiiRK7QRgba64PKhiiiPK9QClipDatab + 288
+ 2 QtGui _ZN18QRasterPaintEngine11alphaPenBltEPKviiiiiib + 884
+ 3 QtGui _ZN18QRasterPaintEngine16drawCachedGlyphsEiPKjPK11QFixedPointP11QFontEngine + 1340
+ 4 QtGui _ZN18QRasterPaintEngine12drawTextItemERK7QPointFRK9QTextItem + 352
+ 5 QtGui _ZN15QPainterPrivate12drawTextItemERK7QPointFRK9QTextItemP11QTextEngine + 808
+ 6 QtGui _ZNK9QTextLine13draw_internalEP8QPainterRK7QPointFPKN11QTextLayout11FormatRangeE + 2676
+ 7 QtGui _ZNK11QTextLayout4drawEP8QPainterRK7QPointFRK5QListINS_11FormatRangeEERK6QRectF + 2956
+ 8 Folia _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 1676
+ 9 QtWidgets _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+ 10 QtWidgets _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+ 11 QtWidgets _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+ 12 Folia _ZN5folia10NoteEditor10paintEventEP11QPaintEvent + 92
+ 13 QtWidgets _ZN7QWidget5eventEP6QEvent + 2852
+
+#2 count 613, 25.6 MB, avg 41 KB
+ 0 QtGui _ZN9QClipData10initializeEv + 204
+ 1 QtGui _ZL18qt_intersect_spansPK9QClipDataPiPK11QT_FT_Span_S5_PPS3_i + 48
+ 2 QtGui _ZL20qt_span_fill_clippediPK11QT_FT_Span_Pv + 120
+ 3 QtGui _ZL19fillRect_normalizedRK5QRectP9QSpanDataP25QRasterPaintEnginePrivate + 516
+ 4 QtGui _ZN18QRasterPaintEngine9drawImageERK7QPointFRK6QImage + 696
+ 5 QtGui _ZN18QRasterPaintEngine16drawCachedGlyphsEiPKjPK11QFixedPointP11QFontEngine + 1232
+ 6 QtGui _ZN18QRasterPaintEngine12drawTextItemERK7QPointFRK9QTextItem + 352
+ 7 QtGui _ZN15QPainterPrivate12drawTextItemERK7QPointFRK9QTextItemP11QTextEngine + 1288
+ 8 QtGui _ZNK9QTextLine13draw_internalEP8QPainterRK7QPointFPKN11QTextLayout11FormatRangeE + 2676
+ 9 QtGui _ZNK11QTextLayout4drawEP8QPainterRK7QPointFRK5QListINS_11FormatRangeEERK6QRectF + 2956
+ 10 Folia _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 1676
+ 11 QtWidgets _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+ 12 QtWidgets _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+ 13 QtWidgets _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+
+#3 count 390, 16.3 MB, avg 41 KB
+ 0 QtGui _ZN9QClipData10initializeEv + 204
+ 1 QtGui _ZL22qt_alphamapblit_argb32P13QRasterBufferiiRK7QRgba64PKhiiiPK9QClipDatab + 288
+ 2 QtGui _ZN18QRasterPaintEngine11alphaPenBltEPKviiiiiib + 884
+ 3 QtGui _ZN18QRasterPaintEngine16drawCachedGlyphsEiPKjPK11QFixedPointP11QFontEngine + 1340
+ 4 QtGui _ZN18QRasterPaintEngine12drawTextItemERK7QPointFRK9QTextItem + 352
+ 5 QtGui _ZN15QPainterPrivate12drawTextItemERK7QPointFRK9QTextItemP11QTextEngine + 1288
+ 6 QtGui _ZN8QPainter8drawTextERK7QPointFRK7QStringii + 1172
+ 7 Folia _ZNK5folia15MathDisplayList5paintEP8QPainterRK7QPointFRK6QColor + 320
+ 8 Folia _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 1920
+ 9 QtWidgets _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+ 10 QtWidgets _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+ 11 QtWidgets _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+ 12 Folia _ZN5folia10NoteEditor10paintEventEP11QPaintEvent + 92
+ 13 QtWidgets _ZN7QWidget5eventEP6QEvent + 2852
+
+#4 count 259, 10.8 MB, avg 41 KB
+ 0 QtGui _ZN9QClipData10initializeEv + 204
+ 1 QtGui _ZL18qt_intersect_spansPK9QClipDataPiPK11QT_FT_Span_S5_PPS3_i + 48
+ 2 QtGui _ZL20qt_span_fill_clippediPK11QT_FT_Span_Pv + 120
+ 3 QtGui _ZL19fillRect_normalizedRK5QRectP9QSpanDataP25QRasterPaintEnginePrivate + 516
+ 4 QtGui _ZN18QRasterPaintEngine8fillRectERK6QRectFP9QSpanData + 208
+ 5 QtGui _ZN8QPainter8fillRectERK5QRectRK6QBrush + 332
+ 6 QtGui _ZL14drawBackgroundP8QPainterRK15QTextCharFormatRK6QRectF + 152
+ 7 QtGui _ZNK9QTextLine13draw_internalEP8QPainterRK7QPointFPKN11QTextLayout11FormatRangeE + 728
+ 8 QtGui _ZNK11QTextLayout4drawEP8QPainterRK7QPointFRK5QListINS_11FormatRangeEERK6QRectF + 2956
+ 9 Folia _ZN5folia13VirtualLayout4drawEP8QPainterRKN27QAbstractTextDocumentLayout12PaintContextE + 1676
+ 10 QtWidgets _ZN18QWidgetTextControl12drawContentsEP8QPainterRK6QRectFP7QWidget + 200
+ 11 QtWidgets _ZN16QTextEditPrivate5paintEP8QPainterP11QPaintEvent + 440
+ 12 QtWidgets _ZN9QTextEdit10paintEventEP11QPaintEvent + 88
+ 13 Folia _ZN5folia10NoteEditor10paintEventEP11QPaintEvent + 92
+
+n=200 run: large allocations (>= 32 KB): 2469, 158.2 MB

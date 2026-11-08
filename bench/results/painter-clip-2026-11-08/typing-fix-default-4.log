@@ -1,0 +1,8 @@
+start 21:48:30 pressure=2 load={ 1.83 3.43 5.66 }
+qt.text.font.db: OpenType support missing for ".AppleSystemUIFont", script 11
+qt.text.font.db: OpenType support missing for ".AppleIndicFont", script 11
+qt.text.font.db: OpenType support missing for ".AppleSystemUIFont", script 11
+qt.text.font.db: OpenType support missing for ".AppleIndicFont", script 11
+qt.text.font.db: OpenType support missing for ".AppleSystemUIFont", script 11
+qt.text.font.db: OpenType support missing for ".AppleIndicFont", script 11
+end 21:48:48 rc=0 pressure=2 load={ 1.71 3.32 5.58 }

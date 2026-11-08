@@ -277,6 +277,10 @@ QJsonObject BenchDriver::envJson() const
     e.insert(QStringLiteral("folia"), QStringLiteral(FOLIA_VERSION));
     e.insert(QStringLiteral("thermal_state"), platform::thermalState());
     e.insert(QStringLiteral("power_mode"), platform::powerSource());
+    // macOS: "0" unless the run opted out (main.cpp, docs/BENCHMARKS.md §6b).
+    e.insert(QStringLiteral("malloc_large_cache"), qEnvironmentVariableIsSet("MallocLargeCache")
+                                                       ? qEnvironmentVariable("MallocLargeCache")
+                                                       : QStringLiteral("unset"));
     e.insert(QStringLiteral("time"), QDateTime::currentDateTime().toString(Qt::ISODate));
     e.insert(QStringLiteral("window_size"), QStringLiteral("%1x%2").arg(m_app->window()->width()).arg(m_app->window()->height()));
     e.insert(QStringLiteral("device_pixel_ratio"), m_app->window()->devicePixelRatioF());
@@ -331,6 +335,11 @@ void BenchDriver::run()
     // Let startup work (initial page open, tree load) finish first.
     waitFor([this] { return m_app->activeSession() != nullptr || m_paints > 0; }, 3000);
     settle(m_args.value(QStringLiteral("startup_settle_ms"), 300).toInt());
+    // A/B: painter_clip=1 paints the editor under QTextEdit's own clip, as
+    // before it was dropped (docs/BENCHMARKS.md §6b).
+    const bool painterClip = m_args.value(QStringLiteral("painter_clip")).toBool();
+    m_app->editorPane()->editor()->setDropRedundantClip(!painterClip);
+    m_extra.insert(QStringLiteral("editor_painter_clip"), painterClip);
     const QString s = m_scenario;
     if (s == QLatin1String("snapshot")) scenarioSnapshot();
     else if (s == QLatin1String("launch")) scenarioLaunch();
