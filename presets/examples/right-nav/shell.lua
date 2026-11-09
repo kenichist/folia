@@ -11,6 +11,7 @@ local actions = {
   { label = "Back",      command = "nav.back" },
   { label = "Parent",    command = "nav.parent" },
   { label = "Delete",    command = "page.delete", args = { confirm = true } },
+  { label = "Upload…",   command = "file.upload" },
 }
 
 ui.component("ActionStrip", function(p)
@@ -51,6 +52,7 @@ return {
     ["Mod+["] = "nav.back",
     ["Mod+Shift+Up"] = "nav.parent",
     ["Mod+K"] = "link.edit",
+    ["Mod+O"]          = "file.upload",
     -- Tabs (one page each; background tabs load only when shown).
     ["Mod+T"]          = "tab.new",
     ["Mod+W"]          = "tab.close",

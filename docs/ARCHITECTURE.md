@@ -243,7 +243,7 @@ See `presets/REFERENCE.md` (the language reference shipped with the presets).
 | writer | all SQLite writes |
 | reader | queries; superseded title searches are skipped |
 | math worker | `QThreadPool` with 1 thread; exits after 2 s idle |
-| attachment import | `QThreadPool` with 1 thread (copy + hash + fsync + header read); exits after 30 s idle |
+| attachment import | `QThreadPool` with 1 thread (copy + hash + fsync + header read; uploaded documents are read and converted here too, docs/ATTACHMENTS.md §8); exits after 30 s idle |
 | media lanes | `QThreadPool` with 2 threads: at most one image decode and one PDF render (so CoreGraphics calls on a document are serialized); exits after 30 s idle |
 
 | Cache | Cap |

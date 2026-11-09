@@ -88,6 +88,7 @@ return {
     ["Mod+L"]       = "title.focus",
     ["Mod+Shift+C"] = "code.copy_block",
     ["Mod+Shift+K"] = "link.edit",                -- Mod+K is the page picker here
+    ["Mod+Shift+O"]    = "file.upload",               -- Mod+O is the outline here
     -- Tabs (one page each; background tabs load only when shown).
     ["Mod+T"]          = "tab.new",
     ["Mod+W"]          = "tab.close",

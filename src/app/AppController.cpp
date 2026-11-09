@@ -1,6 +1,8 @@
 #include "app/AppController.h"
 
+#include "app/DocumentImport.h"
 #include "app/Platform.h"
+#include "import/DocumentKinds.h"
 #include "app/Preferences.h"
 #include "app/SettingsPage.h"
 #include "core/Instrument.h"
@@ -24,6 +26,10 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QFileDialog>
+#include <QMimeData>
 #include <QCryptographicHash>
 #include <QCloseEvent>
 #include <QDesktopServices>
@@ -48,8 +54,39 @@ namespace {
 class MainWindow : public QMainWindow {
 public:
     std::function<bool()> canClose;
+    // Files dropped anywhere that does not take them itself (the sidebar,
+    // the top bar, the tab strip): uploaded like File ▸ Upload Files….
+    std::function<bool(const QString &path)> canUpload;
+    std::function<void(const QStringList &paths)> upload;
 
 protected:
+    QStringList uploadable(const QMimeData *m) const
+    {
+        QStringList out;
+        if (m && m->hasUrls() && canUpload)
+            for (const QUrl &u : m->urls())
+                if (u.isLocalFile() && canUpload(u.toLocalFile())) // by suffix: no file I/O while dragging
+                    out << u.toLocalFile();
+        return out;
+    }
+    void dragEnterEvent(QDragEnterEvent *e) override
+    {
+        if (!uploadable(e->mimeData()).isEmpty())
+            e->acceptProposedAction();
+    }
+    void dragMoveEvent(QDragMoveEvent *e) override
+    {
+        if (!uploadable(e->mimeData()).isEmpty())
+            e->acceptProposedAction();
+    }
+    void dropEvent(QDropEvent *e) override
+    {
+        const QStringList files = uploadable(e->mimeData());
+        if (files.isEmpty() || !upload)
+            return;
+        e->acceptProposedAction();
+        upload(files);
+    }
     void closeEvent(QCloseEvent *e) override
     {
         if (canClose && !canClose()) {
@@ -235,6 +272,20 @@ bool AppController::start(QString *error)
         m_ectx->media = m_media;
     }
     m_data = new DataContext(m_store, this);
+    m_docImport = new DocumentImporter(m_store, m_attachments, this);
+    connect(m_docImport, &DocumentImporter::created, this, [this](PageId id, const QString &title) {
+        m_data->noteTitle(id, title);
+        // The first page of an upload is shown; the rest wait in background tabs.
+        const bool background = !m_uploadForeground;
+        m_uploadForeground = false;
+        if (settingsOpen() && !background)
+            closeSettings();
+        openInNewTab(id, background);
+    });
+    connect(m_docImport, &DocumentImporter::failed, this, [this](const QString &file, const QString &error) {
+        m_uploadErrors << tr("%1: %2").arg(file, error);
+    });
+    connect(m_docImport, &DocumentImporter::idle, this, &AppController::reportUploadErrors);
     m_ectx->titleOf = [this](PageId id) {
         if (auto it = m_cache.find(id); it != m_cache.end())
             return (*it)->title();
@@ -397,6 +448,9 @@ void AppController::buildWindow()
     w->setWindowTitle(QStringLiteral("Folia"));
     w->resize(1180, 780);
     w->canClose = [this] { return shutdown(true); };
+    w->canUpload = &AppController::canUpload;
+    w->upload = [this](const QStringList &paths) { uploadFiles(paths); };
+    w->setAcceptDrops(true);
     m_stack = new QStackedWidget(w);
     w->setCentralWidget(m_stack);
     m_shellContainer = new QWidget(m_stack);
@@ -457,6 +511,7 @@ void AppController::buildWindow()
     connect(m_pane->editor(), &NoteEditor::openPageRequested, this, [this](PageId id) { openPage(id); });
     connect(m_pane->editor(), &NoteEditor::openPdfRequested, this,
             [this](const QString &hash, const QString &name) { showPdf(hash, name); });
+    connect(m_pane->editor(), &NoteEditor::documentsDropped, this, &AppController::uploadFiles);
     connect(m_pane->editor(), &NoteEditor::openUrlRequested, this, [](const QString &href) {
         QUrl u(href, QUrl::TolerantMode);
         if (u.scheme().isEmpty())
@@ -499,6 +554,8 @@ void AppController::buildWindow()
     act(file, tr("New Tab"), QStringLiteral("tab.new"));
     act(file, tr("Close Tab"), QStringLiteral("tab.close"));
     act(file, tr("Reopen Closed Tab"), QStringLiteral("tab.reopen"));
+    file->addSeparator();
+    act(file, tr("Upload Files…"), QStringLiteral("file.upload"));
     file->addSeparator();
     act(file, tr("New Page"), QStringLiteral("page.new"));
     act(file, tr("New Child Page"), QStringLiteral("page.new_child"));
@@ -1144,6 +1201,84 @@ void AppController::pruneTabs(PageId fallback)
     });
 }
 
+// -------------------------------------------------------------- upload ----
+bool AppController::canUpload(const QString &path)
+{
+    return import::isDocumentFile(path)
+        || QFileInfo(path).suffix().compare(QLatin1String("pdf"), Qt::CaseInsensitive) == 0;
+}
+
+void AppController::chooseUploadFiles()
+{
+    auto *dlg = new QFileDialog(m_window, tr("Upload Files"),
+                                m_store->setting(QStringLiteral("upload.dir"),
+                                                 QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)),
+                                tr("Documents (*.pdf *.md *.markdown *.txt);;PDF (*.pdf);;Markdown and text "
+                                   "(*.md *.markdown *.txt)"));
+    dlg->setFileMode(QFileDialog::ExistingFiles);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &QFileDialog::filesSelected, this, [this, dlg](const QStringList &files) {
+        m_store->setSetting(QStringLiteral("upload.dir"), dlg->directory().absolutePath());
+        uploadFiles(files);
+    });
+    dlg->open(); // a sheet on macOS; the panel itself runs in a system process
+}
+
+void AppController::uploadFiles(const QStringList &paths)
+{
+    QList<AttachmentStore::Source> pdfs;
+    QStringList docs;
+    for (const QString &p : paths) {
+        const QFileInfo fi(p);
+        if (import::isDocumentFile(p)) {
+            docs << p;
+        } else if (fi.suffix().compare(QLatin1String("pdf"), Qt::CaseInsensitive) == 0) {
+            AttachmentStore::Source s;
+            s.path = p;
+            s.name = fi.fileName();
+            pdfs << s;
+        } else {
+            m_uploadErrors << tr("%1: not a PDF, Markdown or text file").arg(fi.fileName());
+        }
+    }
+    if (settingsOpen())
+        closeSettings();
+    if (!pdfs.isEmpty()) {
+        // Into the current note at the caret, as Edit ▸ Insert PDF… does; the
+        // first one opens beside it once it is stored.
+        if (!m_active)
+            newPage(0, -1, QString(), false);
+        auto shown = std::make_shared<bool>(false);
+        m_pane->editor()->importImages(pdfs, [this, shown](const AttachmentStore::ImportResult &r) {
+            if (*shown || !r.info.isPdf())
+                return;
+            *shown = true;
+            showPdf(r.info.hash, r.alt);
+        });
+    }
+    if (!docs.isEmpty())
+        m_uploadForeground = true;
+    for (const QString &d : std::as_const(docs))
+        m_docImport->import(d);
+    if (docs.isEmpty())
+        reportUploadErrors(); // unsupported files, now; otherwise with the batch
+}
+
+void AppController::reportUploadErrors()
+{
+    if (m_uploadErrors.isEmpty() || m_docImport->pending() > 0)
+        return;
+    auto *box = new QMessageBox(QMessageBox::Warning, tr("Upload Files"),
+                                m_uploadErrors.size() == 1 ? tr("This file could not be imported.")
+                                                           : tr("These files could not be imported."),
+                                QMessageBox::Ok, m_window);
+    box->setInformativeText(m_uploadErrors.join(QLatin1Char('\n')));
+    box->setWindowModality(Qt::WindowModal);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->open(); // no nested event loop
+    m_uploadErrors.clear();
+}
+
 // ------------------------------------------------------------ autosave ----
 void AppController::scheduleSave(PageSession *s)
 {
@@ -1202,8 +1337,10 @@ bool AppController::shutdown(bool interactive)
     if (m_shutDown)
         return true;
     flushPreferences();
-    if (m_attachments && m_attachments->importsInFlight() > 0)
+    if (m_attachments && m_attachments->importsInFlight() > 0) {
+        m_attachments->cancelJobs();     // a document import stops at its next step
         m_attachments->waitForImports(); // their references go into this flush
+    }
     flushSaves();
     bool ok = m_store->flush(4000);
     while (!ok && interactive) {
@@ -1466,6 +1603,12 @@ void AppController::registerCommands()
             }, {}});
     c->add({QStringLiteral("pdf.insert"), tr("Insert PDF"), {}, {}, [this](const QVariantMap &) {
                 return m_pane->editor()->choosePdfs() ? okResult() : fail(tr("no PDF chosen"));
+            }, {}});
+    c->add({QStringLiteral("file.upload"), tr("Upload Files"), {}, {}, [this](const QVariantMap &) {
+                // Deferred: a dialog must not open inside a Lua handler. No
+                // path argument: layouts never name files to read.
+                QTimer::singleShot(0, this, &AppController::chooseUploadFiles);
+                return okResult();
             }, {}});
     c->add({QStringLiteral("pdf.close"), tr("Close PDF"), {}, {}, [this](const QVariantMap &) {
                 if (!m_pdf)

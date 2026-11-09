@@ -1,9 +1,9 @@
-// The editor slot's two "tabs" side by side: the note (the one EditorPane,
+// The editor slot's two panes side by side: the note (the one EditorPane,
 // always present, never re-parented by this widget) and at most one other
 // pane (the PDF viewer), on its left or its right, with a draggable divider.
 //
 // Cost model (docs/ARCHITECTURE.md §5, "Split view"):
-//  * One tab open: the splitter holds the editor only, so it has no handle,
+//  * One pane open: the splitter holds the editor only, so it has no handle,
 //    paints nothing and adds one widget to the tree.
 //  * The divider resizes both panes live, one step per frame (macOS coalesces
 //    drags to the display's refresh rate). Each pane keeps its own resize

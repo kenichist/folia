@@ -62,13 +62,18 @@ public:
     // Images (docs/ATTACHMENTS.md): imported on a worker, inserted after the
     // caret's line once each file is stored. Paste and drag-and-drop go
     // through insertFromMimeData; this is also what the file picker uses.
-    bool importImages(const QList<AttachmentStore::Source> &sources);
+    // `stored` (optional) runs for each file once it is stored and its line
+    // inserted (the upload opens the first PDF beside the note with it).
+    bool importImages(const QList<AttachmentStore::Source> &sources,
+                      std::function<void(const AttachmentStore::ImportResult &)> stored = {});
     // Edit ▸ Insert Image…: a file picker. False when nothing was chosen.
     bool chooseImages();
     // Edit ▸ Insert PDF…: the same import, for PDF files.
     bool choosePdfs();
     // The image sources a clipboard or drop carries (empty: treat as text).
     static QList<AttachmentStore::Source> imageSources(const QMimeData *data);
+    // The Markdown, text or Word files a drop carries (they become pages).
+    static QStringList documentPaths(const QMimeData *data);
 
     // Paint the text without QTextEdit's painter clip (on by default; the
     // bench turns it off to compare, docs/BENCHMARKS.md §6b).
@@ -79,6 +84,9 @@ signals:
     // A PDF card was clicked (or Mod+Enter on its line).
     void openPdfRequested(const QString &hash, const QString &name);
     void openUrlRequested(const QString &href);
+    // Markdown, text or Word files dropped onto the note: each becomes a new
+    // page (docs/ATTACHMENTS.md §8); images and PDFs are imported here.
+    void documentsDropped(const QStringList &paths);
     void preeditChanged(bool active);
     void escapePressed();
     void painted();

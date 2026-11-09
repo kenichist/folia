@@ -20,6 +20,7 @@ namespace folia {
 
 class AttachmentStore;
 class CommandRegistry;
+class DocumentImporter;
 class MediaService;
 class DataContext;
 class EditorContext;
@@ -97,6 +98,14 @@ public:
     bool closeTab(int index);
     bool reopenClosedTab();
     void moveTab(int from, int to);
+    // Upload (File ▸ Upload Files…, the top bar button, drops): PDFs go
+    // into the current note (the first opens beside it); Markdown and text
+    // files become new top-level pages, opened in tabs once saved
+    // (docs/ATTACHMENTS.md §8). Unsupported files are reported, not read.
+    void uploadFiles(const QStringList &paths);
+    void chooseUploadFiles(); // the native file dialog (window-modal, no nested loop)
+    static bool canUpload(const QString &path);
+    DocumentImporter *documentImporter() const { return m_docImport; }
     void flushSaves();
     QString userShellDir() const;
     QString presetPath(const QString &name) const;
@@ -185,6 +194,7 @@ private:
     // Pushes the tab list and titles to the strip (it ignores no-op updates).
     void syncTabStrip();
     QString tabTitle(PageId id);
+    void reportUploadErrors();
     PageId argId(const QVariantMap &args) const;
 
     Options m_opt;
@@ -202,6 +212,9 @@ private:
     QStackedWidget *m_stack = nullptr; // the layout, or the Settings page
     PaneSplitter *m_split = nullptr;   // the editor slot: the note, and the PDF pane beside it
     TabStrip *m_tabStrip = nullptr;
+    DocumentImporter *m_docImport = nullptr;
+    bool m_uploadForeground = false; // the next imported page opens in a shown tab
+    QStringList m_uploadErrors;      // reported together once the batch is done
     // Titles of the pages tabs show, kept here because the shared title
     // cache is cleared wholesale when it fills up.
     QHash<PageId, QString> m_tabTitles;

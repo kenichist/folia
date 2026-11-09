@@ -17,6 +17,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QRandomGenerator>
+#include <QThread>
 
 #include <mutex>
 
@@ -345,6 +346,34 @@ void AttachmentStore::import(const Source &src, QObject *ctx, std::function<void
     });
 }
 
+void AttachmentStore::runJob(std::function<void()> work, QObject *ctx, std::function<void()> done)
+{
+    ++m_inFlight;
+    QPointer<QObject> guard(ctx);
+    QPointer<AttachmentStore> self(this);
+    m_pool.start([self, work, guard, done] {
+        work();
+        QMetaObject::invokeMethod(self.data(), [self, guard, done] {
+            if (!self)
+                return;
+            --self->m_inFlight;
+            if (guard && done)
+                done();
+        }, Qt::QueuedConnection);
+    });
+}
+
+AttachmentStore::ImportResult AttachmentStore::importNow(const Source &src)
+{
+    ImportResult res;
+    runImport(src, &res);
+    if (!res.ok && !res.info.hash.isEmpty()) {
+        unpin(res.info.hash); // nothing will reference it
+        res.info.hash.clear();
+    }
+    return res;
+}
+
 void AttachmentStore::waitForImports()
 {
     m_pool.waitForDone();
@@ -387,6 +416,10 @@ bool AttachmentStore::isPinned(const QString &hash) const
 // ------------------------------------------------------------------ gc ----
 void AttachmentStore::scheduleGc()
 {
+    if (QThread::currentThread() != thread()) { // an unpin on the import worker
+        QMetaObject::invokeMethod(this, &AttachmentStore::scheduleGc, Qt::QueuedConnection);
+        return;
+    }
     m_gcTimer.start(m_opt.gcDelayMs); // restarted: one sweep per quiet period
 }
 

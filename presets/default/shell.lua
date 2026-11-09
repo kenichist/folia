@@ -99,6 +99,8 @@ ui.component("TopBar", function(p)
       style = { grow = 1, size = 13 },
     },
     ui.text{ id = "status", bind = "status", style = { fg = "dim", size = 12, padding = 6 } },
+    ui.button{ id = "upload", icon = "upload", label = "Upload files", command = "file.upload",
+               tooltip = "Upload PDF or Markdown files (Mod+O)", style = icon_button },
   }
 end)
 
@@ -133,6 +135,7 @@ return {
     ["Mod+Alt+Right"] = "page.indent",
     ["Mod+Alt+Left"] = "page.outdent",
     ["Mod+Shift+O"]  = function(ctx) ctx.set{ hide_sidebar = false }; ctx.focus("outline") end,
+    ["Mod+O"]          = "file.upload",               -- PDFs into this note; Markdown becomes a page
     -- Tabs (one page each; background tabs load only when shown).
     ["Mod+T"]          = "tab.new",
     ["Mod+W"]          = "tab.close",

@@ -28,6 +28,7 @@
 #include <QThreadPool>
 #include <QTimer>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 
@@ -80,6 +81,19 @@ public:
     int importsInFlight() const { return m_inFlight; }
     void waitForImports();
 
+    // ---- longer jobs on the same worker (document import, docs/ATTACHMENTS.md §8)
+    // Runs `work` on the import worker, in order with imports and counted
+    // with them (waitForImports() waits for it); `done` runs on ctx's thread.
+    void runJob(std::function<void()> work, QObject *ctx, std::function<void()> done);
+    // Import worker only: the copy-hash-fsync-metadata steps of import(),
+    // without the main-thread ones. On success the hash stays pinned: the
+    // caller remembers the info, saves the reference, then unpins it.
+    ImportResult importNow(const Source &src);
+    // Set at shutdown: jobs check it between steps and stop early.
+    void cancelJobs() { m_cancel.store(true); }
+    bool cancelled() const { return m_cancel.load(); }
+    const std::atomic<bool> *cancelFlag() const { return &m_cancel; }
+
     // ---- pins (thread-safe). Every open session pins each hash it has
     // shown, until it closes; imports pin while they write.
     void pin(const QString &hash);
@@ -110,6 +124,7 @@ private:
     QSet<QString> m_missing;
     QTimer m_gcTimer;
     int m_inFlight = 0;
+    std::atomic<bool> m_cancel{false};
 };
 
 } // namespace folia

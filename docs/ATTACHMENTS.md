@@ -246,7 +246,7 @@ reservation covers that; the plateau benchmark shows it.
     one job and closed after it. Clicking the card (or Mod+Enter on its
     line) opens the viewer. Paste and drag-and-drop of `.pdf` files and
     Edit ▸ Insert PDF… go through the same import as images.
-- **The viewer** opens as a second tab beside the note, in the editor slot's
+- **The viewer** opens in a pane beside the note, in the editor slot's
   split (docs/ARCHITECTURE.md §5, "Split view"). It is one custom viewport,
   not a widget per page:
   - Page offsets come from `page_geom`, with a prefix sum and a binary search
@@ -460,3 +460,43 @@ Corrections to the first draft's figures:
    benchmarks and choose the tile size and the whole-page threshold.
    **Done:** 512×512 tiles, whole pages up to 2 MiB (§4).
 5. QtPdf and `QImageReader` backends for other platforms.
+
+## 8. Uploading documents
+
+File ▸ Upload Files… (the top bar's upload button, Mod+O in the default
+layout) and drops onto the window take PDFs, Markdown (`.md`, `.markdown`)
+and plain text (`.txt`).
+
+- **PDFs** go into the current note at the caret, as Edit ▸ Insert PDF…
+  does (§4), and the first one opens beside the note once it is stored.
+- **Markdown and text files become pages**, converted once: a new top-level
+  page per file, opened in a tab (the first shown, the rest in background
+  tabs that load only when shown). After the import nothing runs for them:
+  no viewer, no parser, no file kept open. The original file is not stored.
+- **Where the work runs.** The file is read, decoded and converted on the
+  attachment import worker (§1), in order with image and PDF imports: no
+  new thread, and nothing is parsed on the main thread. The main thread
+  only creates the page and queues one save (`app/DocumentImport.cpp`).
+- **Images** a Markdown file references by a local path are stored as image
+  attachments by the same worker: the header is checked first
+  (`platform::imageInfo`), so nothing that is not an image is copied; each
+  file is stored once; at most 500, each up to 256 MiB. Remote images become
+  links (nothing is fetched); `data:` images are left out, with a note.
+- **Durable order.** Attachment rows, then the page's one save batch, then a
+  no-op writer job: when that job is done the page is on disk, and only then
+  are the images unpinned and the tab opened. A sweep can never remove an
+  image first, and a tab never opens on a page that is not saved.
+- **Output is what the editor renders** (`import/ImportedDoc.h`): headings
+  `#`..`###` (deeper ones become `###`), list markers, `> ` quotes,
+  `**bold**`, `*italic*`, inline code and math, `[text](url)`, code and math
+  blocks. Soft-wrapped lines join into one paragraph line; tables stay as
+  rows; front matter becomes a `yaml` code block; a leading `# ` heading is
+  the title (else the file name). Text that is left out is listed in a quote
+  at the top of the page.
+- **Limits.** Files over 16 MB are refused; at most 10 MB of text is kept
+  (the size of the benchmarked stress note), the rest is noted. Quitting
+  during an import cancels it at its next step (a flag checked every 1024
+  lines), and no half page is saved.
+- **Memory.** The decoded text is split into views, not copied per line;
+  the worker's peak is about four times the file size, freed when it
+  returns (`MallocLargeCache=0` hands large blocks back to the system).

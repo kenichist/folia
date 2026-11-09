@@ -72,7 +72,7 @@ ui.button{ icon = "trash-2", label = "Delete page", tooltip = "Delete page",
 Available: `check`, `chevron-down`, `chevron-left`, `chevron-right`, `copy`,
 `external-link`, `file-plus`, `file-text`, `globe`, `link`, `panel-left-close`,
 `panel-left-open`, `pencil`, `plus`, `rotate-ccw`, `settings`, `trash-2`,
-`unlink`, `x`. An unknown name
+`unlink`, `upload`, `x`. An unknown name
 is a layout error (the message lists the available names).
 
 An input with `list = "results"` forwards ↑/↓/PgUp/PgDn/Enter to that list
@@ -161,7 +161,9 @@ history), `nav.parent`, `title.focus`,
 note), `pane.focus_other` (between the note and the PDF pane),
 `tab.new` (a new page in a new tab), `tab.open{id, background?}`,
 `tab.close{index?}`, `tab.select{index}` (1-based; `-1` is the last tab),
-`tab.next`, `tab.prev`, `tab.reopen` (the last closed tab). Tab commands with
+`tab.next`, `tab.prev`, `tab.reopen` (the last closed tab), `file.upload`
+(the Upload Files dialog: PDFs go into the current note, Markdown and text
+files become new pages in tabs; layouts cannot name a file to read). Tab commands with
 nothing to do, such as closing the only tab, succeed quietly.
 `shell.reload`, `shell.reset`,
 `shell.use{name}`, `shell.edit`, `shell.open_folder`, `app.settings` (shows

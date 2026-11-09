@@ -167,7 +167,7 @@ struct Harness {
         for (const char *n : {"page.new_child", "nav.back", "nav.forward", "nav.parent", "title.focus",
                               "code.copy_block", "page.move_up", "page.move_down", "page.indent", "page.outdent",
                               "palette.open", "outline.toggle", "page.trash", "shell.reload", "link.edit",
-                              "app.settings", "tab.new", "tab.reopen", "tab.next", "tab.prev"})
+                              "app.settings", "tab.new", "tab.reopen", "tab.next", "tab.prev", "file.upload"})
             noop(QString::fromLatin1(n));
         noop(QStringLiteral("tab.close"), {ArgSpec{QStringLiteral("index"), QMetaType::LongLong}});
         noop(QStringLiteral("tab.select"), {ArgSpec{QStringLiteral("index"), QMetaType::LongLong, true}});
