@@ -1,0 +1,2 @@
+start 12:24:28 mode=nano pressure=2 load={ 1.65 2.15 2.61 } batt=65%
+end 12:26:12 rc=0 pressure=2 load={ 2.13 2.36 2.65 }

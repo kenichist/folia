@@ -48,7 +48,6 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
-#include <QProcess>
 #include <QMainWindow>
 #include <QScrollBar>
 #include <QTextBlock>
@@ -276,32 +275,7 @@ void BenchDriver::scenarioPdf()
     // dirty memory that is not live is kept by the allocator) and, when
     // launched with MallocStackLogging, `malloc_history -allBySize`.
     const int vmSnapshots = m_out.isEmpty() ? 0 : m_args.value(QStringLiteral("vm_snapshots"), 1).toInt();
-    auto vmSnapshot = [&](const QString &label) {
-        if (vmSnapshots <= 0)
-            return;
-        const QFileInfo fi(m_out);
-        auto run = [&](const QString &tool, const QStringList &args, const QString &kind) {
-            QProcess pr;
-            pr.start(tool, args);
-            if (!pr.waitForFinished(120000))
-                return;
-            QFile f(fi.dir().filePath(fi.completeBaseName() + QLatin1Char('.') + kind + QLatin1Char('-') + label +
-                                      QStringLiteral(".txt")));
-            if (f.open(QIODevice::WriteOnly))
-                f.write(pr.readAllStandardOutput());
-        };
-        const QString pid = QString::number(QCoreApplication::applicationPid());
-        run(QStringLiteral("/usr/bin/footprint"), {QStringLiteral("-p"), pid}, QStringLiteral("footprint"));
-        if (vmSnapshots >= 2) {
-            run(QStringLiteral("/usr/bin/heap"), {QStringLiteral("-s"), QStringLiteral("-z"), QStringLiteral("-H"), pid},
-                QStringLiteral("heap"));
-            run(QStringLiteral("/usr/bin/heap"),
-                {QStringLiteral("-s"), QStringLiteral("--noContent"), QStringLiteral("--addresses=all[256k-]"), pid},
-                QStringLiteral("heaplarge"));
-            if (qEnvironmentVariableIsSet("MallocStackLogging"))
-                run(QStringLiteral("/usr/bin/malloc_history"), {pid, QStringLiteral("-allBySize")}, QStringLiteral("mallochistory"));
-        }
-    };
+    auto vmSnapshot = [&](const QString &label) { BenchDriver::vmSnapshot(label, vmSnapshots); };
     auto openViewer = [&](const AttachmentInfo &info, const QString &name) -> PdfView * {
         if (!m_app->showPdf(info.hash, name))
             return nullptr;

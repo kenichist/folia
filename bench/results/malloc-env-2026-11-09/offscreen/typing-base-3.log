@@ -1,0 +1,11 @@
+start 13:07:28 mode=base pressure=2 load={ 2.76 2.57 2.59 } batt=56%
+qt.qpa.fonts: Populating font family aliases took 53 ms. Replace uses of missing font family "Sans Serif" with one that exists to avoid this cost. 
+This plugin does not support propagateSizeHints()
+This plugin does not support raise()
+qt.text.font.db: OpenType support missing for ".AppleIndicFont", script 11
+qt.text.font.db: OpenType support missing for ".AppleIndicFont", script 11
+This plugin does not support propagateSizeHints()
+qt.text.font.db: OpenType support missing for ".AppleIndicFont", script 11
+qt.text.font.db: OpenType support missing for ".AppleIndicFont", script 11
+This plugin does not support propagateSizeHints()
+end 13:07:29 rc=0 pressure=2 load={ 2.76 2.57 2.59 }
