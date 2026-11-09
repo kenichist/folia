@@ -19,6 +19,7 @@
 #include "shell/CommandRegistry.h"
 #include "shell/DataContext.h"
 #include "shell/ShellHost.h"
+#include "shell/TabStrip.h"
 #include "storage/Store.h"
 
 #include <QAction>
@@ -151,6 +152,11 @@ void AppController::installUserPresets()
         "cc40ebbecffb15a668f30e1195f855ca4eb1972f3d19eca859446d8b983539f8",
         // Settings as a separate window: REFERENCE.md
         "89d527fa65c6bf6b10d4102a51b0d53b08d16222c9e2b4112f9438cf8c7c2fce",
+        // Folia 0.2.0: default, keyboard, right-nav, REFERENCE.md
+        "f0ed47d02a24cc7bb9230dd8a17c87b49f34dacb83ac55052316f8f7a0f9f229",
+        "f69ceef1e654fb98e3d2cb73de2b39e150e51d189fcffdff3a4e641e9c455bf4",
+        "596f4b01a811ddbb1694686317feaef12f61dcdca47bb8981da4033d81b231a1",
+        "8f89b612dd54571ffbfafe8136ff84eb37c98e5240acad171ea4a00eb52d770d",
     };
     auto digest = [](const QString &path) {
         QFile f(path);
@@ -408,6 +414,35 @@ void AppController::buildWindow()
         m_store->setSetting(QStringLiteral("split.ratio"), QString::number(r, 'f', 3));
     });
 
+    // The tab strip: one painted widget wherever the layout puts ui.tabs{}.
+    m_tabStrip = new TabStrip(m_shellContainer);
+    connect(m_tabStrip, &TabStrip::activated, this, &AppController::activateTab);
+    connect(m_tabStrip, &TabStrip::closeRequested, this, &AppController::closeTab);
+    connect(m_tabStrip, &TabStrip::moved, this, &AppController::moveTab);
+    connect(m_tabStrip, &TabStrip::newRequested, this, &AppController::newTab);
+    connect(m_tabStrip, &TabStrip::closeOthersRequested, this, [this](int keep) {
+        activateTab(keep);
+        for (int k = m_tabs.count() - 1; k >= 0; --k)
+            if (k != m_tabs.activeIndex())
+                closeTab(k); // background tabs: no page work
+    });
+    connect(m_tabStrip, &TabStrip::closeRightRequested, this, [this](int last) {
+        if (m_tabs.activeIndex() > last)
+            activateTab(last);
+        for (int k = m_tabs.count() - 1; k > last; --k)
+            closeTab(k);
+    });
+    connect(this, &AppController::tabsChanged, this, &AppController::syncTabStrip);
+    connect(m_data, &DataContext::titleChanged, this, [this](PageId id, const QString &title) {
+        auto it = m_tabTitles.find(id);
+        if (it == m_tabTitles.end())
+            return;
+        *it = title;
+        for (int i = 0; i < m_tabs.count(); ++i)
+            if (m_tabs.at(i).page == id)
+                m_tabStrip->setTitle(m_tabs.at(i).uid, title);
+    });
+
     ShellHost::Deps deps;
     deps.editor = m_pane;
     deps.editorCtx = m_ectx;
@@ -416,6 +451,7 @@ void AppController::buildWindow()
     deps.window = w;
     deps.container = m_shellContainer;
     deps.editorSlot = m_split;
+    deps.tabs = m_tabStrip;
     m_shell = new ShellHost(deps, this);
     connect(m_shell, &ShellHost::resetRequested, this, &AppController::resetShell);
     connect(m_pane->editor(), &NoteEditor::openPageRequested, this, [this](PageId id) { openPage(id); });
@@ -921,6 +957,41 @@ PageId AppController::newPage(PageId parent, int index, const QString &title, bo
 }
 
 // ---------------------------------------------------------------- tabs ----
+QString AppController::tabTitle(PageId id)
+{
+    if (PageSession *s = m_cache.value(id))
+        return m_tabTitles[id] = s->title();
+    if (auto it = m_tabTitles.find(id); it != m_tabTitles.end())
+        return *it;
+    const QString t = m_data->titleOf(id);
+    m_tabTitles.insert(id, t);
+    if (t.isEmpty()) {
+        // Not in the shared cache (or really untitled): one lookup.
+        m_store->pageMeta(id, this, [this](PageMeta m, bool found) {
+            if (found && m_tabTitles.contains(m.id))
+                m_data->noteTitle(m.id, m.title); // reaches the strip through titleChanged
+        });
+    }
+    return t;
+}
+
+void AppController::syncTabStrip()
+{
+    if (!m_tabStrip)
+        return;
+    QVector<TabStrip::Item> items;
+    items.reserve(m_tabs.count());
+    QSet<PageId> shown;
+    for (int i = 0; i < m_tabs.count(); ++i) {
+        const NoteTab &t = m_tabs.at(i);
+        shown.insert(t.page);
+        items.push_back({t.uid, t.page > 0 ? tabTitle(t.page) : QString()});
+    }
+    for (auto it = m_tabTitles.begin(); it != m_tabTitles.end();)
+        it = shown.contains(it.key()) ? std::next(it) : m_tabTitles.erase(it);
+    m_tabStrip->setTabs(items, m_tabs.activeIndex());
+}
+
 void AppController::tabsEdited()
 {
     m_tabsDirty = true;

@@ -59,6 +59,10 @@ public:
         // editor itself). The app passes the split that holds the editor and
         // the PDF tab; focus, IME and title handling still target `editor`.
         QWidget *editorSlot = nullptr;
+        // The note tab strip (a TabStrip) placed where the layout says
+        // ui.tabs{}; parked, never deleted, when the layout has none. Null:
+        // ui.tabs{} is an empty slot.
+        QWidget *tabs = nullptr;
     };
     struct Limits {
         int maxNodes = 2000;

@@ -58,6 +58,9 @@ Every release includes `SHA256SUMS.txt` to verify the downloads.
 ### 📄 Pages
 Nested pages with breadcrumbs, child-page links, collapse and expand, move, reorder and indent, title jump (Mod+P) and back/forward. Hover a page in the sidebar to add a page inside it or delete it.
 
+### 🗂️ Tabs
+Keep several notes open in tabs, like a browser: **+** or Mod+T for a new page in a new tab, Mod-click or middle-click a page in the sidebar to open it in the background, Mod+W to close, Mod+Shift+T to reopen, Ctrl+Tab and Mod+1…9 to switch, drag to reorder. Each tab has its own back/forward history, and your tabs come back when Folia starts. Tabs you aren't looking at aren't loaded, so they cost almost nothing.
+
 ### ✍️ Editing
 Native text editing with IME support, undo/redo and full keyboard navigation. Autosave commits within one second, and **Saved** appears only once your change is on disk.
 
@@ -68,7 +71,7 @@ Bare URLs are clickable. Select text and press Mod+K, or paste an address onto a
 Paste or drop an image into a page, or use **Edit ▸ Insert Image…**. Images are decoded only while near the screen, within a fixed memory budget.
 
 ### 📑 PDFs beside your notes
-Paste or drop a PDF into a page, then click its card: it opens as a second tab next to the note, so you can read and write side by side. Drag the divider to resize (double-click for equal widths), swap sides with the ⇄ button or **View ▸ Swap Panes**, and close it with × or Esc. Side and width are remembered. The note stays open as you move between pages. The Windows and Linux builds don't display PDFs yet.
+Paste or drop a PDF into a page, then click its card: it opens in a pane next to the note, so you can read and write side by side. Drag the divider to resize (double-click for equal widths), swap sides with the ⇄ button or **View ▸ Swap Panes**, and close it with × or Esc. Side and width are remembered. The PDF stays open as you move between pages and tabs. The Windows and Linux builds don't display PDFs yet.
 
 </td>
 <td width="50%" valign="top">

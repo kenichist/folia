@@ -29,6 +29,7 @@ class PreviewService;
 class PaneSplitter;
 class PdfViewerPage;
 class SettingsPage;
+class TabStrip;
 class ShellHost;
 class Store;
 
@@ -126,6 +127,8 @@ public:
     // The split: which side the PDF is on and its share of the width are
     // workspace settings (split.side, split.ratio), written once per change.
     PaneSplitter *splitter() const { return m_split; }
+    // The tab strip placed where the layout says ui.tabs{}.
+    TabStrip *tabStrip() const { return m_tabStrip; }
     void swapPanes();
     void focusOtherPane();
     // Appearance overrides layered over the layout theme: applied now,
@@ -179,6 +182,9 @@ private:
     // (or the first page) if its own page is gone.
     void pruneTabs(PageId fallback);
     void evictIfUnused(PageId id);
+    // Pushes the tab list and titles to the strip (it ignores no-op updates).
+    void syncTabStrip();
+    QString tabTitle(PageId id);
     PageId argId(const QVariantMap &args) const;
 
     Options m_opt;
@@ -194,7 +200,11 @@ private:
     QMainWindow *m_window = nullptr;
     QWidget *m_shellContainer = nullptr;
     QStackedWidget *m_stack = nullptr; // the layout, or the Settings page
-    PaneSplitter *m_split = nullptr;   // the editor slot: the note, and the PDF tab beside it
+    PaneSplitter *m_split = nullptr;   // the editor slot: the note, and the PDF pane beside it
+    TabStrip *m_tabStrip = nullptr;
+    // Titles of the pages tabs show, kept here because the shared title
+    // cache is cleared wholesale when it fills up.
+    QHash<PageId, QString> m_tabTitles;
     QPointer<SettingsPage> m_settings;
     QPointer<PdfViewerPage> m_pdf;
     QTimer m_prefsTimer;         // coalesces settings writes

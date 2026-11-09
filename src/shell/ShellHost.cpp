@@ -10,6 +10,7 @@
 #include "shell/DataContext.h"
 #include "shell/ListSources.h"
 #include "shell/LuaRuntime.h"
+#include "shell/TabStrip.h"
 
 extern "C" {
 #include <lauxlib.h>
@@ -42,7 +43,7 @@ namespace {
 const char *kPrelude = R"LUA(
 ui = {}
 local function mk(t) return function(p) p = p or {}; p.type = t; return p end end
-for _, t in ipairs({"row", "column", "overlay", "text", "button", "input", "list", "editor", "spacer", "divider"}) do
+for _, t in ipairs({"row", "column", "overlay", "text", "button", "input", "list", "editor", "tabs", "spacer", "divider"}) do
   ui[t] = mk(t)
 end
 function ui.component(name, fn)
@@ -61,8 +62,8 @@ const QSet<QString> &knownTypes()
 {
     static const QSet<QString> s = {QStringLiteral("row"), QStringLiteral("column"), QStringLiteral("overlay"),
                                     QStringLiteral("text"), QStringLiteral("button"), QStringLiteral("input"),
-                                    QStringLiteral("list"), QStringLiteral("editor"), QStringLiteral("spacer"),
-                                    QStringLiteral("divider")};
+                                    QStringLiteral("list"), QStringLiteral("editor"), QStringLiteral("tabs"),
+                                    QStringLiteral("spacer"), QStringLiteral("divider")};
     return s;
 }
 
@@ -329,6 +330,9 @@ public:
     std::function<void(int)> onActivate;
     std::function<void(const QString &, PageId)> onCommand;
     std::function<void(int row, int action)> onRowAction;
+    // Mod-click or middle-click on a row (and Mod+Enter): open it in a new
+    // tab, in the background unless Shift is held too.
+    std::function<void(int row, bool background)> onOpenInTab;
     bool clickActivates = true;
 
     // Hover actions: the row under the mouse shows its action buttons. Only
@@ -411,6 +415,11 @@ public:
             case Qt::Key_Left: onCommand(QStringLiteral("page.outdent"), id); return true;
             default: break;
             }
+        }
+        if ((e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) && (mods & Qt::ControlModifier) && r >= 0
+            && onOpenInTab && !m->data(m->index(r), PageListModel::MoreRole).toBool()) {
+            onOpenInTab(r, !(mods & Qt::ShiftModifier));
+            return true;
         }
         switch (e->key()) {
         case Qt::Key_Down: setCurrentRow(qMin(n - 1, r + 1)); return true;
@@ -520,6 +529,16 @@ protected:
             return;
         }
         m_pressAction = -1;
+        m_tabPressRow = -1;
+        if (onOpenInTab && (e->button() == Qt::MiddleButton
+                            || (e->button() == Qt::LeftButton && (e->modifiers() & Qt::ControlModifier)))) {
+            const QModelIndex idx = indexAt(e->position().toPoint());
+            if (idx.isValid() && !idx.data(PageListModel::MoreRole).toBool()) {
+                m_tabPressRow = idx.row();
+                e->accept(); // neither selects nor opens the row here
+                return;
+            }
+        }
         QListView::mousePressEvent(e);
     }
     void mouseReleaseEvent(QMouseEvent *e) override
@@ -531,6 +550,15 @@ protected:
             m_pressAction = -1;
             if (same && e->button() == Qt::LeftButton && onRowAction)
                 onRowAction(row, a);
+            return;
+        }
+        if (m_tabPressRow >= 0) {
+            const QModelIndex idx = indexAt(e->position().toPoint());
+            const int row = m_tabPressRow;
+            m_tabPressRow = -1;
+            if (idx.isValid() && idx.row() == row && onOpenInTab)
+                onOpenInTab(row, !(e->modifiers() & Qt::ShiftModifier));
+            e->accept();
             return;
         }
         const QModelIndex idx = indexAt(e->position().toPoint());
@@ -571,6 +599,7 @@ protected:
 
 private:
     int m_pressAction = -1;
+    int m_tabPressRow = -1;
     int m_pressRow = -1;
 };
 
@@ -705,6 +734,8 @@ ShellHost::ShellHost(const Deps &deps, QObject *parent) : QObject(parent), m_d(d
     m_editorParking = new QWidget(m_d.container);
     m_editorParking->hide();
     slot()->setParent(m_editorParking);
+    if (m_d.tabs)
+        m_d.tabs->setParent(m_editorParking); // until a layout places ui.tabs{}
 
     m_reloadTimer.setSingleShot(true);
     m_reloadTimer.setInterval(120);
@@ -1112,7 +1143,7 @@ bool ShellHost::toNode(LuaRuntime &rt, int idx, UiNode &n, int depth, int &count
     lua_pop(L, 1);
     if (!knownTypes().contains(n.type)) {
         *err = QStringLiteral("%1: unknown node type '%2' (use ui.row, ui.column, ui.overlay, ui.text, ui.button, "
-                              "ui.input, ui.list, ui.editor, ui.spacer, ui.divider)").arg(path, n.type);
+                              "ui.input, ui.list, ui.editor, ui.tabs, ui.spacer, ui.divider)").arg(path, n.type);
         return false;
     }
     // Scalars, style, handlers, source/row descriptors.
@@ -1174,6 +1205,7 @@ bool ShellHost::toNode(LuaRuntime &rt, int idx, UiNode &n, int depth, int &count
 bool ShellHost::validate(const UiNode &root, QString *err) const
 {
     int editors = 0;
+    int tabStrips = 0;
     QSet<QString> ids;
     QString problem;
     std::function<void(const UiNode &, const QString &)> walk = [&](const UiNode &n, const QString &parentKey) {
@@ -1181,11 +1213,15 @@ bool ShellHost::validate(const UiNode &root, QString *err) const
             return;
         if (n.type == QLatin1String("editor"))
             ++editors;
+        if (n.type == QLatin1String("tabs") && ++tabStrips > 1)
+            problem = QStringLiteral("the layout has more than one ui.tabs{} (at most one is allowed)");
         if (!n.id.isEmpty()) {
             if (ids.contains(n.id))
                 problem = QStringLiteral("duplicate id '%1'").arg(n.id);
             if ((n.id == QLatin1String("editor") || n.id == QLatin1String("title")) && n.type != QLatin1String("editor"))
                 problem = QStringLiteral("id '%1' is reserved for the editor").arg(n.id);
+            if (n.id == QLatin1String("tabs") && n.type != QLatin1String("tabs"))
+                problem = QStringLiteral("id 'tabs' is reserved for ui.tabs{}");
             ids.insert(n.id);
         }
         if (n.type == QLatin1String("button")) {
@@ -1238,6 +1274,8 @@ static void assignKeys(UiNode &n, const QString &parentKey, int index)
 {
     if (n.type == QLatin1String("editor"))
         n.key = QStringLiteral("editor");
+    else if (n.type == QLatin1String("tabs"))
+        n.key = QStringLiteral("tabs");
     else if (!n.id.isEmpty())
         n.key = n.id;
     else
@@ -1268,7 +1306,7 @@ void ShellHost::apply(const UiNode &rootIn)
     // Remove widgets that are no longer in the layout.
     for (auto it = m_live.begin(); it != m_live.end();) {
         if (!seen.contains(it.key())) {
-            if (it->w && it->w != slot()) {
+            if (it->w && it->w != slot() && it->w != m_d.tabs) {
                 it->w->hide();
                 it->w->deleteLater();
             }
@@ -1279,6 +1317,8 @@ void ShellHost::apply(const UiNode &rootIn)
     }
     if (!seen.contains(QStringLiteral("editor")))
         slot()->setParent(m_editorParking);
+    if (m_d.tabs && !seen.contains(QStringLiteral("tabs")) && m_d.tabs->parentWidget() != m_editorParking)
+        m_d.tabs->setParent(m_editorParking); // parked, never deleted
     applyFocusOrder(root);
     if (slotHadFocus && !QApplication::focusWidget()) {
         if (focused && focused->isVisible() && !m_d.editor->isAncestorOf(focused))
@@ -1361,7 +1401,7 @@ void ShellHost::updateCommon(QWidget *w, const UiNode &n)
     // widget and every descendant (style-change events, relayout, repaint)
     // even for an identical sheet. Containers reach the editor, so an
     // unchanged render used to repaint the whole window.
-    if (w->styleSheet() != sheet)
+    if (n.type != QLatin1String("tabs") && w->styleSheet() != sheet)
         w->setStyleSheet(sheet);
     QFont f = m_d.editorCtx->theme().body;
     f.setPointSizeF(qMax(9.0, f.pointSizeF() - 2));
@@ -1382,7 +1422,9 @@ void ShellHost::updateCommon(QWidget *w, const UiNode &n)
         w->setMinimumWidth(sv("min_width").isValid() ? sv("min_width").toInt() : 0);
         w->setMaximumWidth(sv("max_width").isValid() ? sv("max_width").toInt() : QWIDGETSIZE_MAX);
     }
-    if (sv("height").isValid())
+    if (n.type == QLatin1String("tabs")) {
+        // The strip sizes itself (style.height is part of its appearance).
+    } else if (sv("height").isValid())
         w->setFixedHeight(sv("height").toInt());
     else if (n.type != QLatin1String("editor")) {
         w->setMinimumHeight(0);
@@ -1402,7 +1444,7 @@ QWidget *ShellHost::realize(const UiNode &n, QSet<QString> &seen, QWidget *paren
     seen.insert(n.key);
     Live &lv = m_live[n.key]; // valid only until children are realized (rehash)
     const bool reuse = lv.w && lv.type == n.type;
-    if (!reuse && lv.w && lv.w != slot())
+    if (!reuse && lv.w && lv.w != slot() && lv.w != m_d.tabs)
         lv.w->deleteLater();
     lv.type = n.type;
     const QVariantMap &p = n.props;
@@ -1412,6 +1454,31 @@ QWidget *ShellHost::realize(const UiNode &n, QSet<QString> &seen, QWidget *paren
 
     if (n.type == QLatin1String("editor")) {
         w = slot();
+    } else if (n.type == QLatin1String("tabs")) {
+        if (auto *strip = qobject_cast<TabStrip *>(m_d.tabs)) {
+            w = strip;
+            // Native colors and sizes, no style sheet: compared before any
+            // repaint, so an unchanged render leaves the strip alone.
+            auto sv = [&](const char *k) { return p.value(QStringLiteral("style.") + QLatin1String(k)); };
+            auto color = [&](const char *k, const char *fallback) {
+                return QColor(resolveColor(sv(k), QString::fromLatin1(fallback)));
+            };
+            TabStrip::Appearance a;
+            a.bg = color("bg", "sidebar");
+            a.activeBg = color("active_bg", "background");
+            a.text = color("fg", "text");
+            a.dim = color("dim", "dim");
+            a.hoverBg = color("hover_bg", "hover_bg");
+            a.border = color("border", "border");
+            a.minTabWidth = qBound(40, p.value(QStringLiteral("tab_min_width"), 72).toInt(), 400);
+            a.maxTabWidth = qBound(a.minTabWidth, p.value(QStringLiteral("tab_max_width"), 220).toInt(), 600);
+            a.height = qBound(24, sv("height").isValid() ? sv("height").toInt() : 36, 64);
+            strip->setAppearance(a);
+            strip->setAutoHide(p.value(QStringLiteral("auto_hide"), false).toBool());
+        } else if (!w) {
+            w = new QWidget(parent); // a host without a strip (tests): an empty slot
+            w->setFixedHeight(0);
+        }
     } else if (n.type == QLatin1String("row") || n.type == QLatin1String("column")) {
         const bool horiz = n.type == QLatin1String("row");
         auto *box = static_cast<ShellBox *>(w);
@@ -1666,6 +1733,36 @@ QWidget *ShellHost::realize(const UiNode &n, QSet<QString> &seen, QWidget *paren
                     showBanner(res.error, true);
             }
         };
+        // New tabs: lists that open pages with a command do it with tab.open;
+        // lists with an on_activate handler get item.new_tab (and
+        // item.background) and decide themselves.
+        if (onActivate >= 0 || activateCmd == QLatin1String("page.open")) {
+            lw->onOpenInTab = [this, onActivate, model](int r, bool background) {
+                const QModelIndex idx = model->index(r);
+                const qint64 id = idx.data(PageListModel::IdRole).toLongLong();
+                if (id <= 0)
+                    return;
+                if (onActivate >= 0) {
+                    QVariantMap item;
+                    item.insert(QStringLiteral("id"), id);
+                    item.insert(QStringLiteral("title"), idx.data(Qt::DisplayRole).toString());
+                    item.insert(QStringLiteral("depth"), idx.data(PageListModel::DepthRole).toInt());
+                    item.insert(QStringLiteral("row"), r + 1);
+                    item.insert(QStringLiteral("new_tab"), true);
+                    item.insert(QStringLiteral("background"), background);
+                    invokeHandler(onActivate, item, {}, false);
+                    return;
+                }
+                QVariantMap args;
+                args.insert(QStringLiteral("id"), id);
+                args.insert(QStringLiteral("background"), background);
+                const CommandResult res = m_d.commands->dispatchCommand(QStringLiteral("tab.open"), args);
+                if (!res.ok)
+                    showBanner(res.error, true);
+            };
+        } else {
+            lw->onOpenInTab = nullptr;
+        }
         lw->onCommand = [this](const QString &cmd, PageId id) {
             QVariantMap args;
             args.insert(QStringLiteral("id"), id);
@@ -1709,11 +1806,14 @@ QWidget *ShellHost::realize(const UiNode &n, QSet<QString> &seen, QWidget *paren
         updateCommon(w, n);
     else
         w->setObjectName(cssKey(n.key));
-    if (n.type == QLatin1String("editor")) {
+    if (n.type == QLatin1String("editor") || (n.type == QLatin1String("tabs") && w == m_d.tabs)) {
         if (w->parentWidget() != parent)
             w->setParent(parent);
     }
-    w->setVisible(visible);
+    if (auto *strip = n.type == QLatin1String("tabs") ? qobject_cast<TabStrip *>(w) : nullptr)
+        strip->setLayoutVisible(visible); // with auto_hide, also needs 2+ tabs
+    else
+        w->setVisible(visible);
     // autofocus when the node becomes visible
     if (p.value(QStringLiteral("autofocus"), false).toBool()) {
         if (visible && !done.wasVisible)

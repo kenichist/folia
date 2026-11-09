@@ -33,7 +33,11 @@ ui.component("Sidebar", function(p)
       row = { height = 28, icon = true, disclosure = false, indent = false },
       on_activate = function(ctx, item)
         ctx.set{ query = "" }
-        ctx.run("page.open", { id = item.id })
+        if item.new_tab then   -- Mod-click, middle-click or Mod+Enter
+          ctx.run("tab.open", { id = item.id, background = item.background })
+        else
+          ctx.run("page.open", { id = item.id })
+        end
         ctx.focus("editor")
       end,
       style = { bg = "sidebar", grow = 1 },
@@ -129,6 +133,21 @@ return {
     ["Mod+Alt+Right"] = "page.indent",
     ["Mod+Alt+Left"] = "page.outdent",
     ["Mod+Shift+O"]  = function(ctx) ctx.set{ hide_sidebar = false }; ctx.focus("outline") end,
+    -- Tabs (one page each; background tabs load only when shown).
+    ["Mod+T"]          = "tab.new",
+    ["Mod+W"]          = "tab.close",
+    ["Mod+Shift+T"]    = "tab.reopen",
+    ["Ctrl+Tab"]       = "tab.next",
+    ["Ctrl+Shift+Tab"] = "tab.prev",
+    ["Mod+1"] = { command = "tab.select", args = { index = 1 } },
+    ["Mod+2"] = { command = "tab.select", args = { index = 2 } },
+    ["Mod+3"] = { command = "tab.select", args = { index = 3 } },
+    ["Mod+4"] = { command = "tab.select", args = { index = 4 } },
+    ["Mod+5"] = { command = "tab.select", args = { index = 5 } },
+    ["Mod+6"] = { command = "tab.select", args = { index = 6 } },
+    ["Mod+7"] = { command = "tab.select", args = { index = 7 } },
+    ["Mod+8"] = { command = "tab.select", args = { index = 8 } },
+    ["Mod+9"] = { command = "tab.select", args = { index = -1 } },   -- the last tab
   },
 
   focus_order = { "jump", "outline", "title", "editor" },
@@ -141,6 +160,7 @@ return {
       ui.column{
         id = "main",
         style = { grow = 1, bg = "background" },
+        ui.tabs{},                 -- the note tabs, like a browser's (one native widget)
         ui.TopBar{ state = state },
         ui.editor{},
       },

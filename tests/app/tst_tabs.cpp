@@ -5,6 +5,8 @@
 
 #include "app/AppController.h"
 #include "core/Instrument.h"
+#include "editor/EditorPane.h"
+#include "editor/NoteEditor.h"
 #include "shell/CommandRegistry.h"
 #include "storage/Store.h"
 
@@ -218,6 +220,46 @@ private slots:
         QVERIFY(run(app.get(), "tab.reopen").ok);
         QTRY_COMPARE(app->currentPage(), page);
         QCOMPARE(app->tabs().count(), 2);
+    }
+
+    // The default layout's keys work while typing in the note: the editor
+    // must not swallow Ctrl+Tab (a Tab with a modifier) or Mod+W.
+    void keysWorkFromTheEditor()
+    {
+        QTemporaryDir dir;
+        auto app = launch(dir.path());
+        QTRY_VERIFY(app->activeSession());
+        const PageId first = app->currentPage();
+        const PageId a = storedPage(app.get(), QStringLiteral("A"));
+        const PageId b = storedPage(app.get(), QStringLiteral("B"));
+        app->openInNewTab(a, true);
+        app->openInNewTab(b, true);
+        app->window()->activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(app->window()));
+        app->editorPane()->focusBody();
+        QWidget *ed = QApplication::focusWidget();
+        QVERIFY(ed);
+#ifdef Q_OS_MACOS
+        const Qt::KeyboardModifier ctrl = Qt::MetaModifier; // the physical Control key
+#else
+        const Qt::KeyboardModifier ctrl = Qt::ControlModifier;
+#endif
+        const QString before = app->editorPane()->editor()->toPlainText();
+        QTest::keyClick(ed, Qt::Key_Tab, ctrl);
+        QTRY_COMPARE(app->currentPage(), a);
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_Backtab, ctrl | Qt::ShiftModifier); // what macOS sends
+        QTRY_COMPARE(app->currentPage(), first);
+        QCOMPARE(app->editorPane()->editor()->toPlainText(), before); // no tab character typed
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_3, Qt::ControlModifier); // Mod+3
+        QTRY_COMPARE(app->currentPage(), b);
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_W, Qt::ControlModifier); // Mod+W
+        QTRY_COMPARE(app->tabs().count(), 2);
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_T, Qt::ControlModifier | Qt::ShiftModifier); // reopen
+        QTRY_COMPARE(app->tabs().count(), 3);
+        QTRY_COMPARE(app->currentPage(), b);
+        QTest::keyClick(QApplication::focusWidget(), Qt::Key_T, Qt::ControlModifier); // Mod+T: a new page
+        QTRY_COMPARE(app->tabs().count(), 4);
+        QCOMPARE(app->tabs().activeIndex(), 3);
     }
 
     void newTabAndTheLastTab()
