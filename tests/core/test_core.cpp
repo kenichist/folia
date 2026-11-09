@@ -1,4 +1,5 @@
 // Storage, session and editor integration tests (headless).
+#include "app/Tabs.h"
 #include "core/Instrument.h"
 #include "core/LucideIcons.h"
 #include "editor/EditorContext.h"
@@ -813,6 +814,174 @@ private slots:
         count(dropped, &inside, &outside);
         QVERIFY(inside > 0);
         QCOMPARE(outside, 0);
+    }
+
+    // ------------------------------------------------------------ tabs ----
+    void tabListCloseMovesToTheRightNeighbour()
+    {
+        TabList t;
+        t.reset({10, 20, 30, 40}, 1);
+        QCOMPARE(t.current().page, PageId(20));
+        QVERIFY(t.close(1)); // the active one: its right neighbour takes over
+        QCOMPARE(t.count(), 3);
+        QCOMPARE(t.current().page, PageId(30));
+        QVERIFY(t.close(0)); // left of the active one: the active tab stays
+        QCOMPARE(t.current().page, PageId(30));
+        QCOMPARE(t.activeIndex(), 0);
+        t.setActive(1);
+        QVERIFY(t.close(1)); // the last one, active: the left neighbour
+        QCOMPARE(t.current().page, PageId(30));
+        QVERIFY(!t.close(0)); // never the last tab
+        QCOMPARE(t.count(), 1);
+    }
+
+    void tabListReopensWhereItWas()
+    {
+        TabList t;
+        t.reset({10, 20, 30}, 0);
+        t.setActive(1);
+        t.pushHistory(20);
+        t.current().page = 25; // the tab moved on from 20 to 25
+        QVERIFY(t.close(1));
+        QVERIFY(t.canReopen());
+        QCOMPARE(t.reopenClosed(), 1);
+        QCOMPARE(t.activeIndex(), 1);
+        QCOMPARE(t.current().page, PageId(25));
+        QCOMPARE(t.current().back, QVector<PageId>({20})); // with its history
+        QVERIFY(!t.canReopen());
+        QCOMPARE(t.reopenClosed(), -1);
+        // At most kMaxClosed are remembered.
+        TabList many;
+        QVector<PageId> ids;
+        for (int i = 1; i <= TabList::kMaxClosed + 5; ++i)
+            ids << i;
+        many.reset(ids, 0);
+        while (many.count() > 1)
+            many.close(many.count() - 1);
+        int reopened = 0;
+        while (many.reopenClosed() >= 0)
+            ++reopened;
+        QCOMPARE(reopened, TabList::kMaxClosed);
+    }
+
+    void tabListMoveKeepsTheActiveTab()
+    {
+        TabList t;
+        t.reset({10, 20, 30, 40}, 1);
+        const quint32 uid = t.current().uid;
+        t.move(1, 3);
+        QCOMPARE(t.activeIndex(), 3);
+        QCOMPARE(t.current().uid, uid);
+        QCOMPARE(t.at(1).page, PageId(30));
+        t.move(0, 2);
+        QCOMPARE(t.current().page, PageId(20));
+        QCOMPARE(t.indexOfUid(uid), t.activeIndex());
+        // Inserting left of the active tab shifts it, not what it shows.
+        t.insert(0, 50);
+        QCOMPARE(t.current().page, PageId(20));
+        QCOMPARE(t.at(0).page, PageId(50));
+    }
+
+    void tabListHistoryIsPerTab()
+    {
+        TabList t;
+        t.reset({1, 2}, 0);
+        t.pushHistory(1);
+        t.current().page = 3;
+        t.setActive(1);
+        QCOMPARE(t.back(), PageId(0)); // tab 2 has no history of its own
+        t.setActive(0);
+        QCOMPARE(t.back(), PageId(1));
+        t.current().page = 1;
+        QCOMPARE(t.forward(), PageId(3));
+        t.current().page = 3;
+        QCOMPARE(t.current().back, QVector<PageId>({1}));
+        // A new navigation clears forward; history is capped.
+        t.back();
+        t.current().page = 1;
+        t.pushHistory(1);
+        QVERIFY(t.current().forward.isEmpty());
+        for (PageId p = 100; p < 100 + TabList::kMaxHistory + 10; ++p)
+            t.pushHistory(p);
+        QCOMPARE(t.current().back.size(), TabList::kMaxHistory);
+        QCOMPARE(t.current().back.last(), PageId(100 + TabList::kMaxHistory + 9));
+    }
+
+    void tabListDropsGonePages()
+    {
+        TabList t;
+        t.reset({1, 2, 3, 2}, 1);
+        t.current().back = {5, 3, 5, 6};
+        t.current().forward = {3};
+        t.setActive(2);
+        t.close(2); // tab showing 3 goes on the closed stack
+        t.setActive(1);
+        QVERIFY(t.dropPages({2, 3}));
+        // The active tab stays (the caller moves it); the other tab showing 2 closes.
+        QCOMPARE(t.count(), 2);
+        QCOMPARE(t.current().page, PageId(2));
+        QCOMPARE(t.at(0).page, PageId(1));
+        QCOMPARE(t.current().back, QVector<PageId>({5, 6})); // 5,5 collapsed: Back is never a no-op
+        QVERIFY(t.current().forward.isEmpty());
+        QVERIFY(!t.canReopen()); // the closed tab showed a page that is gone
+        QVERIFY(!t.referencedPages().contains(3));
+        QVERIFY(!t.dropPages({}));
+    }
+
+    void tabListSerializes()
+    {
+        TabList t;
+        t.reset({7, 8, 9}, 2);
+        QVector<PageId> pages;
+        int active = -1;
+        QVERIFY(TabList::parse(t.serialize(), &pages, &active));
+        QCOMPARE(pages, QVector<PageId>({7, 8, 9}));
+        QCOMPARE(active, 2);
+        // A tab whose page is still being created is left out.
+        t.insert(1, 0);
+        QVERIFY(TabList::parse(t.serialize(), &pages, &active));
+        QCOMPARE(pages, QVector<PageId>({7, 8, 9}));
+        QCOMPARE(active, 2);
+        // Junk is skipped; the active index is clamped; nothing usable is false.
+        QVERIFY(TabList::parse(QStringLiteral("a=99;p=x,4,-3,,0,5;zz"), &pages, &active));
+        QCOMPARE(pages, QVector<PageId>({4, 5}));
+        QCOMPARE(active, 1);
+        QVERIFY(!TabList::parse(QStringLiteral("a=1;p="), &pages, &active));
+        QVERIFY(!TabList::parse(QString(), &pages, &active));
+        QString big = QStringLiteral("p=");
+        for (int i = 1; i <= TabList::kMaxTabs + 20; ++i)
+            big += QString::number(i) + QLatin1Char(',');
+        QVERIFY(TabList::parse(big, &pages, &active));
+        QCOMPARE(pages.size(), TabList::kMaxTabs);
+    }
+
+    void pagesMetaSkipsTrashedPages()
+    {
+        Store s;
+        QString err;
+        Store::Options o;
+        o.path = freshDb();
+        QVERIFY2(s.open(o, &err), qPrintable(err));
+        const PageId a = s.createPage(0, -1, QStringLiteral("A"));
+        const PageId b = s.createPage(a, -1, QStringLiteral("B"));
+        const PageId c = s.createPage(0, -1, QStringLiteral("C"));
+        bool trashed = false;
+        QObject ctx;
+        s.trashPage(a, {}, &ctx, [&](bool ok, PageId) { trashed = ok; });
+        QTRY_VERIFY(trashed);
+        QVector<PageId> ids = {a, b, c, 999999};
+        for (int i = 0; i < 1200; ++i) // more than one chunk of bound ids
+            ids << PageId(1000000 + i);
+        QVector<PageMeta> rows;
+        bool done = false;
+        s.pagesMeta(ids, &ctx, [&](QVector<PageMeta> r) {
+            rows = r;
+            done = true;
+        });
+        QTRY_VERIFY(done);
+        QCOMPARE(rows.size(), 1); // the subtree of A is trashed, unknown ids are absent
+        QCOMPARE(rows[0].id, c);
+        QCOMPARE(rows[0].title, QStringLiteral("C"));
     }
 };
 

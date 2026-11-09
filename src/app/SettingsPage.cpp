@@ -529,7 +529,7 @@ QWidget *SettingsPage::buildGeneral()
     QFormLayout *form = newForm(page);
     Store *store = m_app->store();
 
-    auto *restore = new QCheckBox(tr("Reopen the last page when Folia starts"));
+    auto *restore = new QCheckBox(tr("Reopen your tabs when Folia starts"));
     restore->setObjectName(QStringLiteral("settings.restore_last_page"));
     restore->setChecked(prefs::flag(store->setting(prefs::kRestoreLastPage)));
     connect(restore, &QCheckBox::toggled, this, [store](bool on) {

@@ -315,27 +315,73 @@ bool AppController::start(QString *error)
         m_shell->setWatchFile(false);
     }
 
-    // Open the last page (or the first root page).
-    const PageId last = m_opt.startPage > 0 ? m_opt.startPage
-        : m_opt.restoreLastPage && prefs::flag(m_store->setting(prefs::kRestoreLastPage))
-            ? m_store->setting(QStringLiteral("app.last_page")).toLongLong() : 0;
-    if (last > 0) {
-        m_store->pageMeta(last, this, [this](PageMeta m, bool found) {
-            if (found)
-                openPage(m.id);
-            else
-                m_store->fetchChildren(0, 0, 1, this, [this](QVector<PageMeta> rows, int) {
-                    if (!rows.isEmpty())
-                        openPage(rows.first().id);
-                });
-        });
-    } else {
-        m_store->fetchChildren(0, 0, 1, this, [this](QVector<PageMeta> rows, int) {
-            if (!rows.isEmpty())
-                openPage(rows.first().id);
-        });
-    }
+    restoreTabs();
     return true;
+}
+
+// Reopens the saved tabs (or the start page, or the first root page). One
+// read query checks them all and fetches their titles; only the shown tab's
+// page is loaded.
+void AppController::restoreTabs()
+{
+    QVector<PageId> pages;
+    int active = 0;
+    if (m_opt.startPage > 0) {
+        pages = {m_opt.startPage};
+    } else if (m_opt.restoreLastPage && prefs::flag(m_store->setting(prefs::kRestoreLastPage))) {
+        TabList::parse(m_store->setting(QStringLiteral("tabs.state")), &pages, &active);
+        // The last page shown picks the active tab (it is written on every
+        // page open, so it is also right after a crash or an older version).
+        const PageId last = m_store->setting(QStringLiteral("app.last_page")).toLongLong();
+        if (last > 0) {
+            if (const int i = int(pages.indexOf(last)); i >= 0)
+                active = i;
+            else if (pages.isEmpty())
+                pages = {last};
+            else
+                pages[active] = last;
+        }
+    }
+    if (pages.isEmpty()) {
+        openFirstPage(false);
+        return;
+    }
+    m_store->pagesMeta(pages, this, [this, pages, active](QVector<PageMeta> rows) {
+        QHash<PageId, QString> alive;
+        for (const PageMeta &m : std::as_const(rows))
+            alive.insert(m.id, m.title);
+        QVector<PageId> kept;
+        int keptActive = 0;
+        for (int i = 0; i < pages.size(); ++i) {
+            if (!alive.contains(pages[i]))
+                continue;
+            if (i <= active)
+                keptActive = int(kept.size());
+            kept << pages[i];
+        }
+        if (kept.isEmpty()) {
+            openFirstPage(false);
+            return;
+        }
+        for (auto it = alive.cbegin(); it != alive.cend(); ++it)
+            m_data->noteTitle(it.key(), it.value());
+        m_tabs.reset(kept, keptActive);
+        tabsEdited();
+        m_navigatingHistory = true;
+        openPage(m_tabs.current().page);
+        m_navigatingHistory = false;
+    });
+}
+
+void AppController::openFirstPage(bool replace)
+{
+    m_store->fetchChildren(0, 0, 1, this, [this, replace](QVector<PageMeta> rows, int) {
+        if (rows.isEmpty())
+            return;
+        m_navigatingHistory = replace;
+        openPage(rows.first().id);
+        m_navigatingHistory = false;
+    });
 }
 
 void AppController::buildWindow()
@@ -414,6 +460,10 @@ void AppController::buildWindow()
         return a;
     };
     QMenu *file = mb->addMenu(tr("&File"));
+    act(file, tr("New Tab"), QStringLiteral("tab.new"));
+    act(file, tr("Close Tab"), QStringLiteral("tab.close"));
+    act(file, tr("Reopen Closed Tab"), QStringLiteral("tab.reopen"));
+    file->addSeparator();
     act(file, tr("New Page"), QStringLiteral("page.new"));
     act(file, tr("New Child Page"), QStringLiteral("page.new_child"));
     act(file, tr("New Sibling Page"), QStringLiteral("page.new_sibling"));
@@ -443,6 +493,10 @@ void AppController::buildWindow()
     act(go, tr("Back"), QStringLiteral("nav.back"));
     act(go, tr("Forward"), QStringLiteral("nav.forward"));
     act(go, tr("Parent Page"), QStringLiteral("nav.parent"));
+    go->addSeparator();
+    act(go, tr("Next Tab"), QStringLiteral("tab.next"));
+    act(go, tr("Previous Tab"), QStringLiteral("tab.prev"));
+    go->addSeparator();
     act(go, tr("Focus Title"), QStringLiteral("title.focus"));
     act(go, tr("Focus Editor"), QStringLiteral("editor.focus"));
     QMenu *view = mb->addMenu(tr("&View"));
@@ -653,10 +707,16 @@ QVariantMap AppController::themeOverrides() const
 void AppController::flushPreferences()
 {
     m_prefsTimer.stop();
-    if (!m_themeDirty || m_shutDown)
+    if (m_shutDown)
         return;
-    m_themeDirty = false;
-    m_store->setSetting(prefs::kThemeOverrides, prefs::serializeThemeOverrides(m_shell->themeOverrides()));
+    if (m_themeDirty) {
+        m_themeDirty = false;
+        m_store->setSetting(prefs::kThemeOverrides, prefs::serializeThemeOverrides(m_shell->themeOverrides()));
+    }
+    if (m_tabsDirty) {
+        m_tabsDirty = false;
+        m_store->setSetting(QStringLiteral("tabs.state"), m_tabs.serialize());
+    }
 }
 
 bool AppController::liveReload() const
@@ -751,7 +811,16 @@ void AppController::openPage(PageId id, bool focusEditor)
     // A PDF tab stays open beside the note: reading and note taking go on.
     if (m_active && settingsOpen())
         closeSettings();
+    // The current tab shows `id` from now on, like a browser's address bar
+    // while the page loads; the page it leaves goes on its back history.
+    if (m_tabs.current().page != id) {
+        if (!m_navigatingHistory)
+            m_tabs.pushHistory(m_tabs.current().page);
+        m_tabs.current().page = id;
+        tabsEdited();
+    }
     if (m_active && m_active->pageId() == id) {
+        m_pendingOpen = 0; // a slower load started before this must not land
         if (focusEditor)
             m_pane->focusBody();
         return;
@@ -760,16 +829,11 @@ void AppController::openPage(PageId id, bool focusEditor)
     m_openTarget = id;
     m_awaitPaint = true;
     const qint64 started = m_openClock.nsecsElapsed();
-    if (m_active && !m_navigatingHistory) {
-        m_back.push_back(m_active->pageId());
-        if (m_back.size() > 200)
-            m_back.removeFirst();
-        m_forward.clear();
-    }
     if (m_active)
         m_pane->editor()->storeViewState();
     flushSaves(); // the page being left is snapshotted now, not after the timer
     if (PageSession *s = m_cache.value(id)) {
+        m_pendingOpen = 0;
         activate(s, started, true, focusEditor);
         return;
     }
@@ -778,8 +842,10 @@ void AppController::openPage(PageId id, bool focusEditor)
         if (m_pendingOpen != id)
             return; // superseded by a newer navigation
         m_pendingOpen = 0;
-        if (!pc.found)
+        if (!pc.found) {
+            pruneTabs(0); // a tab pointed at a page that is gone
             return;
+        }
         PageSession *s = m_cache.value(id);
         if (!s) {
             s = createSession(id);
@@ -838,10 +904,11 @@ PageId AppController::newPage(PageId parent, int index, const QString &title, bo
     PageSession *s = createSession(id);
     s->initNew(parent, title);
     m_cache.insert(id, s);
-    if (m_active && !m_navigatingHistory) {
-        m_back.push_back(m_active->pageId());
-        m_forward.clear();
-    }
+    m_pendingOpen = 0; // a load still in flight must not replace the new page
+    if (!m_navigatingHistory)
+        m_tabs.pushHistory(m_tabs.current().page);
+    m_tabs.current().page = id;
+    tabsEdited();
     m_openClock.start();
     m_openTarget = id;
     m_awaitPaint = true;
@@ -851,6 +918,159 @@ PageId AppController::newPage(PageId parent, int index, const QString &title, bo
     instr::record("page_new_to_editable_title_us", t.nsecsElapsed() / 1000);
     scheduleSave(s);
     return id;
+}
+
+// ---------------------------------------------------------------- tabs ----
+void AppController::tabsEdited()
+{
+    m_tabsDirty = true;
+    m_prefsTimer.start(); // one settings write for a burst of tab changes
+    emit tabsChanged();
+}
+
+void AppController::activateTab(int index)
+{
+    if (index < 0 || index >= m_tabs.count())
+        return;
+    if (settingsOpen())
+        closeSettings();
+    if (index != m_tabs.activeIndex()) {
+        m_tabs.setActive(index);
+        m_bgOpenerUid = 0;
+        tabsEdited();
+    }
+    const PageId page = m_tabs.current().page;
+    if (page > 0) {
+        m_navigatingHistory = true; // a tab switch is not a navigation inside the tab
+        openPage(page);
+        m_navigatingHistory = false;
+    }
+}
+
+int AppController::openInNewTab(PageId id, bool background)
+{
+    if (id <= 0)
+        return -1;
+    // Background tabs opened one after another from the same tab line up in
+    // the order they were opened, right of it (as in Chrome).
+    const quint32 opener = m_tabs.current().uid;
+    if (opener != m_bgOpenerUid) {
+        m_bgOpenerUid = opener;
+        m_bgOpened = 0;
+    }
+    const int at = m_tabs.insert(m_tabs.activeIndex() + 1 + m_bgOpened, id);
+    if (at < 0) {
+        m_data->notifyStatus(tr("At most %1 tabs can be open").arg(TabList::kMaxTabs));
+        return -1;
+    }
+    if (background) {
+        ++m_bgOpened;
+        tabsEdited();
+    } else {
+        activateTab(at);
+    }
+    return at;
+}
+
+PageId AppController::newTab()
+{
+    // "+" and Mod+T add the tab at the end, as in Chrome.
+    const int at = m_tabs.insert(-1, 0);
+    if (at < 0) {
+        m_data->notifyStatus(tr("At most %1 tabs can be open").arg(TabList::kMaxTabs));
+        return 0;
+    }
+    m_tabs.setActive(at);
+    m_bgOpenerUid = 0;
+    tabsEdited();
+    return newPage(0, -1, QString(), true);
+}
+
+bool AppController::closeTab(int index)
+{
+    if (index < 0 || index >= m_tabs.count() || m_tabs.count() <= 1)
+        return false;
+    const PageId page = m_tabs.at(index).page;
+    const bool wasActive = index == m_tabs.activeIndex();
+    m_tabs.close(index);
+    m_bgOpenerUid = 0;
+    tabsEdited();
+    if (wasActive && m_tabs.current().page > 0) {
+        m_navigatingHistory = true;
+        openPage(m_tabs.current().page);
+        m_navigatingHistory = false;
+    }
+    evictIfUnused(page);
+    return true;
+}
+
+bool AppController::reopenClosedTab()
+{
+    const int at = m_tabs.reopenClosed();
+    if (at < 0)
+        return false;
+    m_bgOpenerUid = 0;
+    tabsEdited();
+    m_navigatingHistory = true;
+    openPage(m_tabs.current().page);
+    m_navigatingHistory = false;
+    return true;
+}
+
+void AppController::moveTab(int from, int to)
+{
+    if (from == to || from < 0 || to < 0 || from >= m_tabs.count() || to >= m_tabs.count())
+        return;
+    m_tabs.move(from, to);
+    m_bgOpenerUid = 0;
+    tabsEdited();
+}
+
+// A closed tab's page leaves the document cache right away when no other
+// tab shows it and nothing of it is left to save: closing a large page frees
+// its memory, instead of keeping it until the cache's LRU gets to it.
+void AppController::evictIfUnused(PageId id)
+{
+    PageSession *s = m_cache.value(id);
+    if (!s || s == m_active || m_tabs.showsPage(id) || s->isUncommitted() || s->hasUnsnapshotted()
+        || s->hasPendingImports())
+        return;
+    m_cache.remove(id);
+    m_lru.removeAll(id);
+    s->deleteLater();
+    instr::set(instr::DocCacheBytes, docCacheBytes());
+    instr::set(instr::DocCacheEntries, m_cache.size());
+}
+
+void AppController::pruneTabs(PageId fallback)
+{
+    const QVector<PageId> refs = m_tabs.referencedPages();
+    if (refs.isEmpty())
+        return;
+    m_store->pagesMeta(refs, this, [this, refs, fallback](QVector<PageMeta> rows) {
+        QSet<PageId> alive;
+        for (const PageMeta &m : std::as_const(rows))
+            alive.insert(m.id);
+        QSet<PageId> gone;
+        for (PageId p : refs)
+            if (!alive.contains(p))
+                gone.insert(p);
+        if (gone.isEmpty())
+            return;
+        // Pages a tab started referencing after the query was posted are not
+        // in `refs`, so they are never dropped by mistake.
+        m_tabs.dropPages(gone);
+        tabsEdited();
+        if (gone.contains(m_tabs.current().page)) {
+            if (fallback > 0 && !gone.contains(fallback)) {
+                m_navigatingHistory = true; // the page that went is not history
+                openPage(fallback);
+                m_navigatingHistory = false;
+            } else {
+                openFirstPage(true);
+            }
+        }
+    });
 }
 
 // ------------------------------------------------------------ autosave ----
@@ -1154,21 +1374,15 @@ void AppController::registerCommands()
                     return okResult();
                 }
                 flushSaves();
-                const bool wasActive = currentPage() == id;
-                m_store->trashPage(id, heldPages(), this, [this, id, wasActive](bool ok, PageId parent) {
+                m_store->trashPage(id, heldPages(), this, [this, id](bool ok, PageId parent) {
                     if (!ok)
                         return;
                     if (PageSession *ps = m_cache.value(parent))
                         ps->removePageLinks(id);
-                    if (wasActive) {
-                        if (parent)
-                            openPage(parent);
-                        else
-                            m_store->fetchChildren(0, 0, 1, this, [this](QVector<PageMeta> rows, int) {
-                                if (!rows.isEmpty())
-                                    openPage(rows.first().id);
-                            });
-                    }
+                    // The page and its whole subtree are trashed: tabs showing
+                    // any of them close, and the current one (if it showed
+                    // one) moves to the parent.
+                    pruneTabs(parent);
                 });
                 return okResult();
             }, {}});
@@ -1206,26 +1420,70 @@ void AppController::registerCommands()
                 emit m_data->revealRequested(argId(a));
                 return okResult();
             }, {}});
+    // Back and forward move through the current tab's own history.
     c->add({QStringLiteral("nav.back"), tr("Back"), {}, {}, [this](const QVariantMap &) {
-                if (m_back.isEmpty())
+                const PageId id = m_tabs.back();
+                if (!id)
                     return fail(tr("nothing to go back to"));
-                const PageId id = m_back.takeLast();
-                if (m_active)
-                    m_forward.push_back(m_active->pageId());
                 m_navigatingHistory = true;
                 openPage(id);
                 m_navigatingHistory = false;
                 return okResult();
             }, {}});
     c->add({QStringLiteral("nav.forward"), tr("Forward"), {}, {}, [this](const QVariantMap &) {
-                if (m_forward.isEmpty())
+                const PageId id = m_tabs.forward();
+                if (!id)
                     return fail(tr("nothing to go forward to"));
-                const PageId id = m_forward.takeLast();
-                if (m_active)
-                    m_back.push_back(m_active->pageId());
                 m_navigatingHistory = true;
                 openPage(id);
                 m_navigatingHistory = false;
+                return okResult();
+            }, {}});
+    // Tabs. Indices are 1-based, as in Lua; -1 is the last tab. Commands with
+    // nothing to do (closing the last tab, Mod+9 with one tab) succeed
+    // quietly, so a key binding never raises an error banner for them.
+    auto tabIndex = [this](const QVariantMap &a) {
+        if (!a.contains(QStringLiteral("index")))
+            return m_tabs.activeIndex();
+        const int i = a.value(QStringLiteral("index")).toInt();
+        return i < 0 ? m_tabs.count() + i : i - 1;
+    };
+    c->add({QStringLiteral("tab.new"), tr("New Tab"), {}, {}, [this](const QVariantMap &) {
+                newTab();
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("tab.open"), tr("Open in New Tab"), {}, {arg("id", T::LongLong, true), arg("background", T::Bool)},
+            [this](const QVariantMap &a) {
+                const PageId id = a.value(QStringLiteral("id")).toLongLong();
+                if (id <= 0)
+                    return fail(tr("no page"));
+                if (settingsOpen())
+                    closeSettings();
+                openInNewTab(id, a.value(QStringLiteral("background")).toBool());
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("tab.close"), tr("Close Tab"), {}, {arg("index", T::LongLong)}, [this, tabIndex](const QVariantMap &a) {
+                if (settingsOpen())
+                    closeSettings();
+                closeTab(tabIndex(a));
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("tab.select"), tr("Show Tab"), {}, {arg("index", T::LongLong, true)}, [this, tabIndex](const QVariantMap &a) {
+                activateTab(tabIndex(a));
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("tab.next"), tr("Next Tab"), {}, {}, [this](const QVariantMap &) {
+                activateTab((m_tabs.activeIndex() + 1) % m_tabs.count());
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("tab.prev"), tr("Previous Tab"), {}, {}, [this](const QVariantMap &) {
+                activateTab((m_tabs.activeIndex() + m_tabs.count() - 1) % m_tabs.count());
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("tab.reopen"), tr("Reopen Closed Tab"), {}, {}, [this](const QVariantMap &) {
+                if (settingsOpen())
+                    closeSettings();
+                reopenClosedTab();
                 return okResult();
             }, {}});
     c->add({QStringLiteral("nav.parent"), tr("Open Parent Page"), {}, {}, [this](const QVariantMap &) {

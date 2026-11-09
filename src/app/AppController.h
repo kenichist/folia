@@ -3,6 +3,7 @@
 // document cache, autosave scheduling and shutdown flushing.
 #pragma once
 
+#include "app/Tabs.h"
 #include "core/Types.h"
 #include "editor/PageSession.h"
 
@@ -76,8 +77,25 @@ public:
     PageSession *activeSession() const { return m_active; }
     PageId currentPage() const;
 
+    // Shows `id` in the current tab (its previous page goes on that tab's
+    // back history).
     void openPage(PageId id, bool focusEditor = true);
     PageId newPage(PageId parent, int index, const QString &title, bool focusTitle);
+    // Note tabs (docs/ARCHITECTURE.md §5, "Tabs"): each tab is a page id
+    // with its own back/forward history. Only the shown tab's page is
+    // loaded; showing another tab opens its page through the document
+    // cache. Indices are 0-based here (the tab.* commands take 1-based ones).
+    const TabList &tabs() const { return m_tabs; }
+    void activateTab(int index);
+    // A new tab showing `id` after the current one; shown unless `background`.
+    int openInNewTab(PageId id, bool background);
+    // "+": a new Untitled page in a new tab, its title ready to type.
+    PageId newTab();
+    // Closes a tab (never the last one). A page no other tab shows, with
+    // nothing left to save, leaves the document cache at once.
+    bool closeTab(int index);
+    bool reopenClosedTab();
+    void moveTab(int from, int to);
     void flushSaves();
     QString userShellDir() const;
     QString presetPath(const QString &name) const;
@@ -128,6 +146,8 @@ public:
     void setAutosaveEnabled(bool on) { m_autosave = on; if (!on) { m_idleTimer.stop(); m_deadlineTimer.stop(); } }
 
 signals:
+    // The tab list changed: tabs added, closed, moved, or the active one.
+    void tabsChanged();
     void pageActivated(folia::PageId id, qint64 micros, bool cached);
     void pagePainted(folia::PageId id, qint64 microsSinceRequest);
     void allSaved();
@@ -150,6 +170,15 @@ private:
     void confirmDelete(PageId id);
     void afterMove(PageId id, PageId oldParent, PageId newParent);
     QSet<PageId> heldPages() const;
+    void tabsEdited();
+    void restoreTabs();
+    // Shows the first root page in the current tab; `replace`: without
+    // putting the tab's page on its back history.
+    void openFirstPage(bool replace);
+    // Closes tabs showing trashed pages; moves the current tab to `fallback`
+    // (or the first page) if its own page is gone.
+    void pruneTabs(PageId fallback);
+    void evictIfUnused(PageId id);
     PageId argId(const QVariantMap &args) const;
 
     Options m_opt;
@@ -170,6 +199,7 @@ private:
     QPointer<PdfViewerPage> m_pdf;
     QTimer m_prefsTimer;         // coalesces settings writes
     bool m_themeDirty = false;
+    bool m_tabsDirty = false;
 
     QHash<PageId, PageSession *> m_cache;
     QList<PageId> m_lru; // front = most recent
@@ -181,7 +211,9 @@ private:
     // revision the age of its oldest edit (for the max-dirty-interval probe).
     QHash<PageId, QElapsedTimer> m_dirtySince;
     QHash<PageId, QList<QPair<Revision, QElapsedTimer>>> m_inflight;
-    QList<PageId> m_back, m_forward;
+    TabList m_tabs;
+    quint32 m_bgOpenerUid = 0; // tab that background tabs were last opened from
+    int m_bgOpened = 0;        // how many, so the next one goes after them
     bool m_navigatingHistory = false;
     QElapsedTimer m_openClock;
     PageId m_openTarget = 0;
