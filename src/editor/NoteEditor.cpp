@@ -182,6 +182,7 @@ void NoteEditor::detachSession()
         blank = new QTextDocument(qApp);
     setDocument(blank);
     setReadOnly(true);
+    viewport()->update(); // nothing of the last page may stay on screen
 }
 
 void NoteEditor::setSession(PageSession *s)
@@ -222,6 +223,10 @@ void NoteEditor::setSession(PageSession *s)
     if (y == 0 && (s->viewPosition() > 0))
         ensureCursorVisible();
     updateLayoutViewport();
+    // A laid-out document asks Qt to repaint only its own extent: a short
+    // page would leave the last page's pixels below it (a PDF card, say)
+    // until the next frame. Repaint the whole viewport with the title.
+    viewport()->update();
 }
 
 bool NoteEditor::event(QEvent *e)

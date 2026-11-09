@@ -13,6 +13,7 @@
 
 #include <QApplication>
 #include <QMainWindow>
+#include <QPaintEvent>
 #include <QTemporaryDir>
 #include <QTest>
 #include <memory>
@@ -69,6 +70,21 @@ QVector<PageId> tabPages(const AppController *app)
         v << app->tabs().at(i).page;
     return v;
 }
+
+// Records the regions a widget is asked to repaint.
+class PaintSpy : public QObject {
+public:
+    explicit PaintSpy(QWidget *w) { w->installEventFilter(this); }
+    QVector<QRegion> regions;
+
+protected:
+    bool eventFilter(QObject *, QEvent *e) override
+    {
+        if (e->type() == QEvent::Paint)
+            regions << static_cast<QPaintEvent *>(e)->region();
+        return false;
+    }
+};
 
 } // namespace
 
@@ -294,6 +310,29 @@ private slots:
         QVERIFY(run(app.get(), "tab.reopen").ok);
         QTRY_COMPARE(app->currentPage(), a);
         QCOMPARE(app->editorPane()->session(), app->activeSession());
+    }
+
+    // Switching to a shorter page repaints the whole note area in the same
+    // frame. Qt asks a laid-out document to repaint only its own extent, so
+    // the last page's pixels below it (a PDF card on an empty page) stayed
+    // on screen for a frame.
+    void aSwitchRepaintsTheWholeNote()
+    {
+        QTemporaryDir dir;
+        auto app = launch(dir.path());
+        QTRY_VERIFY(app->activeSession());
+        const PageId empty = storedPage(app.get(), QStringLiteral("Empty"));
+        app->openInNewTab(empty, false);
+        QTRY_COMPARE(app->currentPage(), empty);
+        app->activateTab(0); // the welcome page: long, and cached now
+        QTest::qWait(100);
+        QWidget *vp = app->editorPane()->editor()->viewport();
+        PaintSpy spy(vp);
+        app->activateTab(1); // the empty page, cached: one line
+        QTRY_VERIFY(!spy.regions.isEmpty());
+        const QRegion missed = QRegion(vp->rect()) - spy.regions.first();
+        QVERIFY2(missed.isEmpty(), qPrintable(QStringLiteral("first repaint left %1 px tall unpainted")
+                                                  .arg(missed.boundingRect().height())));
     }
 
     // The default layout's keys work while typing in the note: the editor
