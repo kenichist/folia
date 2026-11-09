@@ -140,7 +140,7 @@ folder with `python3 -I bench/scripts/analyze.py <dir>/*.json`.
 Use a fresh copy of the fixture per run for scenarios that write. Scenarios
 (see `BenchDriver::run`): `launch`, `open`, `create`, `expand`, `typing`
 (`doc=ordinary|stress|code`, `ime=true|false`, `bgrender=true`), `scroll`,
-`stress`, `presentation`, `idle` (`seconds=60`, `settle_ms`), `navigate`
+`stress`, `presentation`, `idle` (`seconds=60`, `settle_ms`, `vm_snapshots=0|1`), `navigate`
 (`batches=5`, `per_batch=100`), `integration`, `snapshot`, `recovery`,
 `settings` (`reps=10`, `window=0|1`, `apply=0|1`, `close_settle_ms`; see below),
 `images` (`photos=24`, `idle_seconds=20`, `media_dir`, `step=40`; see §6),
@@ -148,7 +148,9 @@ Use a fresh copy of the fixture per run for scenarios that write. Scenarios
 `step_px=6`, `note_lines=100`, `demo_hold_ms`; see §6c), `tabs` (`tabs=30`,
 `switches=150`, `idle_seconds=20`, `page_lines=100`, `resize_steps=60`,
 `strip=0|1`; see §6d), `import` (`md_mib=8`, `docx_paragraphs=40000`,
-`idle_seconds=10`; see §6e).
+`idle_seconds=10`, `free=1`, `vm_snapshots=0|1|2`; see §6e–6f).
+Every run records the allocator variables it was launched with as
+`env.malloc_env` (§6f: the Claude Code app exports `MallocNanoZone=0`).
 Every scenario takes `painter_clip=1`: paint the editor under QTextEdit's own
 painter clip, as before 2026-11-08 (§6b; recorded as `editor_painter_clip`).
 Bench JSON schema:
@@ -1069,7 +1071,7 @@ listed.
 | Peak footprint growth, upload → page shown | +183 / +154 MB | +51 / +51 MB |
 | Idle with the page shown: footprint | 174 / 144 MB | 118 / 115 MB |
 | Idle with the page shown: CPU, wakeups | 0.14 / 0.10 %, 4.4 / 4.5 per s | 0.07 / 0.08 %, 4.3 / 4.3 per s |
-| Its tab closed: sessions left, footprint 5–20 s later (not freed: see below) | 1 (its own); 174–177 / 144–175 MB | 1 (its own); 115–118 MB |
+| Its tab closed: sessions left, footprint 5–20 s later (not freed: see below, §6f) | 1 (its own, still active); 174–177 / 144–175 MB | 1 (its own); 115–118 MB |
 
 `folia_docprobe` on a Word file written by TextEdit (330 KB, `document.xml`
 42 MB inflated, 40,800 paragraphs): **1.26–1.28 s, +19–21 MB peak**
@@ -1088,13 +1090,160 @@ Reading it:
 * **In these runs, closing the upload's tab did not free its page.** The
   bench's fresh home left the first tab without a page, and closing a tab
   beside an empty one kept the closed page shown and alive: the one session
-  left was its own (`heap` still listed its 83,057 lines after the close),
-  and `malloc_zone_pressure_relief` had nothing to hand back. That was a bug
-  in closing tabs, fixed since: the editor now shows no page there and the
-  closed page leaves the cache, an upload into an empty workspace fills the
-  empty tab, and a closed page whose neighbour was still loading is freed
-  once that page is shown. The bench now gives the first tab a page of its
-  own; the closed-tab row above predates the fix.
+  left was its own (`heap` still listed its 83,057 lines after the close,
+  §6f), and `malloc_zone_pressure_relief` had nothing to hand back. That was
+  a bug in closing tabs, fixed since: the editor now shows no page there and
+  the closed page leaves the cache, an upload into an empty workspace fills
+  the empty tab, and a closed page whose neighbour was still loading is
+  freed once that page is shown. The bench now gives the first tab a page of
+  its own. With it, closing the tab frees the page, and the footprint is
+  back to about 75 MB within 3 s with the allocator Folia ships (§6f). The
+  31 MB rise in one run was the window's IOSurface buffers, not malloc. The
+  closed-tab row above predates the fix.
+
+## 6f. Allocator settings, and closing a large page
+
+§6e left a question: after an 8 MiB Markdown upload is shown and its tab
+closed, the footprint stayed at 144–177 MB, and
+`malloc_zone_pressure_relief` returned 0 bytes. Would a different macOS
+allocator setting give that memory back? It turned out the memory was still
+in use, and once the page is actually freed, the allocator Folia already
+ships returns it within 3 s. The settings below were measured anyway, for
+what they change beyond that.
+
+Raw runs, scripts and provenance: `bench/results/malloc-env-2026-11-09/`;
+compare with `python3 -I bench/scripts/malloc_env_compare.py <files>`.
+
+### Which allocator, and what each setting changes
+
+macOS 26.6.2 uses **xzone malloc** by default, not the older magazine
+allocator: `MallocDebugReport=stderr MallocReportConfig=1 /usr/bin/true`
+prints `Enable Xzone Malloc: 1`, `Xzone Enablement Reason: default`. The
+names of the variables libmalloc reads were taken from the strings in the
+dyld shared cache; `man malloc` documents only the debugging ones. The
+report, with `MallocNanoZone` unset (as a Finder or Dock launch has it):
+
+| Launched with | What changes in xzone's configuration |
+|---|---|
+| nothing set, the system default (`sys` below) | defer tiny/small/large frees, huge cache of 64, thread caching on |
+| `MallocLargeCache=0` (Folia's re-exec, `base` below) | no deferred frees, huge cache 0 |
+| `MallocNanoZone=0` (`nano`) | thread caching off, small thrash threshold 1 → 0 ms. xzone does not use the nano zone at all (`Enable Nano On Xzone: 0`) |
+| `MallocAggressiveMadvise=1` (`aggr`) | nothing (a magazine-allocator setting) |
+| `MallocSpaceEfficient=1` (`space`) | what `MallocLargeCache=0` does, plus segment deallocation, no tiny/small batching, no small freelist, one slot and list per size class instead of per CPU cluster, thread caching off |
+
+`MallocXzoneSegmentDeallocate=1`, `MallocXzoneHugeCacheSize=0` and
+`MallocSecureAllocator=0` change nothing in the report on their own.
+
+**The Claude Code app exports `MallocNanoZone=0`** to the processes it
+starts, so bench runs launched from a Claude session before this one ran
+with xzone's thread caching off, unlike a Finder or Dock launch. The runs
+here unset it for every setting except `nano`; `env.malloc_env` now records
+the allocator variables of every run.
+
+### The memory after the close was in use
+
+`--bench import --bench-arg vm_snapshots=2` writes `heap -s` with the page
+shown, 3 s after its tab is closed and 20 s after the relief. In §6e's setup
+all three listed the same 677,390 ± 7 live blocks (126.8 MB), among them
+**83,057 `folia::BlockData`**, one per line of the imported page, and its
+text (2 × 16 MB and 8 MB). The page's session was alive: the "1 session
+left" in §6e was the imported page's own. The Word page behaved the same.
+Its 40,800 lines stayed live after its close, and the Markdown page's went
+only when the Word page pushed it out of the document cache.
+
+The cause is in the bench's setup. A fresh `--home` shows no page, so its
+first tab's page is 0 (the import JSON now records
+`<kind>_closed_current_tab_page`, `_closed_active_is_imported` and
+`_closed_imported_session_alive`). Closing the upload's tab then opens
+nothing (`AppController::closeTab` reopens only a page id above 0), the
+closed page stays the active one, and `evictIfUnused` skips it
+(`s == m_active`). Users could reach that state too: in an empty workspace
+(its one tab has no page), and whenever the next tab's page loads
+asynchronously, so the closed page is still active when `evictIfUnused`
+runs. Both are fixed in `closeTab` since (§6e). The bench now first creates
+a small page in the first tab (these runs: `first_page=1`; the option is
+gone, as an upload now fills an empty first tab, and `first_page=0` was
+§6e's setup). Closing the upload's tab then frees the page, and the
+footprint comes back:
+
+| 8 MiB Markdown page, shipped allocator (`base`, 3 runs) | Footprint (MB) | malloc dirty (MB) |
+|---|---:|---:|
+| Before the upload | 66.4–66.9 | |
+| Page shown | 173.4–175.6 | 122.2–124.5 |
+| 3 s after its tab is closed (page freed) | 74.3–76.3 | 23.6–25.9 |
+| Same, §6e's setup (`import0-base-1`, `first_page=0`: the page still alive and active) | 176.2 | 125.6 |
+
+`malloc_zone_pressure_relief` hands back 0 bytes in every run with every
+setting, before and after the page is freed: there is nothing for it to
+release. The tens of MB the footprint jumped by in §6e, and in one run here
+(the Word page closed at 91.9 MB instead of 75), are the window's IOSurface
+buffers (14.7 MB each; 1 → 3 buffers when macOS repaints a window, see
+§6b), not malloc: the malloc figure moved by at most 2 MB. All the A/B runs
+below had 3 buffers (43.0 MB) in every snapshot except two (that `base` run
+and one `sys` run, both after the Word page's close).
+
+### The settings, measured
+
+Interleaved runs (`repro/matrix.sh`); medians, MB = 10⁶ bytes. Import: fresh
+home, `--bench import --bench-arg vm_snapshots=1`. Idle: 60 s on the
+ordinary page of the 50,000-page fixture. Typing: 1000 edits on the same
+page, offscreen (`QT_QPA_PLATFORM=offscreen`, 5 runs each), because macOS
+did not paint the floating window for 15 of the 19 windowed typing runs
+(`unpainted/`; an alternating `nano`/`base` check showed it was the screen,
+not the setting).
+
+| Setting (import / idle runs) | Markdown 8 MiB: shown → 3 s after close | Word 40,000 ¶: shown → 3 s after close | malloc dirty after the Markdown close | Idle footprint (malloc dirty) | Idle CPU, wakeups | Typing CPU per edit, offscreen |
+|---|---|---|---:|---|---|---|
+| `base`, what ships (3 / 3) | 173.8 → 74.6 | 112.4 → 75.0 | 23.6 | 81.5 (30.6) | 0.19 %, 5.3/s | 0.496 ms |
+| `nano` (2 / 2) | 174.1 → 74.7 | 112.7 → 75.3 | 23.6 | 81.5 (30.6) | 0.17 %, 5.4/s | 0.510 ms (+2.8 %) |
+| `aggr` (2 / 2) | 174.0 → 74.7 | 112.6 → 75.2 | 24.2 | 81.4 (30.6) | 0.13 %, 5.4/s | 0.499 ms |
+| `space` (3 / 3) | 171.0 → 71.2 | 109.9 → 71.8 | 20.6 | 78.8 (27.4) | 0.20 %, 5.4/s | 0.509 ms (+2.6 %) |
+| `sys`, system default (2 / –) | 178.0 → 77.7 | 114.4 → 104.2 | 27.1 | – | – | – |
+
+Ranges: `base` closed 74.3–76.3 / 74.9–91.9 (the IOSurface run), idle
+81.1–81.6; `space` closed 69.3–73.0 / 69.2–72.7, idle 78.4–79.9; offscreen
+typing `base` 0.494–0.509, `nano` 0.499–0.541, `space` 0.502–0.553, `aggr`
+0.496–0.501 ms; editor paint p50 0.275 ms in all four. Windowed typing, the
+painted runs: `base` 5.04 / 5.32 ms per edit, input → paint p50 1.9 / 2.3 ms;
+`aggr` 5.09 / 5.29 ms, 2.0 / 2.1 ms (README: 5.0–5.4 ms). The later
+`free=1` phase (the page dropped by `reclaimMemory`) and the relief changed
+nothing further (`base` 73.7 MB).
+
+* **`space` (`MallocSpaceEfficient=1`) is the only setting that saves
+  memory**: about 3 MB at every point (malloc 30.6 → 27.4 MB at idle,
+  23.6 → 20.6 MB after a close), from packing small blocks into fewer
+  slots. It costs some CPU: offscreen typing +2.6 % per edit (the runs'
+  ranges overlap); the Word page's build 162 against 139 ms (149–181
+  against 138–146), its upload → editable 1016 against 887 ms, the Markdown
+  conversion on the import worker 208 against 191 ms. The Markdown page's
+  build and upload → editable were not slower (517 / 1116 against 524 /
+  1136 ms).
+* **`nano` (`MallocNanoZone=0`)** changes no memory figure (thread caching
+  off) and costs about as much CPU as `space`: +2.8 % per edit (ranges
+  overlap), the Word page's build 151 ms.
+* **`aggr` (`MallocAggressiveMadvise=1`)** matches `base` within noise, as
+  its unchanged configuration predicts.
+* **`sys` (`MallocLargeCache=1`)**: after the Word page's close, 97–111 MB
+  (malloc 46 MB) for 5–20 s, falling to 77–92 MB. That is the large-block
+  cache keeping freed blocks (§6b), which Folia's re-exec already avoids.
+
+### Recommendation
+
+**Keep what ships (`MallocLargeCache=0` through the re-exec) and adopt
+none of the others.**
+
+1. With the page freed, the shipped allocator already gives the memory
+   back within 3 s (173.8 → 74.6 MB). What held 144–177 MB in §6e was the
+   page staying alive, a bug in `AppController::closeTab` (fixed, §6e), not
+   the allocator.
+2. `MallocSpaceEfficient=1` saves ~3 MB (3–4 %). It costs ~3 % more CPU
+   per keystroke and slows some large-page work (the Word page's build
+   +17 %, the Markdown conversion +9 %), through an undocumented switch
+   Apple can change. Not worth it for a light app that publishes its CPU
+   figures too. Revisit only if the 60 MB idle target becomes the
+   priority.
+3. `MallocNanoZone=0` brings nothing and costs ~3 % CPU per edit;
+   `MallocAggressiveMadvise=1` does nothing under xzone.
 
 ## 7. Caveats
 
@@ -1108,3 +1257,8 @@ Reading it:
 * Wakeup counts from inside the app (`idle` scenario) include the driver's
   own 1 s sampling timer; procstat counts come from outside.
 * Machine load matters: note the load average with every result set.
+* The Claude Code app exports `MallocNanoZone=0` to the processes it
+  starts. In a bench launched from a Claude session, xzone malloc's thread
+  caching is then off: no memory figure changes, typing CPU is ~3 % higher
+  than for a Finder or Dock launch (§6f). `env.malloc_env` records it; unset
+  it (`env -u MallocNanoZone`) to measure what users get.

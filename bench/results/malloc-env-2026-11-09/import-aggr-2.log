@@ -1,0 +1,2 @@
+start 12:44:33 mode=aggr pressure=2 load={ 1.63 2.29 2.34 } batt=61%
+end 12:46:17 rc=0 pressure=2 load={ 2.67 2.43 2.38 }

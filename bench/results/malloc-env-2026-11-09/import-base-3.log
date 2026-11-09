@@ -1,0 +1,2 @@
+start 12:49:26 mode=base pressure=2 load={ 2.22 2.36 2.36 } batt=60%
+end 12:51:10 rc=0 pressure=2 load={ 2.95 2.59 2.44 }
