@@ -357,6 +357,8 @@ void BenchDriver::run()
     else if (s == QLatin1String("images")) scenarioImages();
     else if (s == QLatin1String("pdf")) scenarioPdf();
     else if (s == QLatin1String("split")) scenarioSplit();
+    else if (s == QLatin1String("tabs")) scenarioTabs();
+    else if (s == QLatin1String("import")) scenarioImport();
     else if (s == QLatin1String("recovery")) { scenarioRecovery(); return; }
     else m_notes.append(QStringLiteral("unknown scenario"));
     finish();

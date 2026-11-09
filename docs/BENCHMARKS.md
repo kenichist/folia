@@ -145,7 +145,10 @@ Use a fresh copy of the fixture per run for scenarios that write. Scenarios
 `settings` (`reps=10`, `window=0|1`, `apply=0|1`, `close_settle_ms`; see below),
 `images` (`photos=24`, `idle_seconds=20`, `media_dir`, `step=40`; see §6),
 `pdf` (§6b), `split` (`pdf_dir`, `idle_seconds=10`, `drag_steps=120`,
-`step_px=6`, `note_lines=100`, `demo_hold_ms`; see §6c).
+`step_px=6`, `note_lines=100`, `demo_hold_ms`; see §6c), `tabs` (`tabs=30`,
+`switches=150`, `idle_seconds=20`, `page_lines=100`, `resize_steps=60`,
+`strip=0|1`; see §6d), `import` (`md_mib=8`, `docx_paragraphs=40000`,
+`idle_seconds=10`; see §6e).
 Every scenario takes `painter_clip=1`: paint the editor under QTextEdit's own
 painter clip, as before 2026-11-08 (§6b; recorded as `editor_painter_clip`).
 Bench JSON schema:
@@ -979,6 +982,119 @@ for 150 ms, though the mouse kept moving.
 | Footprint: one tab → two tabs → closed | 70.6 → 78.3 → 74.8 MB (5.6 MB of tiles while open) |
 | Idle CPU / wakeups: one tab, two tabs, closed | 0.10 / 0.13 / 0.08 % of a core; 4.6 / 4.5 / 4.2 per s |
 | Typing 200 keys beside the open PDF | 0 viewer paints, 0 PDF renders; input to paint p50 0.68 ms |
+
+## 6d. Note tabs
+
+`--bench tabs` (`src/app/BenchTabs.cpp`; arguments in its header comment)
+creates 30 ordinary pages (100 lines each, with formulas and code), opens 29
+of them in background tabs, idles, switches through all tabs 150 times with
+`tab.next` (round-robin, so with 30 tabs and a 16-page document cache every
+switch loads its page), types beside the strip, resizes the window 60 times
+by 8 pt and closes all tabs but one. `strip=0` runs the same with the
+default layout minus its `ui.tabs{}` line: the tabs exist, nothing draws
+them. `python3 bench/scripts/tabs_summary.py <json…>` prints the table.
+
+### Measured (M1 MacBook Air 8 GB, macOS 26.6.2, Release, on battery, 2026-11-09)
+
+Raw runs and provenance: `bench/results/tabs-2026-11-09/`. Two runs with
+the strip, two without; ranges cover all four unless a column is named.
+
+| Measure | With the strip | Without (`strip=0`) |
+|---|---|---|
+| Open a background tab (main thread), median / p95 | 13–26 / 31–42 µs | 15 / 31–57 µs |
+| Shell renders and pages loaded while opening 29 background tabs | 0 and 0 | 0 and 0 |
+| Footprint change from opening 29 background tabs | +0.00–0.03 MB | +0.00–0.02 MB |
+| Idle, 1 tab → 30 tabs: footprint | 73.5 → 73.4 MB | 73.4 → 73.4 MB |
+| Idle, 1 tab → 30 tabs: CPU | 0.10–0.14 → 0.07–0.08 % of a core | 0.08–0.09 → 0.06 % |
+| Idle, 1 tab → 30 tabs: wakeups | 4.7 → 4.2–4.3 per s | 4.6–4.7 → 4.2–4.3 per s |
+| Shell renders per switch | 1.0 | 1.0 |
+| Switch to an uncached tab: page active (`open_uncached_activate_us`), median / p95 | 2.3–4.5 / 7.1–7.7 ms | 4.2–5.1 / 9.8–11.0 ms |
+| Shell render per switch, median | 0.31–0.77 ms | 0.73–0.82 ms |
+| Footprint after each round of 30 switches | 75.8–78.6 MB, last round 76.9 / 92.4 MB | 75.7–75.9 MB, last round 75.9 / 78.1 MB |
+| Document cache after 150 switches | 16 pages (its cap) | 16 pages |
+| Strip paints while typing 200 keys in the note | 0 and 1 | — |
+| Window resize step (whole window, synchronous repaint), median | 6.2–16.8 ms | 16.7 ms |
+| All but one tab closed: footprint, pages cached | 77.0–77.9 MB, 1 page | 89.9–90.9 MB, 1 page |
+
+Reading it:
+
+* **Background tabs cost nothing measurable**: no page load, no shell
+  render, no footprint, and idle with 30 tabs matches idle with one (the
+  first idle window starts closer to the page creation, hence its slightly
+  higher CPU in every variant).
+* **A switch costs what opening a page costs**: one shell render and, for a
+  page outside the 16-page cache, a load from SQLite and a session build
+  (0.2–0.8 ms median). The strip's own share of the render is within the
+  run-to-run spread (the second run with the strip had its window painted
+  for most switches and ran faster in every measure, the strip included).
+* **The strip adds no paints while typing** (0 and 1, against 200 keys).
+* **Paint-based numbers are partial.** macOS painted the click-through bench
+  window for 17 and 117 of the 150 switches with the strip, and for 0 and
+  13 without, so `tab_switch_to_paint_*` and `switch_strip_paints_per_switch`
+  describe only those. `tab_switch_to_editable_*` (16.7 ms median
+  everywhere) is bounded by the harness's own wakeup granularity, not by the
+  app; `open_uncached_activate_us` is the app's own measurement of the switch.
+* The resize step is dominated by the synchronous repaint of the whole
+  window (one frame, 16.7 ms); the faster run is the painted one.
+* The footprints after closing differ by variant more than within one
+  (77–78 against 90–91 MB). Every closed page was freed (one page left in the
+  cache); what stays is the allocator's (see §6e).
+
+## 6e. Uploads (Word, Markdown and text)
+
+Two probes:
+
+* `folia_docprobe <file> [--print] [--whole]` (`tools/docprobe.cpp`)
+  converts one file in a fresh process and prints its blocks, time and peak
+  footprint growth; `--whole` inflates a Word file's `document.xml` whole
+  and parses it, to show what streaming saves.
+* `--bench import` (`src/app/BenchImport.cpp`) uploads a long Markdown file
+  (8 MiB, 83,057 lines) and a long Word file (40,000 paragraphs, written by
+  `fixtures::makeUploadSet`), each through `AppController::uploadFiles` as
+  the dialog does, and measures time to an editable tab, worker and
+  main-thread time, peak footprint growth, idle with the page shown, and
+  the footprint after its tab is closed.
+
+### Measured (M1 MacBook Air 8 GB, macOS 26.6.2, Release, on battery, 2026-11-09)
+
+Raw runs and provenance: `bench/results/import-2026-11-09/`; two runs, both
+listed.
+
+| Measure | Markdown, 8 MiB (83,057 lines) | Word, 40,000 paragraphs (40,800 lines) |
+|---|---|---|
+| Upload → the new tab's page editable | 1145 / 1106 ms | 968 / 919 ms |
+| Conversion on the import worker | 210 / 212 ms | 560 / 516 ms |
+| Main thread: create the page, queue its save | 1.1 / 0.8 ms | 0.4 / 1.2 ms |
+| Building the editor's document for the page (any page that size) | 511 / 504 ms | 143 / 139 ms |
+| Peak footprint growth, upload → page shown | +183 / +154 MB | +51 / +51 MB |
+| Idle with the page shown: footprint | 174 / 144 MB | 118 / 115 MB |
+| Idle with the page shown: CPU, wakeups | 0.14 / 0.10 %, 4.4 / 4.5 per s | 0.07 / 0.08 %, 4.3 / 4.3 per s |
+| Its tab closed: sessions left, footprint 5–20 s later | 1 (the other tab's); 174–177 / 144–175 MB | 1; 115–118 MB |
+
+`folia_docprobe` on a Word file written by TextEdit (330 KB, `document.xml`
+42 MB inflated, 40,800 paragraphs): **1.26–1.28 s, +19–21 MB peak**
+streamed (most of it the 4.4 M characters of the page), against
+**+277 MB** to inflate `document.xml` whole and parse it (0.87–0.90 s,
+producing nothing). Three runs each.
+
+Reading it:
+
+* **The import itself is cheap on the main thread** (about 1 ms); the
+  worker's conversion runs beside typing. What the user waits for after
+  that is the editor building the page, the same cost as opening any page
+  of that size (the README's 10 MiB stress note).
+* **Streaming Word files bounds memory by the output**, not the document
+  (19 MB against 277 MB on the same file).
+* **Closing an imported page frees it, but the allocator keeps the memory.**
+  The page's session is gone (one session left: the other tab's), and
+  `malloc_zone_pressure_relief` hands back 0 bytes; the footprint stays
+  where it was with the page shown until later allocations reuse it (the
+  Word page opened next showed 115–118 MB, below the Markdown page's
+  144–177 MB). In one run it rose by 31 MB 10 s after the close, with no
+  allocation by Folia in between, so macOS's own accounting moves these
+  numbers by tens of MB. This is how the editor behaves after any page this
+  large; returning that memory needs an allocator change, measured on its
+  own.
 
 ## 7. Caveats
 

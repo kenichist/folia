@@ -1,0 +1,272 @@
+{
+    "counters": {
+        "attachment_gc_deleted": 0,
+        "attachment_imports": 0,
+        "block_height_estimates": 247688,
+        "blocks_laid_out": 28,
+        "bytes_copied_for_save": 0,
+        "doc_cache_bytes": 33995188,
+        "doc_cache_entries": 1,
+        "highlight_lines": 1,
+        "highlight_state_steps": 0,
+        "image_cache_hits": 0,
+        "image_decodes": 0,
+        "lua_errors": 0,
+        "lua_invocations": 5,
+        "lua_renders": 3,
+        "media_budget_bytes": 134217728,
+        "media_budget_waits": 0,
+        "media_cache_bytes": 0,
+        "media_cpu_us_discarded": 0,
+        "media_jobs_discarded": 0,
+        "media_jobs_dropped_queued": 0,
+        "media_reserved_bytes": 0,
+        "media_too_large": 0,
+        "paint_events": 14,
+        "pdf_cache_hits": 0,
+        "pdf_renders": 0,
+        "pdf_resize_settles": 0,
+        "pdf_tiles": 0,
+        "preview_cache_bytes": 0,
+        "preview_cache_hits": 0,
+        "preview_cancelled": 0,
+        "preview_outstanding": 0,
+        "preview_renders": 0,
+        "preview_requests": 0,
+        "preview_stale_drops": 0,
+        "save_snapshot_full_walks": 0,
+        "save_snapshots": 0,
+        "widgets_created": 22,
+        "widgets_reused": 44
+    },
+    "docx_after_relief_footprint_bytes": 118295360,
+    "docx_blocks": 40800,
+    "docx_closed_doc_cache_entries": 1,
+    "docx_closed_footprint_bytes": 118360896,
+    "docx_closed_sessions_alive": 1,
+    "docx_peak_growth_bytes": 51265536,
+    "docx_relief_released_bytes": 0,
+    "docx_relief_us": 36,
+    "docx_shown_footprint_bytes": 118131520,
+    "docx_shown_idle_cpu_percent": 0.0741953015278309,
+    "docx_shown_idle_wakeups_per_s": 4.299824298429606,
+    "editor_painter_clip": false,
+    "env": {
+        "arch": "arm64",
+        "args": {
+        },
+        "device_pixel_ratio": 2,
+        "folia": "0.2.0",
+        "input_path": "synthetic Qt events via QApplication::sendEvent (bypasses the OS HID/IME path)",
+        "kernel": "25.6.0",
+        "malloc_large_cache": "0",
+        "math_renderer": true,
+        "os": "macOS 26.6.2",
+        "os_file_cache": "not purged (warm after first touch); purging needs root",
+        "power_mode": "normal-power-mode",
+        "preset": "Default",
+        "qt": "6.12.0",
+        "thermal_state": "nominal",
+        "time": "2026-11-09T11:36:43",
+        "window_size": "1180x759"
+    },
+    "exec_to_main_ms": 143.787,
+    "markdown_after_relief_footprint_bytes": 176589696,
+    "markdown_blocks": 83057,
+    "markdown_closed_doc_cache_entries": 1,
+    "markdown_closed_footprint_bytes": 174296000,
+    "markdown_closed_sessions_alive": 1,
+    "markdown_peak_growth_bytes": 183157184,
+    "markdown_relief_released_bytes": 0,
+    "markdown_relief_us": 49,
+    "markdown_shown_footprint_bytes": 174279616,
+    "markdown_shown_idle_cpu_percent": 0.13755947691530956,
+    "markdown_shown_idle_wakeups_per_s": 4.420644113151455,
+    "metrics": {
+        "commit_us": {
+            "samples": [
+                332144,
+                180732
+            ],
+            "unit": "us"
+        },
+        "document_import_main_us": {
+            "samples": [
+                1075,
+                352
+            ],
+            "unit": "us"
+        },
+        "document_import_worker_us": {
+            "samples": [
+                210232,
+                560358
+            ],
+            "unit": "us"
+        },
+        "docx_after_close_footprint": {
+            "samples": [
+                118164288,
+                118180672,
+                118360896,
+                118360896
+            ],
+            "unit": "bytes"
+        },
+        "docx_later_footprint": {
+            "samples": [
+                118360896,
+                118360896,
+                118295360,
+                118295360
+            ],
+            "unit": "bytes"
+        },
+        "docx_upload_to_editable_us": {
+            "samples": [
+                967625.292
+            ],
+            "unit": "us"
+        },
+        "editor_paint_us": {
+            "samples": [
+                38,
+                14192,
+                2637,
+                2394,
+                2327,
+                1908,
+                1862,
+                2093,
+                2192,
+                2541,
+                2725,
+                2379
+            ],
+            "unit": "us"
+        },
+        "markdown_after_close_footprint": {
+            "samples": [
+                174296000,
+                174296000,
+                174296000,
+                174296000
+            ],
+            "unit": "bytes"
+        },
+        "markdown_later_footprint": {
+            "samples": [
+                176737216,
+                176688064,
+                176638912,
+                176589696
+            ],
+            "unit": "bytes"
+        },
+        "markdown_upload_to_editable_us": {
+            "samples": [
+                1144942.917
+            ],
+            "unit": "us"
+        },
+        "open_to_paint_us": {
+            "samples": [
+                570978
+            ],
+            "unit": "us"
+        },
+        "open_uncached_activate_us": {
+            "samples": [
+                551939,
+                165959
+            ],
+            "unit": "us"
+        },
+        "session_build_us": {
+            "samples": [
+                511042,
+                143324
+            ],
+            "unit": "us"
+        },
+        "shell_load_us": {
+            "samples": [
+                24014
+            ],
+            "unit": "us"
+        },
+        "shell_reconcile_us": {
+            "samples": [
+                15440,
+                206,
+                243
+            ],
+            "unit": "us"
+        },
+        "shell_render_us": {
+            "samples": [
+                335,
+                396
+            ],
+            "unit": "us"
+        },
+        "theme_editor_us": {
+            "samples": [
+                20
+            ],
+            "unit": "us"
+        },
+        "theme_palette_us": {
+            "samples": [
+                25
+            ],
+            "unit": "us"
+        },
+        "theme_scheme_us": {
+            "samples": [
+                7601
+            ],
+            "unit": "us"
+        },
+        "tree_expand_main_us": {
+            "samples": [
+                0,
+                26,
+                18,
+                68,
+                83
+            ],
+            "unit": "us"
+        },
+        "tree_expand_total_us": {
+            "samples": [
+                346208,
+                301,
+                16207,
+                266,
+                16679
+            ],
+            "unit": "us"
+        }
+    },
+    "notes": [
+    ],
+    "process": {
+        "doc_cache_bytes_est": 33995188,
+        "doc_cache_entries": 1,
+        "footprint_bytes": 118295360,
+        "footprint_counter": "task_vm_info.phys_footprint",
+        "idle_wakeups": 14,
+        "interrupt_wakeups": 572,
+        "laid_out_blocks": 1,
+        "lua_bytes": 49371,
+        "peak_footprint_bytes": 227855232,
+        "preview_cache_bytes": 0,
+        "resident_bytes": 95649792,
+        "system_s": 0.6448930833333333,
+        "threads": 5,
+        "user_s": 2.361207833333333
+    },
+    "scenario": "import",
+    "window_exposed_and_active_ratio": 0
+}

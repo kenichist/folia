@@ -179,6 +179,17 @@ were not re-run.
 | Launch → editable ordinary page | 375–404 ms (4 warm launches); 1406 ms for the first launch after a rebuild. Footprint 2 s later: 80.0–80.5 MB | kernel process start (`p_starttime`) to end of the first editor paint; `phys_footprint` | 2026-11-05 |
 | 500 page switches in 5 batches of 100 | footprint after each batch: 107.2 → 110.0 → 110.5 → 110.6 → 110.7 MB, a plateau; document cache 3.7 MB of its 48 MiB cap. Thermal state fair | `phys_footprint` after settling | 2026-11-04 |
 
+Tabs (`--bench tabs`, 2026-11-09): opening 29 pages in background tabs
+loads none of them and costs 13–26 µs each on the main thread; idle with 30
+tabs matches idle with one (73.4 MB, 0.06–0.08% of a core, 4.2–4.3
+wakeups/s). A switch costs one shell render and, for a page outside the
+16-page cache, 2.3–5.1 ms (median) to load it. Uploads (`--bench import`):
+the main thread spends about 1 ms per file; converting an 8 MiB Markdown
+file takes 0.21 s and a 40,000-paragraph Word file 0.52–0.56 s on the import
+worker, and a Word file is streamed, peaking at +19 MB where reading it
+whole would take +277 MB. See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)
+§6d–6e.
+
 Settings (`--bench settings`): nothing while closed; first open about 80 ms,
 reopening 36 ms; +3.5 MB while open and +6.6 MB kept after the first open,
 with no growth over 30 opens; a text-size change takes under 1 ms of

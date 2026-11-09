@@ -33,4 +33,12 @@ struct PdfSet {
 };
 PdfSet makePdfSet(const QString &dir);
 
+// Upload fixtures (docs/ATTACHMENTS.md §8): a long Markdown file of
+// `markdownMiB` MiB and a Word file of `docxParagraphs` paragraphs.
+struct UploadSet {
+    QString markdown;
+    QString docx;
+};
+UploadSet makeUploadSet(const QString &dir, int markdownMiB, int docxParagraphs);
+
 } // namespace folia::fixtures
