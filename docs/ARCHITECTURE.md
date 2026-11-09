@@ -194,8 +194,11 @@ See `presets/REFERENCE.md` (the language reference shipped with the presets).
   page's stored selection. So a switch costs what opening a page costs (one
   Lua render, for the page change), and adding, closing or reordering
   background tabs costs no render and no page load. Closing a tab frees its
-  page from the cache at once when no other tab shows it and nothing is left
-  to save. The list is saved in one setting (`tabs.state`) through the
+  page from the cache when no other tab shows it and nothing is left to
+  save: at once, or as soon as the next tab's page is shown if it was still
+  loading. Only an empty workspace has a tab with no page; a page opened in
+  the foreground (an upload, "+") goes into that tab instead of a new one,
+  and closing a tab beside it leaves the editor with no page. The list is saved in one setting (`tabs.state`) through the
   coalesced preferences write (300 ms), and restored with one query
   (`Store::pagesMeta`) that also drops tabs whose pages were trashed;
   `app.last_page` picks the active tab. `ui.tabs{}` places the one

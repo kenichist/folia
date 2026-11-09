@@ -1038,7 +1038,7 @@ Reading it:
   window (one frame, 16.7 ms); the faster run is the painted one.
 * The footprints after closing differ by variant more than within one
   (77–78 against 90–91 MB). Every closed page was freed (one page left in the
-  cache); what stays is the allocator's (see §6e).
+  cache).
 
 ## 6e. Uploads (Word, Markdown and text)
 
@@ -1069,7 +1069,7 @@ listed.
 | Peak footprint growth, upload → page shown | +183 / +154 MB | +51 / +51 MB |
 | Idle with the page shown: footprint | 174 / 144 MB | 118 / 115 MB |
 | Idle with the page shown: CPU, wakeups | 0.14 / 0.10 %, 4.4 / 4.5 per s | 0.07 / 0.08 %, 4.3 / 4.3 per s |
-| Its tab closed: sessions left, footprint 5–20 s later | 1 (the other tab's); 174–177 / 144–175 MB | 1; 115–118 MB |
+| Its tab closed: sessions left, footprint 5–20 s later (not freed: see below) | 1 (its own); 174–177 / 144–175 MB | 1 (its own); 115–118 MB |
 
 `folia_docprobe` on a Word file written by TextEdit (330 KB, `document.xml`
 42 MB inflated, 40,800 paragraphs): **1.26–1.28 s, +19–21 MB peak**
@@ -1085,16 +1085,16 @@ Reading it:
   of that size (the README's 10 MiB stress note).
 * **Streaming Word files bounds memory by the output**, not the document
   (19 MB against 277 MB on the same file).
-* **Closing an imported page frees it, but the allocator keeps the memory.**
-  The page's session is gone (one session left: the other tab's), and
-  `malloc_zone_pressure_relief` hands back 0 bytes; the footprint stays
-  where it was with the page shown until later allocations reuse it (the
-  Word page opened next showed 115–118 MB, below the Markdown page's
-  144–177 MB). In one run it rose by 31 MB 10 s after the close, with no
-  allocation by Folia in between, so macOS's own accounting moves these
-  numbers by tens of MB. This is how the editor behaves after any page this
-  large; returning that memory needs an allocator change, measured on its
-  own.
+* **In these runs, closing the upload's tab did not free its page.** The
+  bench's fresh home left the first tab without a page, and closing a tab
+  beside an empty one kept the closed page shown and alive: the one session
+  left was its own (`heap` still listed its 83,057 lines after the close),
+  and `malloc_zone_pressure_relief` had nothing to hand back. That was a bug
+  in closing tabs, fixed since: the editor now shows no page there and the
+  closed page leaves the cache, an upload into an empty workspace fills the
+  empty tab, and a closed page whose neighbour was still loading is freed
+  once that page is shown. The bench now gives the first tab a page of its
+  own; the closed-tab row above predates the fix.
 
 ## 7. Caveats
 

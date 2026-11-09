@@ -8,6 +8,7 @@
 #include "editor/EditorPane.h"
 #include "editor/NoteEditor.h"
 #include "shell/CommandRegistry.h"
+#include "shell/DataContext.h"
 #include "storage/Store.h"
 
 #include <QApplication>
@@ -26,10 +27,12 @@ const bool s_offscreen = [] {
     return true;
 }();
 
-std::unique_ptr<AppController> launch(const QString &home)
+// seed=false: an empty workspace, whose one tab has no page.
+std::unique_ptr<AppController> launch(const QString &home, bool seed = true)
 {
     AppController::Options o;
     o.homeDir = home;
+    o.seedIfEmpty = seed;
     auto ctl = std::make_unique<AppController>(o);
     QString err;
     if (!ctl->start(&err))
@@ -220,6 +223,77 @@ private slots:
         QVERIFY(run(app.get(), "tab.reopen").ok);
         QTRY_COMPARE(app->currentPage(), page);
         QCOMPARE(app->tabs().count(), 2);
+    }
+
+    // A closed tab whose neighbour's page was still loading stays shown
+    // until that page is up; it must leave the cache then.
+    void aClosedPageGoesOnceTheNextPageIsShown()
+    {
+        QTemporaryDir dir;
+        auto app = launch(dir.path());
+        QTRY_VERIFY(app->activeSession());
+        const PageId first = app->currentPage();
+        const PageId next = storedPage(app.get(), QStringLiteral("Next"));
+        app->openInNewTab(next, true);
+        QTest::qWait(50);
+        QVERIFY(!app->sessionCached(next));
+        QVERIFY(app->closeTab(0)); // the shown tab: Next is loaded now
+        QCOMPARE(app->currentPage(), first);
+        QTRY_COMPARE(app->currentPage(), next);
+        QVERIFY(!app->sessionCached(first));
+        QCOMPARE(app->docCacheEntries(), 1);
+    }
+
+    // An empty workspace has one tab with no page. A page opened in the
+    // foreground goes into it, as Chrome replaces its New Tab page.
+    void anEmptyTabTakesTheNextPage()
+    {
+        QTemporaryDir dir;
+        auto app = launch(dir.path(), false);
+        QTest::qWait(50);
+        QCOMPARE(tabPages(app.get()), QVector<PageId>({0}));
+        QVERIFY(!app->activeSession());
+        const PageId a = storedPage(app.get(), QStringLiteral("A"));
+        QCOMPARE(app->openInNewTab(a, false), 0);
+        QTRY_COMPARE(app->currentPage(), a);
+        QCOMPARE(tabPages(app.get()), QVector<PageId>({a}));
+        QVERIFY(app->tabs().current().back.isEmpty()); // the empty tab is no history
+    }
+
+    void newTabFillsAnEmptyTab()
+    {
+        QTemporaryDir dir;
+        auto app = launch(dir.path(), false);
+        QTest::qWait(50);
+        QVERIFY(run(app.get(), "tab.new").ok);
+        QCOMPARE(app->tabs().count(), 1);
+        QVERIFY(app->tabs().current().page > 0);
+        QCOMPARE(app->currentPage(), app->tabs().current().page);
+    }
+
+    // Closing the shown tab beside an empty one: the editor shows no page
+    // (it used to keep showing the closed page, which stayed in memory).
+    void closingBesideAnEmptyTabFreesThePage()
+    {
+        QTemporaryDir dir;
+        auto app = launch(dir.path(), false);
+        QTest::qWait(50);
+        const PageId a = storedPage(app.get(), QStringLiteral("A"));
+        app->openInNewTab(a, true); // in the background: a tab of its own
+        QCOMPARE(tabPages(app.get()), QVector<PageId>({0, a}));
+        app->activateTab(1);
+        QTRY_COMPARE(app->currentPage(), a);
+        QVERIFY(app->closeTab(1));
+        QCOMPARE(tabPages(app.get()), QVector<PageId>({0}));
+        QCOMPARE(app->currentPage(), 0);
+        QVERIFY(!app->editorPane()->session());
+        QCOMPARE(app->data()->currentPage(), 0);
+        QVERIFY(!app->sessionCached(a));
+        QCOMPARE(app->docCacheEntries(), 0);
+        // Reopening shows it again.
+        QVERIFY(run(app.get(), "tab.reopen").ok);
+        QTRY_COMPARE(app->currentPage(), a);
+        QCOMPARE(app->editorPane()->session(), app->activeSession());
     }
 
     // The default layout's keys work while typing in the note: the editor

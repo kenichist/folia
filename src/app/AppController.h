@@ -90,8 +90,11 @@ public:
     const TabList &tabs() const { return m_tabs; }
     void activateTab(int index);
     // A new tab showing `id` after the current one; shown unless `background`.
+    // When the current tab is empty (an empty workspace has one), a shown
+    // page goes into it instead, as Chrome replaces its New Tab page.
     int openInNewTab(PageId id, bool background);
-    // "+": a new Untitled page in a new tab, its title ready to type.
+    // "+": a new Untitled page in a new tab (or in the current tab when it
+    // is empty), its title ready to type.
     PageId newTab();
     // Closes a tab (never the last one). A page no other tab shows, with
     // nothing left to save, leaves the document cache at once.
@@ -191,6 +194,9 @@ private:
     // (or the first page) if its own page is gone.
     void pruneTabs(PageId fallback);
     void evictIfUnused(PageId id);
+    // The current tab has no page (an empty workspace): the editor shows
+    // none, so the page it showed can leave the cache.
+    void showNoPage();
     // Pushes the tab list and titles to the strip (it ignores no-op updates).
     void syncTabStrip();
     QString tabTitle(PageId id);
@@ -237,6 +243,9 @@ private:
     TabList m_tabs;
     quint32 m_bgOpenerUid = 0; // tab that background tabs were last opened from
     int m_bgOpened = 0;        // how many, so the next one goes after them
+    // A closed tab's page that was still shown while the next tab's page
+    // loaded: evicted once that page is shown (see closeTab).
+    PageId m_evictWhenShown = 0;
     bool m_navigatingHistory = false;
     QElapsedTimer m_openClock;
     PageId m_openTarget = 0;

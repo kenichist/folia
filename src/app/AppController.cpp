@@ -972,6 +972,8 @@ void AppController::activate(PageSession *s, qint64 startedNs, bool cached, bool
     });
     updateStatus();
     evictCache();
+    if (m_evictWhenShown)
+        evictIfUnused(std::exchange(m_evictWhenShown, 0));
 }
 
 PageId AppController::newPage(PageId parent, int index, const QString &title, bool focusTitle)
@@ -1079,6 +1081,10 @@ int AppController::openInNewTab(PageId id, bool background)
 {
     if (id <= 0)
         return -1;
+    if (!background && m_tabs.current().page <= 0) {
+        openPage(id); // the empty tab shows it (an empty page is no history)
+        return m_tabs.activeIndex();
+    }
     // Background tabs opened one after another from the same tab line up in
     // the order they were opened, right of it (as in Chrome).
     const quint32 opener = m_tabs.current().uid;
@@ -1102,6 +1108,8 @@ int AppController::openInNewTab(PageId id, bool background)
 
 PageId AppController::newTab()
 {
+    if (m_tabs.current().page <= 0)
+        return newPage(0, -1, QString(), true); // the empty tab takes it
     // "+" and Mod+T add the tab at the end, as in Chrome.
     const int at = m_tabs.insert(-1, 0);
     if (at < 0) {
@@ -1123,13 +1131,36 @@ bool AppController::closeTab(int index)
     m_tabs.close(index);
     m_bgOpenerUid = 0;
     tabsEdited();
-    if (wasActive && m_tabs.current().page > 0) {
-        m_navigatingHistory = true;
-        openPage(m_tabs.current().page);
-        m_navigatingHistory = false;
+    if (wasActive) {
+        if (m_tabs.current().page > 0) {
+            m_navigatingHistory = true;
+            openPage(m_tabs.current().page);
+            m_navigatingHistory = false;
+        } else {
+            showNoPage();
+        }
     }
-    evictIfUnused(page);
+    // While the next tab's page loads, the closed one is still shown (and
+    // so kept): it goes once the other page is up, in activate().
+    if (m_active && m_active->pageId() == page)
+        m_evictWhenShown = page;
+    else
+        evictIfUnused(page);
     return true;
+}
+
+void AppController::showNoPage()
+{
+    m_pendingOpen = 0;
+    if (!m_active)
+        return;
+    m_pane->editor()->storeViewState();
+    flushSaves();
+    m_active = nullptr;
+    m_pane->setSession(nullptr);
+    m_data->setCurrent(0, {});
+    updateWindowTitle();
+    updateStatus();
 }
 
 bool AppController::reopenClosedTab()

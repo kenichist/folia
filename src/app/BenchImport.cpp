@@ -41,6 +41,18 @@ void BenchDriver::scenarioImport()
     platform::setAppNapAllowed(false);
     NoteEditor *ed = m_app->editorPane()->editor();
     instr::setSamplingEnabled(true);
+    // The first tab gets a small page of its own, as a user's would. A fresh
+    // home has an empty tab, which an upload would fill instead of opening a
+    // new tab (and §6e's first runs closed the upload's tab beside it).
+    if (!m_app->activeSession() || m_app->tabs().current().page <= 0) {
+        QTimer::singleShot(0, m_app, [this] { m_app->newPage(0, -1, QStringLiteral("Before the upload"), false); });
+        const bool created = waitFor([&] {
+            PageSession *s = m_app->activeSession();
+            return s && m_app->tabs().current().page == s->pageId() && ed->session() == s && !ed->isReadOnly()
+                && !s->isUncommitted() && !s->hasUnsnapshotted();
+        }, 10000);
+        m_extra.insert(QStringLiteral("first_page_created"), created);
+    }
 
     for (const auto &[kind, file] : {std::pair{QStringLiteral("markdown"), set.markdown},
                                      std::pair{QStringLiteral("docx"), set.docx}}) {
