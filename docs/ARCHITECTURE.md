@@ -203,8 +203,10 @@ See `presets/REFERENCE.md` (the language reference shipped with the presets).
   (`Store::pagesMeta`) that also drops tabs whose pages were trashed;
   `app.last_page` picks the active tab. `ui.tabs{}` places the one
   `TabStrip`: a single custom-painted widget (no child widget per tab, no
-  style sheet, no timers), parked like the editor when a layout leaves it
-  out. Hover repaints the tabs involved; elided titles are cached per tab;
+  style sheet, no timers), never deleted. A layout without `ui.tabs{}`
+  (an edited copy from before tabs, say) gets it anyway: `ShellHost::apply`
+  wraps the editor node in a column with the strip above it, unless the
+  layout says `ui.tabs{ visible = false }`. Hover repaints the tabs involved; elided titles are cached per tab;
   an unchanged render or tab list does not repaint it. Tab titles are kept
   by the app for the pages tabs show, since the shared title cache is
   cleared when it fills.

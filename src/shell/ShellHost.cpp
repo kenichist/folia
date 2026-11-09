@@ -1284,11 +1284,61 @@ static void assignKeys(UiNode &n, const QString &parentKey, int index)
         assignKeys(n.children[i], n.key, i);
 }
 
+namespace {
+
+bool hasNodeOfType(const UiNode &n, const QString &type)
+{
+    if (n.type == type)
+        return true;
+    for (const UiNode &c : n.children)
+        if (hasNodeOfType(c, type))
+            return true;
+    return false;
+}
+
+// Wraps the editor node in a column with ui.tabs{} above it. The column
+// takes the editor's place: its size props move over, and it shows and
+// hides with it.
+bool wrapEditorWithTabs(UiNode &n)
+{
+    if (n.type != QLatin1String("editor")) {
+        for (UiNode &c : n.children)
+            if (wrapEditorWithTabs(c))
+                return true;
+        return false;
+    }
+    UiNode column;
+    column.type = QStringLiteral("column");
+    column.props.insert(QStringLiteral("style.grow"), 1); // as the editor grows by default
+    static const char *const kSize[] = {"grow", "style.grow", "width", "style.width", "min_width", "style.min_width",
+                                        "max_width", "style.max_width", "height", "style.height"};
+    for (const char *k : kSize) {
+        const QString key = QString::fromLatin1(k);
+        if (n.props.contains(key))
+            column.props.insert(key, n.props.take(key));
+    }
+    if (n.props.contains(QStringLiteral("visible")))
+        column.props.insert(QStringLiteral("visible"), n.props.value(QStringLiteral("visible")));
+    UiNode strip;
+    strip.type = QStringLiteral("tabs");
+    column.children.push_back(std::move(strip));
+    column.children.push_back(std::move(n));
+    n = std::move(column);
+    return true;
+}
+
+} // namespace
+
 void ShellHost::apply(const UiNode &rootIn)
 {
     QElapsedTimer t;
     t.start();
     UiNode root = rootIn;
+    // A layout without ui.tabs{} (an edited copy from before tabs, say)
+    // still shows the note tabs: the strip goes directly above the editor.
+    // A layout that wants none says ui.tabs{ visible = false }.
+    if (m_d.tabs && !hasNodeOfType(root, QStringLiteral("tabs")))
+        wrapEditorWithTabs(root);
     assignKeys(root, QStringLiteral("root"), 0);
     QPointer<QWidget> focused = QApplication::focusWidget();
     // The slot holds the editor and, in a split, the PDF tab: whichever had

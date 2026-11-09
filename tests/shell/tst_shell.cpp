@@ -1295,15 +1295,36 @@ private slots:
         QTest::qWait(1);
         QVERIFY(strip);
         QCOMPARE(h.host->widgetById(QStringLiteral("main")), strip->parentWidget());
-        // A layout without it parks it (hidden), never deletes it.
-        QVERIFY2(h.load("return { version = 1, view = function() return ui.column{ ui.editor{} } end }", &err),
-                 qPrintable(err));
+        // A layout without one still shows it: directly above the editor, in
+        // a column that takes the editor's place (and its width).
+        const char *withoutTabs = "return { version = 1, view = function() return ui.row{ id = 'main', "
+                                  "ui.text{ text = 'side' }, ui.editor{ style = { width = 400 } } } end }";
+        QVERIFY2(h.load(withoutTabs, &err), qPrintable(err));
         QTest::qWait(1);
-        QVERIFY(strip);
-        QVERIFY(!strip->isVisible());
+        QVERIFY(strip && strip->isVisible());
+        QPointer<QWidget> column = strip->parentWidget();
+        QVERIFY(column && column != h.host->widgetById(QStringLiteral("main")));
+        QCOMPARE(column->parentWidget(), h.host->widgetById(QStringLiteral("main")));
+        QCOMPARE(h.pane->parentWidget(), column.data());
+        QTRY_COMPARE(column->width(), 400);
+        QTRY_VERIFY(strip->geometry().bottom() < h.pane->geometry().top());
+        QVERIFY(h.host->warnings().isEmpty());
+        // Re-renders keep the same column and strip.
+        for (int i = 0; i < 3; ++i)
+            QVERIFY(h.host->renderNow(&err));
+        QTest::qWait(1);
+        QCOMPARE(strip->parentWidget(), column.data());
+        QCOMPARE(h.pane->parentWidget(), column.data());
+        // The editor's visibility carries over to the strip.
+        QVERIFY2(h.load("return { version = 1, view = function() return ui.column{ ui.text{ text = 'x' }, "
+                        "ui.editor{ visible = false } } end }", &err), qPrintable(err));
+        QTest::qWait(1);
+        QVERIFY(strip && !strip->isVisible());
         QVERIFY2(h.load(withTabs, &err), qPrintable(err));
         QVERIFY(strip && strip->isVisible());
-        // visible = false, and auto_hide with a single tab.
+        QCOMPARE(h.host->widgetById(QStringLiteral("main")), strip->parentWidget());
+        // visible = false (a layout that wants no strip), and auto_hide with a
+        // single tab.
         QVERIFY2(h.load("return { version = 1, view = function() return ui.column{ ui.tabs{ visible = false }, "
                         "ui.editor{} } end }", &err), qPrintable(err));
         QVERIFY(!strip->isVisible());
@@ -1330,6 +1351,10 @@ private slots:
         QVERIFY2(h.load("return { version = 1, view = function() return ui.column{ ui.tabs{}, ui.editor{} } end }",
                         &err), qPrintable(err));
         QVERIFY(h.host->warnings().isEmpty());
+        // No strip, no fallback: the editor stays where the layout put it.
+        QVERIFY2(h.load("return { version = 1, view = function() return ui.column{ id = 'main', ui.editor{} } end }",
+                        &err), qPrintable(err));
+        QCOMPARE(h.pane->parentWidget(), h.host->widgetById(QStringLiteral("main")));
     }
 
     void unchangedRenderLeavesTheStripAlone()

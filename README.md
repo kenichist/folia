@@ -59,7 +59,7 @@ Every release includes `SHA256SUMS.txt` to verify the downloads.
 Nested pages with breadcrumbs, child-page links, collapse and expand, move, reorder and indent, title jump (Mod+P) and back/forward. Hover a page in the sidebar to add a page inside it or delete it.
 
 ### 🗂️ Tabs
-Keep several notes open in tabs, like a browser: **+** or Mod+T for a new page in a new tab, Mod-click or middle-click a page in the sidebar to open it in the background, Mod+W to close, Mod+Shift+T to reopen, Ctrl+Tab and Mod+1…9 to switch, drag to reorder. Each tab has its own back/forward history, and your tabs come back when Folia starts. Tabs you aren't looking at aren't loaded, so they cost almost nothing.
+Keep several notes open in tabs, like a browser: **+** or Mod+T for a new page in a new tab, Mod-click or middle-click a page in the sidebar to open it in the background, Mod+W to close, Mod+Shift+T to reopen, Ctrl+Tab and Mod+1…9 to switch, drag to reorder. Each tab has its own back/forward history, and your tabs come back when Folia starts. Tabs you aren't looking at aren't loaded, so they cost almost nothing. A layout you edited before tabs existed shows them too, above the note.
 
 ### ✍️ Editing
 Native text editing with IME support, undo/redo and full keyboard navigation. Autosave commits within one second, and **Saved** appears only once your change is on disk.

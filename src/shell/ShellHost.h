@@ -60,8 +60,9 @@ public:
         // the PDF tab; focus, IME and title handling still target `editor`.
         QWidget *editorSlot = nullptr;
         // The note tab strip (a TabStrip) placed where the layout says
-        // ui.tabs{}; parked, never deleted, when the layout has none. Null:
-        // ui.tabs{} is an empty slot.
+        // ui.tabs{}. A layout without one gets it directly above the editor
+        // (ui.tabs{ visible = false } hides it); never deleted. Null:
+        // ui.tabs{} is an empty slot, and there is no fallback.
         QWidget *tabs = nullptr;
     };
     struct Limits {
