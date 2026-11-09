@@ -51,7 +51,10 @@ public:
     void relayoutAll();
     void relayoutBlock(const QTextBlock &block);
     // Document position of the caret. Inline $…$ formulas are drawn rendered
-    // in place except the one the caret touches, which shows its source.
+    // in place except the one the caret touches, which shows its source; the
+    // same goes for markup delimiters (**, _, `, $, ``` and $$ fences), which
+    // are hidden except in the span or fence line the caret touches, and
+    // heading #s, which show while the caret is on their line.
     void setCaret(int position);
     // Viewport (document coordinates) used to decide what to keep laid out.
     void setViewport(qreal top, qreal bottom);
@@ -116,7 +119,9 @@ private:
     qreal topOf(int number) const;
     void setHeight(int number, float h) const;
     void evictFarBlocks(int firstVisible, int lastVisible);
-    void applyFormats(const QTextBlock &block, LineRole role, QTextLayout *layout) const;
+    // Returns true for a fence line (``` / $$ alone) whose markers are hidden:
+    // it is laid out as a sliver instead of a full line.
+    bool applyFormats(const QTextBlock &block, LineRole role, QTextLayout *layout) const;
     void requestPreview(const QTextBlock &block, BlockData *data, LineRole role) const;
     std::shared_ptr<const MathDisplayList> inlineFormula(const QString &source, qreal pointSize, bool *pending) const;
     void inlineFormulaArrived(quint64 key);

@@ -637,6 +637,124 @@ private slots:
 #endif
     }
 
+    void markupDelimitersHideAwayFromCaret()
+    {
+        EditorContext ctx;
+        BlockId next = 1;
+        PageSession ses(32, &ctx, [&next] { return next++; });
+        ses.initNew(0, QStringLiteral("Markup"));
+        NoteEditor ed(&ctx);
+        ed.resize(760, 420);
+        ed.show();
+        ed.setSession(&ses);
+        const QString line = QStringLiteral("a **bold** and _it_ and `code` and $x^2$ end");
+        QTextCursor c(ses.document());
+        c.insertText(line + QStringLiteral("\n```py\nx = 1\n```\n$$\nx^2\n$$\n## Head **b**\nlast"));
+        QTextCursor away(ses.document());
+        away.movePosition(QTextCursor::End);
+        ed.setTextCursor(away);
+        ed.viewport()->repaint();
+        QTextDocument *doc = ses.document();
+        const QTextBlock b = doc->firstBlock();
+        VirtualLayout *vl = ses.layout();
+        auto markup = [&]() { return PageSession::dataOf(b)->markup.get(); };
+        auto width = [&](int from, int to) {
+            vl->blockBoundingRect(b); // laid out
+            const QTextLine l = b.layout()->lineForTextPosition(from);
+            return l.cursorToX(to) - l.cursorToX(from);
+        };
+        const int bold = int(line.indexOf(QLatin1String("**")));
+        const int it = int(line.indexOf(QLatin1Char('_')));
+        const int code = int(line.indexOf(QLatin1Char('`')));
+        const int math = int(line.indexOf(QLatin1Char('$')));
+
+        // Away from the caret the delimiters take no room (inline code keeps a
+        // little background); the text itself never changes.
+        QVERIFY(markup());
+        QCOMPARE(int(markup()->spans.size()), 3);
+        QCOMPARE(markup()->revealed, -1);
+        QCOMPARE(b.text(), line);
+        QVERIFY2(qAbs(width(bold, bold + 2)) < 0.5, qPrintable(QString::number(width(bold, bold + 2))));
+        QVERIFY(qAbs(width(bold + 6, bold + 8)) < 0.5);
+        QVERIFY(qAbs(width(it, it + 1)) < 0.5);
+        QVERIFY(qAbs(width(it + 3, it + 4)) < 0.5);
+        QVERIFY(qAbs(width(code, code + 1) - 3) < 0.5);
+        QVERIFY(qAbs(width(math, math + 1)) < 0.5); // not rendered here: source without its `$`s
+
+        // The caret in a span shows that span's delimiters only.
+        QTextCursor in(doc);
+        in.setPosition(b.position() + bold + 4);
+        ed.setTextCursor(in);
+        QCOMPARE(markup()->revealed, 0);
+        QVERIFY(width(bold, bold + 2) > 3);
+        QVERIFY(qAbs(width(it, it + 1)) < 0.5);
+        in.setPosition(b.position() + math + 2);
+        ed.setTextCursor(in);
+        QCOMPARE(markup()->revealed, -1);
+        QVERIFY(qAbs(width(bold, bold + 2)) < 0.5);
+        QVERIFY(width(math, math + 1) > 3);
+        ed.setTextCursor(away);
+        QVERIFY(qAbs(width(math, math + 1)) < 0.5);
+
+        // A click at a hidden delimiter never lands between its characters.
+        {
+            const QRectF br = vl->blockBoundingRect(b);
+            const QTextLine l = b.layout()->lineForTextPosition(bold);
+            const QPointF at(l.cursorToX(bold), br.top() + l.y() + l.height() / 2);
+            const int hit = vl->hitTest(at, Qt::FuzzyHit) - b.position();
+            QVERIFY2(hit == bold || hit == bold + 2, qPrintable(QString::number(hit)));
+        }
+
+        // Fences: the opener keeps its language as a label; a line holding only
+        // ``` or $$ shrinks to a sliver until the caret is on it.
+        const QTextBlock opener = doc->findBlockByNumber(1);
+        const QTextBlock closer = doc->findBlockByNumber(3);
+        const QTextBlock mathOpen = doc->findBlockByNumber(4);
+        QCOMPARE(opener.text(), QStringLiteral("```py"));
+        vl->blockBoundingRect(opener);
+        const QTextLine ol = opener.layout()->lineAt(0);
+        QVERIFY(qAbs(ol.cursorToX(3) - ol.cursorToX(0)) < 0.5);
+        QVERIFY(ol.cursorToX(5) - ol.cursorToX(3) > 5);
+        const qreal lineH = vl->blockBoundingRect(doc->findBlockByNumber(2)).height(); // a code line
+        for (const QTextBlock &fence : {closer, mathOpen}) {
+            const qreal sliver = vl->blockBoundingRect(fence).height();
+            ed.setTextCursor(QTextCursor(fence));
+            const qreal shown = vl->blockBoundingRect(fence).height();
+            QVERIFY2(shown - sliver > lineH / 2, qPrintable(QStringLiteral("%1 vs %2").arg(sliver).arg(shown)));
+            ed.setTextCursor(away);
+            QCOMPARE(vl->blockBoundingRect(fence).height(), sliver);
+        }
+
+        // Heading #s show while the caret is anywhere on the heading line,
+        // independently of the line's inline spans.
+        const QTextBlock head = doc->findBlockByNumber(7);
+        QCOMPARE(head.text(), QStringLiteral("## Head **b**"));
+        auto headWidth = [&](int from, int to) {
+            vl->blockBoundingRect(head);
+            const QTextLine l = head.layout()->lineAt(0);
+            return l.cursorToX(to) - l.cursorToX(from);
+        };
+        QVERIFY(qAbs(headWidth(0, 3)) < 0.5);
+        QVERIFY(qAbs(headWidth(8, 10)) < 0.5);
+        {
+            const QRectF br = vl->blockBoundingRect(head);
+            const QTextLine l = head.layout()->lineAt(0);
+            const QPointF at(l.cursorToX(0), br.top() + l.y() + l.height() / 2);
+            QCOMPARE(vl->hitTest(at, Qt::FuzzyHit) - head.position(), 3); // the heading text, not the #s
+        }
+        QTextCursor inHead(head);
+        inHead.setPosition(head.position() + 5);
+        ed.setTextCursor(inHead);
+        QVERIFY(headWidth(0, 3) > 5);
+        QVERIFY(qAbs(headWidth(8, 10)) < 0.5); // caret not in the bold span
+        inHead.setPosition(head.position() + 10);
+        ed.setTextCursor(inHead);
+        QVERIFY(headWidth(0, 3) > 5);
+        QVERIFY(headWidth(8, 10) > 3);
+        ed.setTextCursor(away);
+        QVERIFY(qAbs(headWidth(0, 3)) < 0.5);
+    }
+
     void layoutIsLazyOnHugeDocument()
     {
         Store s;

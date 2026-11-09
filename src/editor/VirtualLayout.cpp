@@ -43,6 +43,14 @@ constexpr qreal kPdfCardH = 132;   // a PDF line: first-page thumbnail, name, pa
 constexpr qreal kPdfPad = 10;
 constexpr qreal kPdfCardMaxW = 460;
 constexpr int kResizeSettleMs = 150; // decodes at a new width wait this long
+constexpr qreal kCodePad = 3;     // hidden backticks keep this much of the code background per side
+constexpr qreal kFenceSliver = 6; // height of a ``` / $$ line whose marker is hidden
+
+// Lines holding only a fence marker, laid out as a sliver while it is hidden.
+bool collapsibleFence(LineRole r)
+{
+    return r == LineRole::CodeClose || r == LineRole::MathOpen || r == LineRole::MathClose;
+}
 
 LineRole roleOf(const QTextBlock &b)
 {
@@ -332,7 +340,9 @@ float VirtualLayout::estimateHeight(const QTextBlock &block) const
     const qreal lw = qMax<qreal>(40, columnWidth() - 2 * indentFor(role));
     const qreal chars = qMax(0, block.length() - 1);
     const qreal lines = qMax<qreal>(1, std::ceil(chars * fm.averageCharWidth() / lw));
-    qreal h = topPadFor(block, role) + lines * fm.lineSpacing() * m_ctx->theme().lineSpacing
+    // A fence line is a sliver unless the caret is on it (and then it is laid out).
+    qreal h = topPadFor(block, role)
+        + (collapsibleFence(role) ? kFenceSliver : lines * fm.lineSpacing() * m_ctx->theme().lineSpacing)
         + bottomPadFor(role);
     if (role == LineRole::MathClose || role == LineRole::MathSingle) {
         BlockData *d = dataOf(block);
@@ -614,12 +624,13 @@ void VirtualLayout::documentChanged(int from, int charsRemoved, int charsAdded)
 }
 
 // ------------------------------------------------------------- formats ----
-void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLayout *tl) const
+bool VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLayout *tl) const
 {
     const EditorTheme &t = m_ctx->theme();
     const QString text = block.text();
+    BlockData *bd = dataOf(block);
     if (role != LineRole::Para) {
-        if (BlockData *bd = dataOf(block); bd && bd->inlineMath)
+        if (bd && bd->inlineMath)
             bd->inlineMath.reset(); // no longer a paragraph: no inline formulas
     }
     const int len = int(text.size());
@@ -633,29 +644,96 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
         r.format = marked(f);
         fmts.push_back(r);
     };
+    const QFont roleF = roleFont(block, role);
     QTextCharFormat base;
-    base.setFont(roleFont(block, role), QTextCharFormat::FontPropertiesAll);
+    base.setFont(roleF, QTextCharFormat::FontPropertiesAll);
     base.setForeground(t.text);
     add(0, len, base);
     QTextCharFormat dimF;
     dimF.setForeground(t.dim);
     QTextCharFormat mathF;
     mathF.setForeground(t.mathSource);
+    const int caretRel = (m_caret >= block.position() && m_caret < block.position() + block.length())
+        ? m_caret - block.position() : -2;
+
+    // Markup delimiters are hidden except in the span the caret touches (the
+    // first one, if it touches two). Hidden delimiters stay in the line, so
+    // positions, selection, undo and copy are unchanged: they are drawn
+    // transparent with letter spacing that cancels their advance.
+    MarkupState *ms = nullptr;
+    auto markupState = [&] {
+        if (!ms) {
+            if (!bd->markup)
+                bd->markup = std::make_unique<MarkupState>();
+            ms = bd->markup.get();
+            ms->spans.clear(); // keeps its capacity across relayouts
+            ms->revealed = -1;
+            ms->prefix = 0;
+            ms->prefixShown = false;
+        }
+        return ms;
+    };
+    auto revealSpan = [&](int start, int end, int open, int close) {
+        if (!bd)
+            return true; // no per-line state to follow the caret with: show the source
+        markupState();
+        const bool touched = ms->revealed < 0 && caretRel >= start && caretRel <= end;
+        if (touched)
+            ms->revealed = int(ms->spans.size());
+        ms->spans.push_back({start, end, open, close});
+        return touched;
+    };
+    QFont markF = roleF; // the delimiters' own font (italic on quote lines)
+    std::optional<QFontMetricsF> markFm, monoFm;
+    // `pad`: advance each hidden run keeps (inline code keeps a little background).
+    auto hide = [&](int s, int n, bool mono, qreal pad) {
+        if (n <= 0 || s >= len)
+            return;
+        n = qMin(n, len - s);
+        std::optional<QFontMetricsF> &fm = mono ? monoFm : markFm;
+        if (!fm)
+            fm.emplace(mono ? t.mono : markF);
+        QTextCharFormat f;
+        f.setForeground(QBrush(Qt::transparent));
+        f.setFontLetterSpacingType(QFont::AbsoluteSpacing);
+        f.setFontLetterSpacing((pad - fm->horizontalAdvance(text.mid(s, n))) / n);
+        add(s, n, f);
+    };
+    // Delimiters of the span [start, end): dim while the caret touches it.
+    auto delimit = [&](int start, int end, int open, int close, bool mono, qreal pad) {
+        if (revealSpan(start, end, open, close)) {
+            if (!mono) {
+                add(start, open, dimF);
+                add(end - close, close, dimF);
+            }
+            return;
+        }
+        hide(start, open, mono, pad);
+        hide(end - close, close, mono, pad);
+    };
+    bool collapsed = false;
 
     switch (role) {
     case LineRole::CodeOpen:
+        // The info string after the fence stays, as the block's label.
+        add(0, len, dimF);
+        delimit(0, len, 3, 0, false, 0);
+        break;
     case LineRole::CodeClose:
     case LineRole::MathOpen:
     case LineRole::MathClose:
         add(0, len, dimF);
+        if (!revealSpan(0, len, len, 0)) {
+            hide(0, len, false, 0);
+            collapsed = true;
+        }
         break;
     case LineRole::MathLine:
         add(0, len, mathF);
         break;
     case LineRole::MathSingle:
-        add(0, 2, dimF);
         add(2, len - 4, mathF);
-        add(len - 2, 2, dimF);
+        delimit(0, len, 2, 2, false, 0);
         break;
     case LineRole::CodeLine: {
         BlockData *d = dataOf(block);
@@ -773,11 +851,8 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
         // Inline formulas are drawn rendered in place, except the one the
         // caret touches (and none while an IME composition is open here:
         // its text would shift the spans).
-        BlockData *bd = dataOf(block);
         InlineMathState *im = nullptr;
         const bool renderInline = m_ctx->previews && tl->preeditAreaText().isEmpty();
-        const int caretRel = (m_caret >= block.position() && m_caret < block.position() + block.length())
-            ? m_caret - block.position() : -2;
         qreal inlinePt = 0;
         std::optional<QFontMetricsF> inlineFm;
         // The previous layout's formulas: a span whose source is unchanged
@@ -798,7 +873,16 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
         };
         const int h = headingLevel(text);
         if (h) {
-            add(0, h + 1, dimF);
+            // The #s and their space show only while the caret is on the line.
+            if (!bd || caretRel >= 0) {
+                add(0, h + 1, dimF);
+            } else {
+                hide(0, h + 1, false, 0);
+            }
+            if (bd) {
+                markupState()->prefix = h + 1;
+                ms->prefixShown = caretRel >= 0;
+            }
             i = h + 1;
         } else if (const int lm = listMarkerLength(text)) {
             QTextCharFormat mk;
@@ -810,6 +894,7 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
             q.setForeground(t.dim);
             q.setFontItalic(true);
             add(0, len, q);
+            markF.setItalic(true);
             i = 2;
         }
         // Inline markup: `code`, $math$, **bold**, *italic*, [[link]], bare URLs.
@@ -848,6 +933,7 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
                     f.setFont(t.mono, QTextCharFormat::FontPropertiesAll);
                     f.setBackground(t.inlineCodeBackground);
                     add(i, e - i + run, f);
+                    delimit(i, e + run, run, run, true, kCodePad);
                     i = e + run;
                 } else {
                     i += run;
@@ -861,9 +947,9 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
                     const int end = e + 1;
                     std::shared_ptr<const MathDisplayList> list;
                     qreal natural = 0;
+                    const bool touched = caretRel >= i && caretRel <= end;
                     if (bd) {
                         InlineMathState *st = spanState();
-                        const bool touched = caretRel >= i && caretRel <= end;
                         if (touched)
                             st->revealed = int(st->spans.size());
                         if (inlinePt <= 0)
@@ -902,9 +988,16 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
                         continue;
                     }
 #endif
-                    add(i, 1, dimF);
+                    // Shown as source (not rendered, or not yet): the `$`s
+                    // show only while the caret touches it.
                     add(i + 1, e - i - 1, mathF);
-                    add(e, 1, dimF);
+                    if (!bd || touched) {
+                        add(i, 1, dimF);
+                        add(e, 1, dimF);
+                    } else {
+                        hide(i, 1, false, 0);
+                        hide(e, 1, false, 0);
+                    }
                     i = end;
                     continue;
                 }
@@ -913,9 +1006,8 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
                 if (e > i + 2) {
                     QTextCharFormat f;
                     f.setFontWeight(QFont::Bold);
-                    add(i, 2, dimF);
                     add(i + 2, e - i - 2, f);
-                    add(e, 2, dimF);
+                    delimit(i, e + 2, 2, 2, false, 0);
                     i = e + 2;
                     continue;
                 }
@@ -926,8 +1018,7 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
                     QTextCharFormat f;
                     f.setFontItalic(true);
                     add(i + 1, e - i - 1, f);
-                    add(i, 1, dimF);
-                    add(e, 1, dimF);
+                    delimit(i, e + 1, 1, 1, false, 0);
                     i = e + 1;
                     continue;
                 }
@@ -956,6 +1047,8 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
     default:
         break;
     }
+    if (bd && !ms && bd->markup)
+        bd->markup.reset(); // no delimiters left on this line
 
     // Preserve IME preedit formats set by the text control (unmarked) and
     // shift ours around the preedit insertion point.
@@ -990,6 +1083,7 @@ void VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
     } else {
         tl->setFormats(fmts);
     }
+    return collapsed;
 }
 
 // -------------------------------------------------------------- layout ----
@@ -999,7 +1093,7 @@ void VirtualLayout::layoutBlock(const QTextBlock &block, int number) const
     const EditorTheme &t = m_ctx->theme();
     QTextLayout *tl = block.layout();
     const LineRole role = roleOf(block);
-    applyFormats(block, role, tl);
+    const bool collapsed = applyFormats(block, role, tl);
     QTextOption opt = document()->defaultTextOption();
     opt.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
     tl->setTextOption(opt);
@@ -1045,6 +1139,14 @@ void VirtualLayout::layoutBlock(const QTextBlock &block, int number) const
             break;
         line.setLeadingIncluded(true);
         line.setLineWidth(lw);
+        if (collapsed) {
+            // Hidden fence: a sliver. The (invisible) line ends at the
+            // sliver's bottom, so what is placed below the last line (the
+            // math preview) starts right after it.
+            line.setPosition(QPointF(x, y + kFenceSliver - line.height()));
+            y += kFenceSliver;
+            continue;
+        }
         qreal above = 0, below = 0;
 #ifdef FOLIA_WITH_MATH
         if (im) {
@@ -1253,26 +1355,27 @@ void VirtualLayout::setCaret(int position)
     m_caret = position;
     m_inlineBudgetUs = 2000; // the formula the caret leaves renders right away
     QTextDocument *doc = document();
-    // Only lines with formulas care, and only when the caret starts or stops
-    // touching one of them: then that line is laid out again.
+    // Only lines with formulas or markup delimiters care, and only when the
+    // caret starts or stops touching one of them: then that line is laid out
+    // again.
     auto refresh = [&](int pos) {
         if (pos < 0 || pos >= doc->characterCount())
             return QTextBlock();
         const QTextBlock b = doc->findBlock(pos);
         const BlockData *d = b.isValid() ? dataOf(b) : nullptr;
-        if (!d || !d->inlineMath)
+        if (!d || (!d->inlineMath && !d->markup))
             return b;
-        int want = -1;
-        if (m_caret >= b.position() && m_caret < b.position() + b.length()) {
-            const int rel = m_caret - b.position();
-            const auto &spans = d->inlineMath->spans;
+        const int rel = (m_caret >= b.position() && m_caret < b.position() + b.length())
+            ? m_caret - b.position() : -2;
+        auto touching = [rel](const auto &spans) {
             for (int k = 0; k < int(spans.size()); ++k)
-                if (rel >= spans[size_t(k)].start && rel <= spans[size_t(k)].end) {
-                    want = k;
-                    break;
-                }
-        }
-        if (want != d->inlineMath->revealed)
+                if (rel >= spans[size_t(k)].start && rel <= spans[size_t(k)].end)
+                    return k;
+            return -1;
+        };
+        if ((d->inlineMath && touching(d->inlineMath->spans) != d->inlineMath->revealed)
+            || (d->markup && touching(d->markup->spans) != d->markup->revealed)
+            || (d->markup && d->markup->prefix > 0 && (rel >= 0) != d->markup->prefixShown))
             relayoutBlock(b);
         return b;
     };
@@ -1500,7 +1603,7 @@ void VirtualLayout::draw(QPainter *painter, const PaintContext &ctx)
         if (selectionCoversSeparator && tl->lineCount() > 0) {
             const QTextLine ll = tl->lineAt(tl->lineCount() - 1);
             const QRectF sep(ll.x() + ll.naturalTextWidth(), top + ll.y(), 6, ll.height());
-            painter->fillRect(sep, selFmt.background());
+            painter->fillRect(sep.intersected(r), selFmt.background()); // a fence sliver is shorter than its line
         }
 
         // Rendered math preview below the source.
@@ -1601,6 +1704,7 @@ void VirtualLayout::evictFarBlocks(int firstVisible, int lastVisible)
         if (BlockData *d = dataOf(b)) {
             d->inlineMath.reset(); // rebuilt (from the cache) if it comes back
             d->mediaKey = MediaKey(); // the key only: the bitmap stays cached
+            d->markup.reset();
         }
         m_st[size_t(i)] &= uint8_t(~StLaidOut);
         --m_laidOut;
@@ -1643,6 +1747,26 @@ int VirtualLayout::hitTest(const QPointF &point, Qt::HitTestAccuracy accuracy) c
                 rel = sp.start + 1;
                 break;
             }
+    // Positions inside a hidden delimiter (`**`, a fence) share one x: take
+    // the one next to the text rather than one between two marker characters.
+    if (const BlockData *d = dataOf(b); d && d->markup) {
+        if (!d->markup->prefixShown && rel < d->markup->prefix)
+            rel = d->markup->prefix; // a hidden heading marker: start of the heading text
+        const auto &spans = d->markup->spans;
+        for (int k = 0; k < int(spans.size()); ++k) {
+            const MarkupState::Span &sp = spans[size_t(k)];
+            if (k == d->markup->revealed)
+                continue;
+            if (rel > sp.start && rel < sp.start + sp.open) {
+                rel = sp.start + sp.open;
+                break;
+            }
+            if (rel > sp.end - sp.close && rel < sp.end) {
+                rel = sp.end - sp.close;
+                break;
+            }
+        }
+    }
     return b.position() + rel;
 }
 
