@@ -13,10 +13,15 @@ inline bool isMarkdownFile(const QString &path)
     return s == QLatin1String("md") || s == QLatin1String("markdown") || s == QLatin1String("txt");
 }
 
+inline bool isWordFile(const QString &path)
+{
+    return QFileInfo(path).suffix().compare(QLatin1String("docx"), Qt::CaseInsensitive) == 0;
+}
+
 // Converted into a new page (PDFs and images are attached to a page instead).
 inline bool isDocumentFile(const QString &path)
 {
-    return isMarkdownFile(path);
+    return isMarkdownFile(path) || isWordFile(path);
 }
 
 } // namespace folia::import

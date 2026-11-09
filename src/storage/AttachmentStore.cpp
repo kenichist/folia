@@ -205,17 +205,20 @@ void AttachmentStore::runImport(const Source &src, ImportResult *res)
     }
     QCryptographicHash hash(QCryptographicHash::Sha256);
     bool ok = true;
-    if (!src.path.isEmpty()) {
-        QFile in(src.path);
-        if (!in.open(QIODevice::ReadOnly)) {
-            res->error = in.errorString();
+    if (!src.path.isEmpty() || src.device) {
+        QFile file(src.path);
+        QIODevice *in = src.device;
+        if (!in && file.open(QIODevice::ReadOnly))
+            in = &file;
+        if (!in) {
+            res->error = file.errorString();
             ok = false;
         } else {
             QByteArray buf(int(kChunk), Qt::Uninitialized);
             for (;;) {
-                const qint64 n = in.read(buf.data(), kChunk);
+                const qint64 n = in->read(buf.data(), kChunk);
                 if (n < 0) {
-                    res->error = in.errorString();
+                    res->error = in->errorString();
                     ok = false;
                     break;
                 }

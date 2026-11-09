@@ -1,14 +1,23 @@
 // Document import (docs/ATTACHMENTS.md §8): Markdown and text conversion,
 // decoding, limits and cancellation.
 
+#include "import/DocxImport.h"
 #include "import/MarkdownImport.h"
+#include "import/ZipReader.h"
 
+#include "DocxFixture.h"
+
+#include <QBuffer>
+#include <QCryptographicHash>
 #include <QFile>
+#include <QFileInfo>
+#include <QImage>
 #include <QTemporaryDir>
 #include <QTest>
 
 using namespace folia;
 using namespace folia::import;
+using namespace docxfixture;
 
 namespace {
 
@@ -173,7 +182,176 @@ private slots:
         QCOMPARE(ok.title, QStringLiteral("big"));
         QCOMPARE(ok.blocks.size(), 1);
     }
+
+    // ------------------------------------------------------------ Word ----
+    void zipReaderStreamsEntries()
+    {
+        QTemporaryDir dir;
+        const QByteArray big(300000, 'z');
+        for (bool deflate : {false, true}) {
+            const QString p = writeFile(dir, deflate ? QStringLiteral("d.zip") : QStringLiteral("s.zip"),
+                                        makeZip({{QStringLiteral("a/One.txt"), "hello"}, {QStringLiteral("big"), big}}, deflate));
+            ZipReader z;
+            QString err;
+            QVERIFY2(z.open(p, &err), qPrintable(err));
+            QCOMPARE(z.entryCount(), 2);
+            QCOMPARE(z.find(QStringLiteral("A/one.TXT")), 0); // part names are case-insensitive
+            QCOMPARE(z.readAll(0, 1024), QByteArray("hello"));
+            QCOMPARE(z.readAll(z.find(QStringLiteral("big")), 1 << 20), big);
+            // Past the limit: an error, counted on what was really inflated.
+            QVERIFY(z.readAll(1, 1000, &err).isEmpty());
+            QVERIFY2(err.contains(QLatin1String("larger")), qPrintable(err));
+        }
+    }
+
+    void wordMapsOntoPageLines()
+    {
+        const QByteArray field = "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r><w:r><w:instrText xml:space=\"preserve\"> HYPERLINK "
+                                 "\"https://f.example\" </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>"
+            + run("field link") + "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>";
+        const QByteArray body =
+            para("Titel", run("The Title")) + para("berschrift1", run("Intro")) + para("H4", run("Deep"))
+            + para("MyHeading", run("Inherited"))
+            + para({}, run("Plain ") + run("bold", "<w:b/>") + run(" and ") + run("ital", "<w:i/>") + run(" text ")
+                           + run("both", "<w:b/><w:i/>"))
+            + para({}, run("mid") + run("word", "<w:i/>") + run("italic"))
+            + para({}, run("Strong style", "<w:rStyle w:val=\"Strong\"/>"))
+            + listPara(1, 0, "apple") + listPara(1, 1, "pip") + listPara(2, 0, "three") + listPara(2, 0, "four")
+            + para({}, "<w:hyperlink r:id=\"rIdL\">" + run("a link") + "</w:hyperlink>" + run(" and ") + field)
+            + para({}, run("kept") + "<w:del><w:r><w:delText>gone</w:delText></w:r></w:del><w:ins>" + run(" added") + "</w:ins>")
+            + para({}, "<mc:AlternateContent><mc:Choice Requires=\"wps\">" + run("choice") + "</mc:Choice><mc:Fallback>"
+                           + run("fallback") + "</mc:Fallback></mc:AlternateContent>")
+            + para("Zitat", run("A quote")) + para({}, run("costs $5 and $10, a * b * c"))
+            + para({}, run("line one") + "<w:r><w:br/></w:r>" + run("# not a heading") + "<w:r><w:br w:type=\"page\"/></w:r>")
+            + para({}, run("before ") + image("rIdI", "Red box") + run(" after")) + para({}, image("rIdE", ""))
+            + para({}, image("rIdI", "Again"))
+            + "<w:tbl><w:tr><w:tc>" + para({}, run("h1")) + "</w:tc><w:tc>" + para({}, run("h|2"))
+            + "</w:tc></w:tr><w:tr><w:tc><w:tcPr><w:gridSpan w:val=\"2\"/></w:tcPr>" + para({}, run("wide"))
+            + "</w:tc></w:tr></w:tbl>"
+            + para({}, run("outer") + "<w:r><w:drawing><wp:anchor><a:graphic><a:graphicData><wps:wsp><wps:txbx><w:txbxContent>"
+                           + para({}, run("in a box")) + "</w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic>"
+                                                         "</wp:anchor></w:drawing></w:r>")
+            + para({}, "<m:oMath><m:r><m:t>x=1</m:t></m:r></m:oMath>") + para({}, {});
+        QTemporaryDir dir;
+        const QString path = writeFile(dir, QStringLiteral("Report.docx"), makeZip(docxParts(body)));
+        int calls = 0;
+        QString pngHash;
+        DocxImageImporter images = [&](QIODevice *data, const QString &name, const QString &alt) -> QString {
+            ++calls;
+            const QByteArray bytes = data->readAll();
+            if (QImage::fromData(bytes).isNull())
+                return {};
+            pngHash = QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+            Q_UNUSED(name);
+            return attachments::imageMarkdown(pngHash, alt);
+        };
+        const ImportedDoc d = importDocx(path, images);
+        QVERIFY2(d.error.isEmpty(), qPrintable(d.error));
+        QCOMPARE(d.title, QStringLiteral("The Title"));
+        QCOMPARE(calls, 1); // the PNG once (the EMF is not a picture Folia stores; the repeat is reused)
+        const QString img = attachments::imageMarkdown(pngHash, QStringLiteral("Red box"));
+        const QStringList expected = {
+            QStringLiteral("# Intro"),
+            QStringLiteral("### Deep"),
+            QStringLiteral("# Inherited"),
+            QStringLiteral("Plain **bold** and *ital* text **both**"),
+            QStringLiteral("midworditalic"),
+            QStringLiteral("**Strong style**"),
+            QStringLiteral("- apple"),
+            QStringLiteral("  - pip"),
+            QStringLiteral("3. three"),
+            QStringLiteral("4. four"),
+            QStringLiteral("[a link](https://example.com/x) and [field link](https://f.example)"),
+            QStringLiteral("kept added"),
+            QStringLiteral("choice"),
+            QStringLiteral("> A quote"),
+            QStringLiteral("costs \\$5 and \\$10, a \\* b \\* c"),
+            QStringLiteral("line one"),
+            QStringLiteral("\\# not a heading"),
+            QStringLiteral("before"),
+            img,
+            QStringLiteral("after"),
+            img,
+            QStringLiteral("| h1 | h\\|2 |"),
+            QStringLiteral("|---|---|"),
+            QStringLiteral("| wide |  |"),
+            QStringLiteral("outer"),
+            QStringLiteral("in a box"),
+            QStringLiteral("x=1"),
+        };
+        QCOMPARE(texts(d), expected);
+        QCOMPARE(d.notes.size(), 1); // the EMF
+        // Without a Title paragraph, the document's own title is used.
+        const QString plain = writeFile(dir, QStringLiteral("plain.docx"), makeZip(docxParts(para({}, run("x")))));
+        QCOMPARE(importDocx(plain, images).title, QStringLiteral("Core title"));
+    }
+
+    // Files written without styles or numbering (TextEdit's "Word" format):
+    // large bold lines are headings, typed bullets and numbers are lists.
+    void wordWithoutStyles()
+    {
+        auto parts = docxParts(
+            para({}, run("Big title", "<w:b/><w:sz w:val=\"48\"/>"))
+            + para({}, run("Section", "<w:b/><w:sz w:val=\"36\"/>"))
+            + para({}, run("Bold body text at body size", "<w:b/><w:sz w:val=\"24\"/>"))
+            + para({}, "<w:r><w:t></w:t><w:tab/><w:t>\xE2\x80\xA2</w:t><w:tab/></w:r>" + run("first"))
+            + para({}, "<w:r><w:tab/><w:t>\xE2\x97\xA6</w:t><w:tab/></w:r>" + run("nested"))
+            + para({}, "<w:r><w:tab/><w:t>2</w:t><w:tab/></w:r>" + run("second step"))
+            + para({}, run("a") + "<w:r><w:tab/></w:r>" + run("b")));
+        parts.removeAt(5); // no core properties: the title comes from the text
+        QTemporaryDir dir;
+        const ImportedDoc d = importDocx(writeFile(dir, QStringLiteral("t.docx"), makeZip(parts)), {});
+        QVERIFY2(d.error.isEmpty(), qPrintable(d.error));
+        QCOMPARE(d.title, QStringLiteral("Big title"));
+        QCOMPARE(texts(d), QStringList({QStringLiteral("## Section"), QStringLiteral("**Bold body text at body size**"),
+                                        QStringLiteral("- first"), QStringLiteral("  - nested"),
+                                        QStringLiteral("2. second step"), QStringLiteral("a b")}));
+    }
+
+    void wordRefusesHostileFiles()
+    {
+        QTemporaryDir dir;
+        QString err;
+        // An old .doc (or an encrypted .docx: also a compound file).
+        QByteArray cfb("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", 8);
+        cfb.append(QByteArray(512, '\0'));
+        err = importDocx(writeFile(dir, QStringLiteral("old.docx"), cfb), {}).error;
+        QVERIFY2(err.contains(QLatin1String(".doc")), qPrintable(err));
+        // A truncated archive.
+        const QByteArray zip = makeZip(docxParts(para({}, run("x"))));
+        err = importDocx(writeFile(dir, QStringLiteral("cut.docx"), zip.left(zip.size() / 2)), {}).error;
+        QVERIFY(!err.isEmpty());
+        // A DTD (entity expansion tricks are never read).
+        auto parts = docxParts({});
+        parts.last().second = "<?xml version=\"1.0\"?><!DOCTYPE lolz [<!ENTITY lol \"lol\"><!ENTITY lol2 \"&lol;&lol;\">]>"
+                              "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+                              "<w:body><w:p><w:r><w:t>&lol2;</w:t></w:r></w:p></w:body></w:document>";
+        err = importDocx(writeFile(dir, QStringLiteral("dtd.docx"), makeZip(parts)), {}).error;
+        QVERIFY2(err.contains(QLatin1String("DTD")), qPrintable(err));
+        // A zip bomb: the limit counts inflated bytes.
+        QByteArray huge;
+        for (int i = 0; i < 40000; ++i)
+            huge += para({}, run("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        const QString bomb = writeFile(dir, QStringLiteral("bomb.docx"), makeZip(docxParts(huge)));
+        QVERIFY(QFileInfo(bomb).size() < (1 << 20));
+        DocxLimits small;
+        small.maxDocumentXml = 1 << 20;
+        err = importDocx(bomb, {}, nullptr, {}, small).error;
+        QVERIFY2(err.contains(QLatin1String("larger")), qPrintable(err));
+        // Too many parts.
+        QList<QPair<QString, QByteArray>> many;
+        for (int i = 0; i <= ZipReader::kMaxEntries; ++i)
+            many.push_back({QStringLiteral("p%1").arg(i), QByteArray()});
+        err = importDocx(writeFile(dir, QStringLiteral("many.docx"), makeZip(many, false)), {}).error;
+        QVERIFY2(err.contains(QLatin1String("more than")), qPrintable(err));
+        // A zip that is not a Word document.
+        err = importDocx(writeFile(dir, QStringLiteral("other.docx"), makeZip({{QStringLiteral("a.txt"), "x"}})), {}).error;
+        QVERIFY2(err.contains(QLatin1String("not a Word")), qPrintable(err));
+        // Cancelled.
+        std::atomic<bool> cancel{true};
+        QCOMPARE(importDocx(bomb, {}, &cancel).error, QStringLiteral("cancelled"));
+    }
 };
 
-QTEST_GUILESS_MAIN(ImportTests)
+QTEST_MAIN(ImportTests)
 #include "tst_import.moc"

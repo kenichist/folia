@@ -48,6 +48,7 @@ public:
 
     struct Source {
         QString path;      // a file to copy (streamed), or
+        QIODevice *device = nullptr; // an open stream, read to its end (import worker: importNow() only), or
         QByteArray bytes;  // encoded image data (clipboard PNG/JPEG/...), or
         QImage image;      // pixels, encoded to PNG on the worker
         QString name;      // image alt text (file name without extension), or PDF label (file name)

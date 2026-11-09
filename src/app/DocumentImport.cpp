@@ -2,6 +2,8 @@
 
 #include "app/Platform.h"
 #include "core/Instrument.h"
+#include "import/DocumentKinds.h"
+#include "import/DocxImport.h"
 #include "import/MarkdownImport.h"
 #include "storage/AttachmentStore.h"
 #include "storage/Store.h"
@@ -58,7 +60,24 @@ void DocumentImporter::import(const QString &path)
             seen.insert(key, line);
             return line;
         };
-        *doc = import::importTextFile(path, images, as->cancelFlag(), lim);
+        if (import::isWordFile(path)) {
+            // Embedded images stream from the archive straight to disk.
+            auto embedded = [&](QIODevice *data, const QString &name, const QString &alt) -> QString {
+                if (int(stored.size()) >= lim.maxImages || as->cancelled())
+                    return {};
+                AttachmentStore::Source s;
+                s.device = data;
+                s.name = alt.isEmpty() ? QFileInfo(name).completeBaseName() : alt;
+                const AttachmentStore::ImportResult r = as->importNow(s);
+                if (!r.ok)
+                    return {};
+                stored.push_back(r.info);
+                return attachments::imageMarkdown(r.info.hash, s.name);
+            };
+            *doc = import::importDocx(path, embedded, as->cancelFlag(), lim);
+        } else {
+            *doc = import::importTextFile(path, images, as->cancelFlag(), lim);
+        }
         doc->attachments = stored;
         if (skipped > 0)
             doc->notes << (skipped == 1 ? QStringLiteral("1 image could not be added.")

@@ -21,7 +21,7 @@ endif()
 
 add_library(folia_app_core STATIC ${FOLIA_CORE_SOURCES} ${FOLIA_CORE_HEADERS} ${FOLIA_PLATFORM_SOURCES})
 target_include_directories(folia_app_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(folia_app_core PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets folia_lua folia_sqlite folia_code)
+target_link_libraries(folia_app_core PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets folia_lua folia_sqlite folia_code folia_miniz)
 if(FOLIA_WITH_MATH)
   target_link_libraries(folia_app_core PUBLIC folia_math)
   target_compile_definitions(folia_app_core PUBLIC FOLIA_WITH_MATH=1)

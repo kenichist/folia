@@ -71,7 +71,7 @@ Bare URLs are clickable. Select text and press Mod+K, or paste an address onto a
 Paste or drop an image into a page, or use **Edit ▸ Insert Image…**. Images are decoded only while near the screen, within a fixed memory budget.
 
 ### ⬆️ Upload files
-Click the upload button in the top bar, press Mod+O or choose **File ▸ Upload Files…**, or drop files on the window. A **PDF** goes into the note you're on and opens beside it. A **Markdown** or **text** file becomes a new page in its own tab, with its headings, lists, code, math, links and local images; it's converted once, so it costs nothing after that.
+Click the upload button in the top bar, press Mod+O or choose **File ▸ Upload Files…**, or drop files on the window. A **PDF** goes into the note you're on and opens beside it. A **Word** (.docx), **Markdown** or **text** file becomes a new page in its own tab, with its headings, lists, tables, bold and italic, links, code, math and images; it's converted once, so it costs nothing after that.
 
 ### 📑 PDFs beside your notes
 Paste or drop a PDF into a page, then click its card: it opens in a pane next to the note, so you can read and write side by side. Drag the divider to resize (double-click for equal widths), swap sides with the ⇄ button or **View ▸ Swap Panes**, and close it with × or Esc. Side and width are remembered. The PDF stays open as you move between pages and tabs. The Windows and Linux builds don't display PDFs yet.

@@ -100,7 +100,7 @@ ui.component("TopBar", function(p)
     },
     ui.text{ id = "status", bind = "status", style = { fg = "dim", size = 12, padding = 6 } },
     ui.button{ id = "upload", icon = "upload", label = "Upload files", command = "file.upload",
-               tooltip = "Upload PDF or Markdown files (Mod+O)", style = icon_button },
+               tooltip = "Upload PDF, Word or Markdown files (Mod+O)", style = icon_button },
   }
 end)
 

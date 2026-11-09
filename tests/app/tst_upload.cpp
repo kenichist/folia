@@ -28,6 +28,8 @@
 #include <QUrl>
 #include <memory>
 
+#include "DocxFixture.h"
+
 using namespace folia;
 
 namespace {
@@ -114,6 +116,33 @@ private slots:
         QCOMPARE(pc.blocks[2].kind, BlockKind::Code);
         QCOMPARE(pc.blocks[2].lang, QStringLiteral("cpp"));
         QVERIFY(!app->attachments()->isPinned(hash) || app->sessionCached(id)); // the import's pin is gone
+    }
+
+    void wordBecomesASavedPageWithItsImages()
+    {
+        using namespace docxfixture;
+        QTemporaryDir home, src;
+        const QByteArray body = para("Titel", run("Plan")) + para("berschrift1", run("Goals"))
+            + listPara(1, 0, "ship tabs") + para({}, run("see ") + image("rIdI", "Red box"));
+        const QString docx = writeFile(src, QStringLiteral("plan.docx"), makeZip(docxParts(body)));
+        auto app = launch(home.path());
+        QTRY_VERIFY(app->activeSession());
+        app->uploadFiles({docx});
+        QTRY_COMPARE(app->tabs().count(), 2);
+        const PageId id = app->tabs().current().page;
+        QTRY_COMPARE(app->currentPage(), id);
+        QCOMPARE(app->activeSession()->title(), QStringLiteral("Plan"));
+        const PageContent pc = openSync(app->store(), id);
+        QCOMPARE(pc.blocks.size(), 4);
+        QCOMPARE(pc.blocks[0].text, QStringLiteral("# Goals"));
+        QCOMPARE(pc.blocks[1].text, QStringLiteral("- ship tabs"));
+        QCOMPARE(pc.blocks[2].text, QStringLiteral("see"));
+        QString hash;
+        QVERIFY(attachments::parseImageMarkdown(pc.blocks[3].text, &hash, nullptr));
+        QVERIFY(QFile::exists(app->attachments()->pathFor(hash))); // streamed out of the archive
+        const AttachmentInfo *info = app->attachments()->info(hash);
+        QVERIFY(info);
+        QCOMPARE(info->width, 8);
     }
 
     void severalFilesOpenTheFirstAndQueueTheRest()

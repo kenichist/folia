@@ -1213,8 +1213,8 @@ void AppController::chooseUploadFiles()
     auto *dlg = new QFileDialog(m_window, tr("Upload Files"),
                                 m_store->setting(QStringLiteral("upload.dir"),
                                                  QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)),
-                                tr("Documents (*.pdf *.md *.markdown *.txt);;PDF (*.pdf);;Markdown and text "
-                                   "(*.md *.markdown *.txt)"));
+                                tr("Documents (*.pdf *.docx *.md *.markdown *.txt);;PDF (*.pdf);;Word (*.docx);;"
+                                   "Markdown and text (*.md *.markdown *.txt)"));
     dlg->setFileMode(QFileDialog::ExistingFiles);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     connect(dlg, &QFileDialog::filesSelected, this, [this, dlg](const QStringList &files) {
@@ -1238,7 +1238,7 @@ void AppController::uploadFiles(const QStringList &paths)
             s.name = fi.fileName();
             pdfs << s;
         } else {
-            m_uploadErrors << tr("%1: not a PDF, Markdown or text file").arg(fi.fileName());
+            m_uploadErrors << tr("%1: not a PDF, Word, Markdown or text file").arg(fi.fileName());
         }
     }
     if (settingsOpen())

@@ -162,8 +162,8 @@ note), `pane.focus_other` (between the note and the PDF pane),
 `tab.new` (a new page in a new tab), `tab.open{id, background?}`,
 `tab.close{index?}`, `tab.select{index}` (1-based; `-1` is the last tab),
 `tab.next`, `tab.prev`, `tab.reopen` (the last closed tab), `file.upload`
-(the Upload Files dialog: PDFs go into the current note, Markdown and text
-files become new pages in tabs; layouts cannot name a file to read). Tab commands with
+(the Upload Files dialog: PDFs go into the current note, Word, Markdown and
+text files become new pages in tabs; layouts cannot name a file to read). Tab commands with
 nothing to do, such as closing the only tab, succeed quietly.
 `shell.reload`, `shell.reset`,
 `shell.use{name}`, `shell.edit`, `shell.open_folder`, `app.settings` (shows

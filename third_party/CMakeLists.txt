@@ -36,3 +36,19 @@ target_compile_definitions(folia_sqlite PRIVATE
   SQLITE_ENABLE_FTS5)
 find_package(Threads REQUIRED)
 target_link_libraries(folia_sqlite PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+
+# --- miniz 3.1.2 (MIT): zip reading and inflate only --------------------------
+# Used to read Word (.docx) files, which are zip archives, when they are
+# uploaded (docs/ATTACHMENTS.md §8). Compression and zip writing are compiled
+# out (miniz_tdef.c and the writing APIs), and so are stdio and time.
+add_library(folia_miniz STATIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/miniz/miniz.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/miniz/miniz_tinfl.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/miniz/miniz_zip.c)
+target_include_directories(folia_miniz PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/miniz)
+set_target_properties(folia_miniz PROPERTIES C_STANDARD 99 POSITION_INDEPENDENT_CODE ON)
+target_compile_definitions(folia_miniz PUBLIC
+  MINIZ_NO_DEFLATE_APIS          # implies MINIZ_NO_ARCHIVE_WRITING_APIS
+  MINIZ_NO_STDIO                 # archives are read through a callback (QFile)
+  MINIZ_NO_TIME
+  MINIZ_NO_ZLIB_COMPATIBLE_NAMES)
