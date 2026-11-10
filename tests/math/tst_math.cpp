@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <atomic>
 #include <cstdio>
 #include <vector>
@@ -958,51 +959,73 @@ void TestMath::fuzz()
 
 void TestMath::cancellation()
 {
+    // Each time bound is checked against the best of kTimingAttempts tries,
+    // stopping at the first one inside it. On a loaded machine (CI runners
+    // share their cores) preemption only ever adds time: the mid-flight
+    // cancel takes 0.7-2.5 ms on an M1 and 0.8 ms on a Windows runner, but
+    // took 14.5 ms once on a macOS runner (the v0.2.0 tag build). A real
+    // regression still fails every try: with cancel no longer polled, the
+    // render runs on and fails with "Formula too large to display".
+    constexpr int kTimingAttempts = 3;
+
     // already cancelled
     std::atomic<bool> cancel{true};
     math::Style st;
     QElapsedTimer t;
-    t.start();
-    auto r = math::render(QStringLiteral("x^2"), st, {}, &cancel);
-    QVERIFY(!r.ok);
-    QCOMPARE(r.error, QStringLiteral("cancelled"));
-    QVERIFY(t.elapsed() < 5);
+    math::Result r;
+    qint64 bestMs = std::numeric_limits<qint64>::max();
+    for (int i = 0; i < kTimingAttempts && bestMs >= 5; ++i) {
+        t.start();
+        r = math::render(QStringLiteral("x^2"), st, {}, &cancel);
+        bestMs = std::min(bestMs, t.elapsed());
+        QVERIFY(!r.ok);
+        QCOMPARE(r.error, QStringLiteral("cancelled"));
+    }
+    QVERIFY2(bestMs < 5, qPrintable(QStringLiteral("best %1 ms").arg(bestMs)));
 
     // cancelled mid-flight from another thread
-    cancel = false;
     math::Limits lim;
     lim.maxSourceChars = 1 << 22;
     lim.maxNodes = 1 << 22;
     lim.maxMillis = 20000;
     const QString heavy = QStringLiteral("\\frac{x}{y}+").repeated(150000);
-    math::Result res;
-    qint64 cancelAt = 0, doneAt = 0;
-    QElapsedTimer clock;
-    clock.start();
-    QThread *worker = QThread::create([&] {
-        res = math::render(heavy, st, lim, &cancel);
-        doneAt = clock.nsecsElapsed();
-    });
-    worker->start();
-    QThread::msleep(10);
-    cancelAt = clock.nsecsElapsed();
-    cancel = true;
-    QVERIFY(worker->wait(5000));
-    delete worker;
-    QVERIFY(!res.ok);
-    QCOMPARE(res.error, QStringLiteral("cancelled"));
-    const qint64 latencyUs = (doneAt - cancelAt) / 1000;
-    std::printf("  cancel latency: %lld us\n", (long long)latencyUs);
-    QVERIFY(latencyUs < 10000);
+    qint64 bestUs = std::numeric_limits<qint64>::max();
+    for (int i = 0; i < kTimingAttempts && bestUs >= 10000; ++i) {
+        cancel = false;
+        math::Result res;
+        qint64 cancelAt = 0, doneAt = 0;
+        QElapsedTimer clock;
+        clock.start();
+        QThread *worker = QThread::create([&] {
+            res = math::render(heavy, st, lim, &cancel);
+            doneAt = clock.nsecsElapsed();
+        });
+        worker->start();
+        QThread::msleep(10);
+        cancelAt = clock.nsecsElapsed();
+        cancel = true;
+        QVERIFY(worker->wait(5000));
+        delete worker;
+        QVERIFY(!res.ok);
+        QCOMPARE(res.error, QStringLiteral("cancelled"));
+        const qint64 latencyUs = (doneAt - cancelAt) / 1000;
+        std::printf("  cancel latency: %lld us\n", (long long)latencyUs);
+        bestUs = std::min(bestUs, latencyUs);
+    }
+    QVERIFY2(bestUs < 10000, qPrintable(QStringLiteral("best %1 us").arg(bestUs)));
 
     // deadline
     lim.maxMillis = 15;
     cancel = false;
-    t.restart();
-    r = math::render(heavy, st, lim, &cancel);
-    QVERIFY(!r.ok);
-    QVERIFY(r.error.contains(QLatin1String("time limit")));
-    QVERIFY(t.elapsed() < 30);
+    bestMs = std::numeric_limits<qint64>::max();
+    for (int i = 0; i < kTimingAttempts && bestMs >= 30; ++i) {
+        t.start();
+        r = math::render(heavy, st, lim, &cancel);
+        bestMs = std::min(bestMs, t.elapsed());
+        QVERIFY(!r.ok);
+        QVERIFY(r.error.contains(QLatin1String("time limit")));
+    }
+    QVERIFY2(bestMs < 30, qPrintable(QStringLiteral("best %1 ms").arg(bestMs)));
 }
 
 void TestMath::concurrency()

@@ -49,7 +49,9 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/app/main.cpp)
     set(FOLIA_ICON ${CMAKE_SOURCE_DIR}/packaging/brand/Folia.icns)
     target_sources(folia PRIVATE ${FOLIA_ICON})
     set_source_files_properties(${FOLIA_ICON} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
-    set_target_properties(folia PROPERTIES MACOSX_BUNDLE_ICON_FILE Folia.icns)
+    set_target_properties(folia PROPERTIES MACOSX_BUNDLE_ICON_FILE Folia.icns
+      # CMake's template plus LSEnvironment (see the file).
+      MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/packaging/macos/Info.plist.in)
   elseif(WIN32)
     target_sources(folia PRIVATE ${CMAKE_SOURCE_DIR}/packaging/brand/folia.rc)
   endif()

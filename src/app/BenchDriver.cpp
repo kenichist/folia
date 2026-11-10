@@ -1,4 +1,5 @@
 #include "app/BenchDriver.h"
+#include "app/WindowBufferTrimmer.h"
 
 #include "app/AppController.h"
 #include "app/Platform.h"
@@ -380,6 +381,12 @@ void BenchDriver::run()
     const bool painterClip = m_args.value(QStringLiteral("painter_clip")).toBool();
     m_app->editorPane()->editor()->setDropRedundantClip(!painterClip);
     m_extra.insert(QStringLiteral("editor_painter_clip"), painterClip);
+    // The other A/B switches are applied at startup (main.cpp); recorded here.
+    m_extra.insert(QStringLiteral("editor_wide_repaints"), m_app->editorContext()->wideRepaints);
+    m_extra.insert(QStringLiteral("editor_code_shaping"), m_app->editorContext()->shapeCode);
+    m_extra.insert(QStringLiteral("buffer_trim_ms"), m_app->bufferTrimmer()->idleMs());
+    m_extra.insert(QStringLiteral("start_prefetch"), m_args.value(QStringLiteral("start_prefetch"), 1).toInt() != 0);
+    m_extra.insert(QStringLiteral("font_warmup"), m_args.value(QStringLiteral("font_warmup"), 1).toInt() != 0);
     const QString s = m_scenario;
     if (s == QLatin1String("snapshot")) scenarioSnapshot();
     else if (s == QLatin1String("launch")) scenarioLaunch();
@@ -391,6 +398,7 @@ void BenchDriver::run()
     else if (s == QLatin1String("stress")) scenarioStress();
     else if (s == QLatin1String("presentation")) scenarioPresentation();
     else if (s == QLatin1String("idle")) scenarioIdle();
+    else if (s == QLatin1String("wake")) scenarioWake();
     else if (s == QLatin1String("navigate")) scenarioNavigate();
     else if (s == QLatin1String("integration")) scenarioIntegration();
     else if (s == QLatin1String("settings")) scenarioSettings();
@@ -689,10 +697,34 @@ void BenchDriver::scenarioTyping()
     NoteEditor *ed = m_app->editorPane()->editor();
     QTextCursor c(target);
     c.setPosition(target.position() + target.length() / 2);
+    if (m_args.value(QStringLiteral("formula")).toBool()) {
+        // formula=1: type inside an inline $...$ formula (its preview bubble
+        // follows every key).
+        for (QTextBlock b = doc->firstBlock(); b.isValid(); b = b.next()) {
+            if (PageSession::roleOf(b) != LineRole::Para || b.blockNumber() < 5)
+                continue;
+            const QString t = b.text();
+            const int open = t.indexOf(QLatin1Char('$'));
+            const int close = open >= 0 ? t.indexOf(QLatin1Char('$'), open + 1) : -1;
+            if (close > open + 3) {
+                c.setPosition(b.position() + open + 2);
+                target = b;
+                break;
+            }
+        }
+    }
     ed->setTextCursor(c);
     ed->ensureCursorVisible();
+    if (m_args.value(QStringLiteral("caret")).toString() == QLatin1String("top")) {
+        // caret=top: the edited line near the top of the viewport, with a
+        // screenful of text below it (the default leaves it on the last line).
+        const QRectF br = s->layout()->blockBoundingRect(target);
+        ed->verticalScrollBar()->setValue(qMax(0, int(br.top()) - 60));
+    }
+    m_extra.insert(QStringLiteral("caret_y_in_viewport"), ed->cursorRect().top());
     settle(200);
     instr::takeSamples();
+    const qint64 linesBefore = instr::get(instr::EditorLinesPainted);
     const platform::ProcessSample before = platform::sampleSelf();
     const Revision revBefore = s->revision();
     const int n = m_args.value(QStringLiteral("n"), 1000).toInt();
@@ -709,6 +741,7 @@ void BenchDriver::scenarioTyping()
     add(QStringLiteral("cpu_ms_per_edit_all_threads"), cpuMs / n, QStringLiteral("ms"),
         QStringLiteral("process user+system CPU over the typing run / edits (includes paint, save, previews)"));
     m_extra.insert(QStringLiteral("typing_wall_ms"), wallMs);
+    m_extra.insert(QStringLiteral("lines_painted_per_edit"), double(instr::get(instr::EditorLinesPainted) - linesBefore) / n);
     m_extra.insert(QStringLiteral("edits"), n);
     m_extra.insert(QStringLiteral("revisions"), double(s->revision() - revBefore));
     m_extra.insert(QStringLiteral("committed_matches_revision"), s->committedRevision() == s->revision());
@@ -743,6 +776,8 @@ void BenchDriver::scenarioScroll()
     QVector<double> intervals;
     qint64 paintStartNs = 0;
     double lastPaintMs = 0;
+    double framePaintMs = 0, totalPaintMs = 0; // every editor paint a step caused
+    int paints = 0;
     struct PaintTimer : QObject {
         qint64 *start;
         QElapsedTimer *clock;
@@ -759,13 +794,21 @@ void BenchDriver::scenarioScroll()
     auto conn = connect(ed, &NoteEditor::painted, this, [&] {
         const qint64 now = clock.nsecsElapsed();
         lastPaintMs = (now - paintStartNs) / 1e6;
+        framePaintMs += lastPaintMs;
+        ++paints;
         if (lastPaintNs >= 0)
             intervals << (now - lastPaintNs) / 1e6;
         lastPaintNs = now;
     });
     int workOver = 0, hitches = 0;
     double longestWork = 0;
+    const qint64 linesBefore = instr::get(instr::EditorLinesPainted);
     for (int i = 0; i < frames; ++i) {
+        // Paints still pending from the previous step (a height correction,
+        // the scroll bar's strip) count toward that step.
+        QCoreApplication::processEvents();
+        totalPaintMs += framePaintMs;
+        framePaintMs = 0;
         const int before = m_paints;
         const qint64 t0 = clock.nsecsElapsed();
         vb->setValue(vb->value() + step);
@@ -773,7 +816,8 @@ void BenchDriver::scenarioScroll()
             vb->setValue(0);
         const double scrollMs = (clock.nsecsElapsed() - t0) / 1e6;
         waitFor([&] { return m_paints > before; }, 100);
-        const double work = scrollMs + lastPaintMs;
+        QCoreApplication::processEvents(); // and what that paint asked for in turn
+        const double work = scrollMs + framePaintMs;
         add(QStringLiteral("scroll_frame_work_ms"), work, QStringLiteral("ms"),
             QStringLiteral("main-thread scroll handling + editor paint for one frame (backing-store flush excluded)"));
         if (work > 1000.0 / 60.0)
@@ -790,7 +834,12 @@ void BenchDriver::scenarioScroll()
             ++hitches;
         longestInterval = qMax(longestInterval, v);
     }
+    QCoreApplication::processEvents();
+    totalPaintMs += framePaintMs;
     m_extra.insert(QStringLiteral("frames"), frames);
+    m_extra.insert(QStringLiteral("editor_paints"), paints);
+    m_extra.insert(QStringLiteral("editor_paint_total_ms"), totalPaintMs);
+    m_extra.insert(QStringLiteral("lines_painted"), double(instr::get(instr::EditorLinesPainted) - linesBefore));
     m_extra.insert(QStringLiteral("frames_work_within_16_7ms_ratio"), 1.0 - double(workOver) / frames);
     m_extra.insert(QStringLiteral("longest_frame_work_ms"), longestWork);
     m_extra.insert(QStringLiteral("hitches_over_25ms"), hitches);
@@ -913,6 +962,51 @@ void BenchDriver::scenarioPresentation()
         m_notes.append(QStringLiteral("math renderer disabled (--no-math)"));
     }
     addInstrSamples();
+}
+
+void BenchDriver::scenarioWake()
+{
+    // Idle gaps long enough for the window's spare buffers to be released
+    // (buffer_trim_ms, default 10 s; pass a shorter one with gap_ms), each
+    // followed by a few keys: footprint before the keys, and per-key
+    // latencies in order, so the first keys after a trim stand out.
+    const PageId page = manifestPage(QStringLiteral("ordinary_page"));
+    if (!page || !openAndWait(page, nullptr, nullptr)) {
+        m_notes.append(QStringLiteral("cannot open ordinary page"));
+        return;
+    }
+    PageSession *s = m_app->activeSession();
+    QTextDocument *doc = s->document();
+    QTextBlock target = doc->findBlockByNumber(qMax(1, doc->blockCount() / 3));
+    for (QTextBlock b = target; b.isValid(); b = b.next())
+        if (PageSession::roleOf(b) == LineRole::Para && b.length() > 30) {
+            target = b;
+            break;
+        }
+    NoteEditor *ed = m_app->editorPane()->editor();
+    QTextCursor c(target);
+    c.setPosition(target.position() + target.length() / 2);
+    ed->setTextCursor(c);
+    ed->ensureCursorVisible();
+    const int rounds = m_args.value(QStringLiteral("rounds"), 8).toInt();
+    const int gap = m_args.value(QStringLiteral("gap_ms"), 3000).toInt();
+    const int keys = 6;
+    for (int r = 0; r < rounds; ++r) {
+        instr::takeSamples();
+        settle(gap);
+        add(QStringLiteral("wake_footprint_before_keys_bytes"), double(platform::sampleSelf().footprintBytes), QStringLiteral("bytes"));
+        for (qint64 t : instr::takeSamples().value(QStringLiteral("window_buffer_trim_us")))
+            add(QStringLiteral("window_buffer_trim_us"), double(t));
+        typeText(QStringLiteral("abcdef"), keys, false);
+        settle(60);
+        const auto samples = instr::takeSamples();
+        for (const char *name : {"input_to_paint_us", "input_to_flush_us"}) {
+            const QVector<qint64> v = samples.value(QString::fromLatin1(name));
+            for (int k = 0; k < keys && k < v.size(); ++k)
+                add(QStringLiteral("wake_key%1_%2").arg(k + 1).arg(QLatin1String(name)), double(v[k]));
+        }
+    }
+    m_extra.insert(QStringLiteral("window_buffer_trims"), m_app->bufferTrimmer()->trims());
 }
 
 void BenchDriver::scenarioIdle()

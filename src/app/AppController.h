@@ -33,6 +33,7 @@ class SettingsPage;
 class TabStrip;
 class ShellHost;
 class Store;
+class WindowBufferTrimmer;
 
 class AppController : public QObject {
     Q_OBJECT
@@ -56,6 +57,12 @@ public:
         qint64 mediaBudgetBytes = 0;   // 0: MediaService's default
         qint64 mediaCacheBytes = 0;    // cached pixels; 0: MediaService's default
         QString attachmentsDir;        // default: next to the workspace file
+        // Read the start page while the window is built and show it with the
+        // window's first paint (off: request it once the event loop runs).
+        bool prefetchStartPage = true;
+        // Release the window's spare buffers after this long without a paint
+        // (WindowBufferTrimmer; macOS). 0: never.
+        int idleBufferTrimMs = 10000;
     };
 
     explicit AppController(const Options &opt, QObject *parent = nullptr);
@@ -73,6 +80,7 @@ public:
     CommandRegistry *commands() const { return m_commands; }
     DataContext *data() const { return m_data; }
     EditorContext *editorContext() const { return m_ectx; }
+    WindowBufferTrimmer *bufferTrimmer() const { return m_bufferTrimmer; }
     PreviewService *previews() const { return m_previews; }
     AttachmentStore *attachments() const { return m_attachments; }
     MediaService *media() const { return m_media; }
@@ -167,8 +175,14 @@ signals:
     void pagePainted(folia::PageId id, qint64 microsSinceRequest);
     void allSaved();
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
     void buildWindow();
+    // The page read during startup becomes the active page (once the window
+    // has its geometry: from its show event).
+    void showStartPage();
     void registerCommands();
     void seedWorkspace();
     void activate(PageSession *s, qint64 startedNs, bool cached, bool focusEditor);
@@ -186,7 +200,7 @@ private:
     void afterMove(PageId id, PageId oldParent, PageId newParent);
     QSet<PageId> heldPages() const;
     void tabsEdited();
-    void restoreTabs();
+    void restoreTabs(bool prefetched);
     // Shows the first root page in the current tab; `replace`: without
     // putting the tab's page on its back history.
     void openFirstPage(bool replace);
@@ -227,6 +241,8 @@ private:
     QPointer<SettingsPage> m_settings;
     QPointer<PdfViewerPage> m_pdf;
     QTimer m_prefsTimer;         // coalesces settings writes
+    WindowBufferTrimmer *m_bufferTrimmer = nullptr;
+    PageSession *m_startSession = nullptr; // built before the window is shown
     bool m_themeDirty = false;
     bool m_tabsDirty = false;
 

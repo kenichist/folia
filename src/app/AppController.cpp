@@ -5,6 +5,7 @@
 #include "import/DocumentKinds.h"
 #include "app/Preferences.h"
 #include "app/SettingsPage.h"
+#include "app/WindowBufferTrimmer.h"
 #include "core/Instrument.h"
 #include "core/LucideIcons.h"
 #include "editor/EditorContext.h"
@@ -243,6 +244,14 @@ bool AppController::start(QString *error)
     so.faultInjectable = m_opt.faultVfs;
     if (!m_store->open(so, error))
         return false;
+    // The page to open: read on the reader thread from now, while the window
+    // and the layout are built on this one.
+    const PageId wanted = m_opt.startPage > 0 ? m_opt.startPage
+        : m_opt.restoreLastPage && prefs::flag(m_store->setting(prefs::kRestoreLastPage))
+            ? m_store->setting(QStringLiteral("app.last_page")).toLongLong() : 0;
+    const bool prefetch = m_opt.prefetchStartPage && !m_store->wasEmptyAtOpen();
+    if (prefetch)
+        m_store->prefetchStartPage(wanted);
 
     m_ectx = new EditorContext(this);
 #ifdef FOLIA_WITH_MATH
@@ -335,7 +344,7 @@ bool AppController::start(QString *error)
     registerCommands();
     installUserPresets();
 
-    if (m_opt.seedIfEmpty && m_store->pageCount() == 0)
+    if (m_opt.seedIfEmpty && m_store->wasEmptyAtOpen())
         seedWorkspace();
 
     // Shell: explicit file > safe mode builtin > active preset.
@@ -372,14 +381,14 @@ bool AppController::start(QString *error)
         m_shell->setWatchFile(false);
     }
 
-    restoreTabs();
+    restoreTabs(prefetch);
     return true;
 }
 
 // Reopens the saved tabs (or the start page, or the first root page). One
 // read query checks them all and fetches their titles; only the shown tab's
 // page is loaded.
-void AppController::restoreTabs()
+void AppController::restoreTabs(bool prefetched)
 {
     QVector<PageId> pages;
     int active = 0;
@@ -398,6 +407,38 @@ void AppController::restoreTabs()
             else
                 pages[active] = last;
         }
+    }
+    // The page read ahead during startup (Store::prefetchStartPage) is the
+    // one the active tab shows, unless that page is gone: then the read-ahead
+    // holds the first root page, which the checks below may not choose.
+    PageContent startPage;
+    const bool have = prefetched && m_store->takeStartPage(&startPage, 500);
+    if (have && (pages.isEmpty() || startPage.id == pages.value(active))) {
+        // Shown with the window's first paint: built here, made the active
+        // page from the window's show event. Otherwise the window paints once
+        // without a page and again when the page arrives.
+        if (pages.isEmpty())
+            pages = {startPage.id};
+        m_tabs.reset(pages, active);
+        tabsEdited();
+        m_data->noteTitle(startPage.id, startPage.title);
+        m_startSession = createSession(startPage.id);
+        m_startSession->load(startPage);
+        m_cache.insert(startPage.id, m_startSession);
+        if (m_window->isVisible())
+            showStartPage();
+        else // from the window's show event; or, never shown, on the next turn
+            QTimer::singleShot(0, this, &AppController::showStartPage);
+        // The other tabs: titles for the strip, and those whose page is gone.
+        if (pages.size() > 1) {
+            m_store->pagesMeta(pages, this, [this](QVector<PageMeta> rows) {
+                for (const PageMeta &m : std::as_const(rows))
+                    m_data->noteTitle(m.id, m.title);
+                emit tabsChanged();
+            });
+            pruneTabs(0);
+        }
+        return;
     }
     if (pages.isEmpty()) {
         openFirstPage(false);
@@ -430,6 +471,26 @@ void AppController::restoreTabs()
     });
 }
 
+void AppController::showStartPage()
+{
+    PageSession *s = m_startSession;
+    m_startSession = nullptr;
+    if (!s || m_active || m_pendingOpen || m_tabs.current().page != s->pageId())
+        return; // shown already, or another page was asked for meanwhile
+    m_navigatingHistory = true; // restoring a tab is not a navigation inside it
+    openPage(s->pageId());
+    m_navigatingHistory = false;
+}
+
+bool AppController::eventFilter(QObject *watched, QEvent *event)
+{
+    // The window's children have their geometry when its show event arrives,
+    // so the page's scroll position can be restored; nothing is painted yet.
+    if (watched == m_window && event->type() == QEvent::Show && m_startSession)
+        showStartPage();
+    return QObject::eventFilter(watched, event);
+}
+
 void AppController::openFirstPage(bool replace)
 {
     m_store->fetchChildren(0, 0, 1, this, [this, replace](QVector<PageMeta> rows, int) {
@@ -451,6 +512,13 @@ void AppController::buildWindow()
     w->canUpload = &AppController::canUpload;
     w->upload = [this](const QStringList &paths) { uploadFiles(paths); };
     w->setAcceptDrops(true);
+    w->installEventFilter(this);
+    m_bufferTrimmer = new WindowBufferTrimmer(w, this);
+    m_bufferTrimmer->setIdleMs(m_opt.idleBufferTrimMs);
+    // The menu bar first: it creates the native window (about 45 ms), which
+    // needs no font, while the system fonts are still being listed on a
+    // worker (main.cpp). The first text widget below then finds them ready.
+    QMenuBar *mb = w->menuBar();
     m_stack = new QStackedWidget(w);
     w->setCentralWidget(m_stack);
     m_shellContainer = new QWidget(m_stack);
@@ -537,7 +605,6 @@ void AppController::buildWindow()
     // Native menus: always available, independent of the Lua layout.
     // Shortcuts are owned by the Lua layout (so users can rebind them); the
     // menu only keeps editing keys and the recovery keys reserved by the host.
-    QMenuBar *mb = w->menuBar();
     auto act = [this](QMenu *menu, const QString &text, const QString &cmd, const QKeySequence &ks = {},
                       const QVariantMap &args = {}) {
         QAction *a = menu->addAction(text);

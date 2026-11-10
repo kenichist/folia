@@ -1,12 +1,17 @@
 #include "app/AppController.h"
 #include "app/BenchDriver.h"
+#include "app/Platform.h"
+#include "editor/EditorContext.h"
 #include "core/Instrument.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QFontDatabase>
 #include <QMainWindow>
 #include <QMessageBox>
 #include <QTimer>
+
+#include <thread>
 
 #ifdef Q_OS_MACOS
 #include <mach-o/dyld.h>
@@ -89,7 +94,28 @@ int main(int argc, char **argv)
         if (eq > 0)
             benchArgMap.insert(kv.left(eq), kv.mid(eq + 1));
     }
+#ifdef Q_OS_MACOS
+    // The first text widget makes Qt list every installed font family (about
+    // 45 ms in CoreText). QFontDatabase is thread-safe: list them on a worker
+    // now, while this thread opens the workspace and creates the native
+    // window, neither of which needs a font. Joined before the app object
+    // goes. (Bench A/B: font_warmup=0.)
+    struct FontWarmup {
+        std::thread thread;
+        ~FontWarmup()
+        {
+            if (thread.joinable())
+                thread.join();
+        }
+    } fontWarmup;
+    if (benchArgMap.value(QStringLiteral("font_warmup"), 1).toInt() != 0)
+        fontWarmup.thread = std::thread([] { QFontDatabase::families(); });
+#endif
     if (benchMode) {
+        // A/B switches (docs/BENCHMARKS.md §6g).
+        o.prefetchStartPage = benchArgMap.value(QStringLiteral("start_prefetch"), 1).toInt() != 0;
+        if (benchArgMap.contains(QStringLiteral("buffer_trim_ms")))
+            o.idleBufferTrimMs = benchArgMap.value(QStringLiteral("buffer_trim_ms")).toInt();
         o.startPage = benchArgMap.value(QStringLiteral("start_page")).toLongLong();
         // media_budget_mib=N, media_cache_mib=N: run with another media
         // budget (cache + in-flight work) or cache cap (cached pixels).
@@ -117,7 +143,18 @@ int main(int argc, char **argv)
         // synthetic events are delivered directly and are unaffected.
         ctl.window()->setWindowFlag(Qt::WindowTransparentForInput, true);
     }
+    if (benchMode) {
+        ctl.editorContext()->wideRepaints = benchArgMap.value(QStringLiteral("wide_repaints")).toBool();
+        ctl.editorContext()->shapeCode = benchArgMap.value(QStringLiteral("code_shaping")).toBool();
+    }
     ctl.window()->show();
+    if (benchMode && benchArgMap.contains(QStringLiteral("overlay"))) {
+        // overlay=<opacity>: keep the bench window painted while the user
+        // works in a full-screen Space (a plain window is never shown there,
+        // so nothing paints). Nearly transparent and click-through.
+        const double alpha = benchArgMap.value(QStringLiteral("overlay")).toDouble();
+        folia::platform::showOverAllSpaces(ctl.window()->winId(), alpha > 0 ? alpha : 0.04);
+    }
 
     std::unique_ptr<folia::BenchDriver> driver;
     if (benchMode) {

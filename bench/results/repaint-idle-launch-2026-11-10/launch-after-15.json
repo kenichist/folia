@@ -1,0 +1,224 @@
+{
+    "buffer_trim_ms": 10000,
+    "counters": {
+        "attachment_gc_deleted": 0,
+        "attachment_imports": 0,
+        "block_height_estimates": 258,
+        "blocks_laid_out": 13,
+        "bytes_copied_for_save": 0,
+        "doc_cache_bytes": 162968,
+        "doc_cache_entries": 1,
+        "editor_lines_painted": 27,
+        "highlight_lines": 0,
+        "highlight_state_steps": 0,
+        "image_cache_hits": 0,
+        "image_decodes": 0,
+        "lua_errors": 0,
+        "lua_invocations": 4,
+        "lua_renders": 2,
+        "media_budget_bytes": 134217728,
+        "media_budget_waits": 0,
+        "media_cache_bytes": 0,
+        "media_cpu_us_discarded": 0,
+        "media_jobs_discarded": 0,
+        "media_jobs_dropped_queued": 0,
+        "media_reserved_bytes": 0,
+        "media_too_large": 0,
+        "paint_events": 12,
+        "pdf_cache_hits": 0,
+        "pdf_renders": 0,
+        "pdf_resize_settles": 0,
+        "pdf_tiles": 0,
+        "preview_cache_bytes": 8066,
+        "preview_cache_hits": 5,
+        "preview_cancelled": 0,
+        "preview_outstanding": 0,
+        "preview_renders": 8,
+        "preview_requests": 4,
+        "preview_stale_drops": 0,
+        "save_snapshot_full_walks": 0,
+        "save_snapshots": 0,
+        "widgets_created": 20,
+        "widgets_reused": 20,
+        "window_buffer_trims": 0
+    },
+    "editable": true,
+    "editor_code_shaping": false,
+    "editor_painter_clip": false,
+    "editor_wide_repaints": false,
+    "env": {
+        "arch": "arm64",
+        "args": {
+            "manifest": "/Users/kenichitanzil/Desktop/note-taking-app/.claude/worktrees/repaint-idle-launch/bench/results/repaint-idle-launch-2026-11-10/fixture-manifest.json",
+            "start_page": "2"
+        },
+        "device_pixel_ratio": 2,
+        "fixture_hash": "fnv1a64:f5ecfb8eecd9058b",
+        "fixture_seed": 42,
+        "folia": "0.2.0",
+        "input_path": "synthetic Qt events via QApplication::sendEvent (bypasses the OS HID/IME path)",
+        "kernel": "25.6.0",
+        "malloc_large_cache": "0",
+        "math_renderer": true,
+        "os": "macOS 26.6.2",
+        "os_file_cache": "not purged (warm after first touch); purging needs root",
+        "power_mode": "normal-power-mode",
+        "preset": "Default",
+        "qt": "6.12.0",
+        "thermal_state": "nominal",
+        "time": "2026-11-10T11:37:41",
+        "window_size": "1180x757"
+    },
+    "exec_to_main_ms": 23.732,
+    "font_warmup": true,
+    "metrics": {
+        "editor_paint_us": {
+            "samples": [
+                32016,
+                15,
+                6363,
+                11,
+                5384,
+                30,
+                25,
+                24,
+                41,
+                46,
+                54,
+                74
+            ],
+            "unit": "us"
+        },
+        "footprint_after_launch_bytes": {
+            "proxy": "task_vm_info.phys_footprint",
+            "samples": [
+                79613056
+            ],
+            "unit": "bytes"
+        },
+        "launch_main_to_editable_ms": {
+            "proxy": "main() entry to end of the first editor paint of the start page",
+            "samples": [
+                341.606208
+            ],
+            "unit": "ms"
+        },
+        "launch_process_to_editable_ms": {
+            "proxy": "kernel process start (sysctl KERN_PROC p_starttime) to end of the first editor paint of the start page",
+            "samples": [
+                365.327
+            ],
+            "unit": "ms"
+        },
+        "open_to_paint_us": {
+            "samples": [
+                160812
+            ],
+            "unit": "us"
+        },
+        "open_uncached_activate_us": {
+            "samples": [
+                37377
+            ],
+            "unit": "us"
+        },
+        "preview_render_us": {
+            "samples": [
+                22,
+                75,
+                32,
+                51,
+                2831,
+                155,
+                75,
+                58
+            ],
+            "unit": "us"
+        },
+        "session_build_us": {
+            "samples": [
+                6854
+            ],
+            "unit": "us"
+        },
+        "shell_load_us": {
+            "samples": [
+                19195
+            ],
+            "unit": "us"
+        },
+        "shell_reconcile_us": {
+            "samples": [
+                8809,
+                181
+            ],
+            "unit": "us"
+        },
+        "shell_render_us": {
+            "samples": [
+                275
+            ],
+            "unit": "us"
+        },
+        "theme_editor_us": {
+            "samples": [
+                24
+            ],
+            "unit": "us"
+        },
+        "theme_palette_us": {
+            "samples": [
+                30
+            ],
+            "unit": "us"
+        },
+        "theme_scheme_us": {
+            "samples": [
+                9889
+            ],
+            "unit": "us"
+        },
+        "tree_expand_main_us": {
+            "samples": [
+                14,
+                66
+            ],
+            "unit": "us"
+        },
+        "tree_expand_request_us": {
+            "samples": [
+                25
+            ],
+            "unit": "us"
+        },
+        "tree_expand_total_us": {
+            "samples": [
+                106865,
+                1549
+            ],
+            "unit": "us"
+        }
+    },
+    "notes": [
+    ],
+    "process": {
+        "doc_cache_bytes_est": 199832,
+        "doc_cache_entries": 1,
+        "footprint_bytes": 79645824,
+        "footprint_counter": "task_vm_info.phys_footprint",
+        "idle_wakeups": 0,
+        "interrupt_wakeups": 75,
+        "laid_out_blocks": 10,
+        "lua_bytes": 64940,
+        "peak_footprint_bytes": 92540032,
+        "preview_cache_bytes": 8066,
+        "resident_bytes": 122847232,
+        "system_s": 0.06829133333333333,
+        "threads": 11,
+        "user_s": 0.319692625
+    },
+    "scenario": "launch",
+    "start_page": 2,
+    "start_prefetch": true,
+    "window_exposed_and_active_ratio": 0
+}

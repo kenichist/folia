@@ -898,11 +898,13 @@ bool Store::open(const Options &opt, QString *error)
         }
     }
     {
-        sql::Stmt s(wdb, "SELECT COALESCE(MAX(id), 0), COUNT(*) FROM pages");
-        if (s.step() == SQLITE_ROW) {
+        // MAX(id) alone is a seek to the end of the table; together with a
+        // COUNT(*) it was a scan of an index over every page (2-14 ms at
+        // 50,000 pages), and startup only needs to know whether any exists.
+        sql::Stmt s(wdb, "SELECT COALESCE(MAX(id), 0) FROM pages");
+        if (s.step() == SQLITE_ROW)
             m_nextPageId.store(s.i64(0) + 1);
-            m_pageCountAtOpen = s.i64(1);
-        }
+        m_emptyAtOpen = m_nextPageId.load() <= 1;
         sql::Stmt b(wdb, "SELECT COALESCE(MAX(id), 0) FROM blocks");
         if (b.step() == SQLITE_ROW)
             m_nextBlockId.store(b.i64(0) + 1);
@@ -969,48 +971,65 @@ void Store::deliver(QObject *ctx, std::function<void()> fn)
     }, Qt::QueuedConnection);
 }
 
+namespace {
+// One page's blocks in order, plus the metadata of the attachments they reference.
+void readPage(sqlite3 *db, PageId id, PageContent &pc, QVector<AttachmentInfo> &infos)
+{
+    pc.id = id;
+    {
+        sql::Stmt p(db,
+            "SELECT parent_id, title, rev, sel_anchor_block, sel_anchor_off, sel_pos_block, "
+            "sel_pos_off, scroll_y FROM pages WHERE id=?1");
+        p.bind(1, id);
+        if (p.step() == SQLITE_ROW) {
+            pc.found = true;
+            pc.parent = p.i64(0);
+            pc.title = p.text(1);
+            pc.rev = Revision(p.i64(2));
+            pc.selection.anchorBlock = p.i64(3);
+            pc.selection.anchorOffset = p.i32(4);
+            pc.selection.posBlock = p.i64(5);
+            pc.selection.posOffset = p.i32(6);
+            pc.selection.scrollY = p.i32(7);
+        }
+    }
+    QStringList hashes;
+    if (pc.found) {
+        sql::Stmt b(db, "SELECT id, kind, lang, text, target FROM blocks WHERE page_id=?1 ORDER BY ord");
+        b.bind(1, id);
+        while (b.step() == SQLITE_ROW) {
+            BlockRecord r;
+            r.id = b.i64(0);
+            r.kind = BlockKind(b.i32(1));
+            r.lang = b.text(2);
+            r.text = b.text(3);
+            r.target = b.i64(4);
+            QString hash;
+            if (r.kind == BlockKind::Text && attachments::parseAnyMarkdown(r.text, &hash))
+                hashes << hash;
+            pc.blocks.push_back(std::move(r));
+        }
+    }
+    hashes.removeDuplicates();
+    infos = queryAttachments(db, hashes);
+}
+} // namespace
+
+struct Store::StartFetch {
+    std::mutex mu;
+    std::condition_variable cv;
+    bool done = false;
+    PageContent page;
+    QVector<AttachmentInfo> infos;
+};
+
 void Store::openPage(PageId id, QObject *ctx, std::function<void(PageContent)> done)
 {
     QPointer<QObject> guard(ctx);
     m_reader->post([this, id, guard, done](sqlite3 *db) {
         PageContent pc;
-        pc.id = id;
-        {
-            sql::Stmt p(db,
-                "SELECT parent_id, title, rev, sel_anchor_block, sel_anchor_off, sel_pos_block, "
-                "sel_pos_off, scroll_y FROM pages WHERE id=?1");
-            p.bind(1, id);
-            if (p.step() == SQLITE_ROW) {
-                pc.found = true;
-                pc.parent = p.i64(0);
-                pc.title = p.text(1);
-                pc.rev = Revision(p.i64(2));
-                pc.selection.anchorBlock = p.i64(3);
-                pc.selection.anchorOffset = p.i32(4);
-                pc.selection.posBlock = p.i64(5);
-                pc.selection.posOffset = p.i32(6);
-                pc.selection.scrollY = p.i32(7);
-            }
-        }
-        QStringList hashes;
-        if (pc.found) {
-            sql::Stmt b(db, "SELECT id, kind, lang, text, target FROM blocks WHERE page_id=?1 ORDER BY ord");
-            b.bind(1, id);
-            while (b.step() == SQLITE_ROW) {
-                BlockRecord r;
-                r.id = b.i64(0);
-                r.kind = BlockKind(b.i32(1));
-                r.lang = b.text(2);
-                r.text = b.text(3);
-                r.target = b.i64(4);
-                QString hash;
-                if (r.kind == BlockKind::Text && attachments::parseAnyMarkdown(r.text, &hash))
-                    hashes << hash;
-                pc.blocks.push_back(std::move(r));
-            }
-        }
-        hashes.removeDuplicates();
-        QVector<AttachmentInfo> infos = queryAttachments(db, hashes);
+        QVector<AttachmentInfo> infos;
+        readPage(db, id, pc, infos);
         QMetaObject::invokeMethod(this, [this, guard, done, pc = std::move(pc), infos = std::move(infos)]() mutable {
             if (!infos.isEmpty())
                 emit attachmentsLoaded(infos); // before the page's layout asks for sizes
@@ -1018,6 +1037,79 @@ void Store::openPage(PageId id, QObject *ctx, std::function<void(PageContent)> d
                 done(std::move(pc));
         }, Qt::QueuedConnection);
     });
+}
+
+void Store::prefetchStartPage(PageId id)
+{
+    auto fetch = std::make_shared<StartFetch>();
+    m_startFetch = fetch;
+    m_reader->post([fetch, id](sqlite3 *db) {
+        PageId target = 0;
+        if (id > 0) {
+            sql::Stmt s(db, "SELECT 1 FROM pages WHERE id=?1 AND trashed=0");
+            s.bind(1, id);
+            if (s.step() == SQLITE_ROW)
+                target = id;
+        }
+        if (target == 0) {
+            sql::Stmt s(db, "SELECT id FROM pages WHERE parent_id=0 AND trashed=0 ORDER BY ord LIMIT 1");
+            if (s.step() == SQLITE_ROW)
+                target = s.i64(0);
+        }
+        PageContent pc;
+        QVector<AttachmentInfo> infos;
+        if (target > 0)
+            readPage(db, target, pc, infos);
+        {
+            std::lock_guard<std::mutex> lk(fetch->mu);
+            fetch->page = std::move(pc);
+            fetch->infos = std::move(infos);
+            fetch->done = true;
+        }
+        fetch->cv.notify_all();
+    });
+}
+
+bool Store::takeStartPage(PageContent *page, int timeoutMs)
+{
+    const std::shared_ptr<StartFetch> fetch = std::move(m_startFetch);
+    m_startFetch.reset();
+    if (!fetch)
+        return false;
+    QVector<AttachmentInfo> infos;
+    {
+        std::unique_lock<std::mutex> lk(fetch->mu);
+        if (!fetch->cv.wait_for(lk, std::chrono::milliseconds(timeoutMs), [&] { return fetch->done; }))
+            return false;
+        *page = std::move(fetch->page);
+        infos = std::move(fetch->infos);
+    }
+    if (!page->found)
+        return false;
+    if (!infos.isEmpty())
+        emit attachmentsLoaded(infos); // before the page's layout asks for sizes
+    return true;
+}
+
+qint64 Store::pageCount()
+{
+    if (!m_open)
+        return 0;
+    std::mutex mu;
+    std::condition_variable cv;
+    bool done = false;
+    qint64 n = 0;
+    m_reader->post([&](sqlite3 *db) {
+        sql::Stmt s(db, "SELECT COUNT(*) FROM pages");
+        const qint64 v = s.step() == SQLITE_ROW ? s.i64(0) : 0;
+        std::lock_guard<std::mutex> lk(mu);
+        n = v;
+        done = true;
+        cv.notify_all();
+    });
+    std::unique_lock<std::mutex> lk(mu);
+    cv.wait(lk, [&] { return done; });
+    return n;
 }
 
 void Store::fetchChildren(PageId parent, int offset, int limit, QObject *ctx,

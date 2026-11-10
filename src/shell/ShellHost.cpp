@@ -1957,6 +1957,9 @@ void ShellHost::applyTheme(const QVariantMap &theme)
         t.mono.setFamily(mono.value(QStringLiteral("family")).toString());
     if (mono.contains(QStringLiteral("size")))
         t.mono.setPointSizeF(qBound(8.0, mono.value(QStringLiteral("size")).toDouble(), 40.0));
+    // A code font with programming ligatures (Fira Code, JetBrains Mono):
+    // shape all code text, so they form (EditorContext::codeFont).
+    t.monoLigatures = mono.value(QStringLiteral("ligatures")).toBool();
     const QVariantMap ed = theme.value(QStringLiteral("editor")).toMap();
     if (ed.contains(QStringLiteral("max_width")))
         t.maxColumnWidth = qBound(0.0, ed.value(QStringLiteral("max_width")).toDouble(), 4000.0);

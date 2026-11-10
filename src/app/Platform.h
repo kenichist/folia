@@ -34,6 +34,12 @@ bool reducedTransparency();
 // Benchmarks: keep the process out of App Nap (macOS throttles the threads
 // of a background app whose windows are covered). Off by default.
 void setAppNapAllowed(bool allowed);
+// Benchmarks: show this window on every Space, also over other apps'
+// full-screen Spaces, at `opacity`, ignoring the mouse. macOS never paints a
+// window it does not show, and a regular app's window cannot join another
+// app's full-screen Space: this makes the process an accessory app whose
+// window can. No-op elsewhere.
+void showOverAllSpaces(quintptr winId, double opacity);
 // Called on the main thread when the OS reports memory pressure.
 void onMemoryPressure(std::function<void(bool critical)> cb);
 

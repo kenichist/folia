@@ -1,0 +1,23 @@
+## typing (400 keys)
+top      before paint p50 3.64–3.83 p95 5.27–5.35 | input→paint p50 5.25–5.46 p95 7.87–8.21 | input→flush p50 5.95–6.21 | cpu/edit 6.69–6.71 ms | lines/edit 14.4–14.6
+top      after  paint p50 0.25–0.39 p95 0.58–0.82 | input→paint p50 1.30–1.84 p95 2.59–3.87 | input→flush p50 1.82–2.53 | cpu/edit 3.33–4.42 ms | lines/edit 1.4
+bottom   before paint p50 0.27–0.37 p95 4.06–4.29 | input→paint p50 1.37–1.88 p95 6.66–6.80 | input→flush p50 3.48–4.11 | cpu/edit 4.20–4.78 ms | lines/edit 6.5
+bottom   after  paint p50 0.35–0.41 p95 0.75–0.85 | input→paint p50 1.74–1.83 p95 3.94–4.21 | input→flush p50 2.75–3.12 | cpu/edit 4.23–4.47 ms | lines/edit 1.3
+formula  before paint p50 2.56–2.87 p95 4.07–5.81 | input→paint p50 4.66–5.29 p95 7.16–11.80 | input→flush p50 5.48–6.26 | cpu/edit 6.09–6.82 ms | lines/edit 17.3–17.5
+formula  after  paint p50 1.58–1.59 p95 3.29–3.31 | input→paint p50 3.56 p95 6.76–7.02 | input→flush p50 4.24–4.49 | cpu/edit 5.38–5.54 ms | lines/edit 2.4
+## scroll
+scroll-code-before     paints n/a | paint total n/a ms | lines painted n/a | frame work p50 n/a p95 n/a ms | cpu n/a s
+scroll-code-after      paints 1130–1140 | paint total 1469–1916 ms | lines painted 19881–20001 | frame work p50 2.87–3.36 p95 3.95–6.84 ms | cpu 4.50–7.06 s
+scroll-code-unshaped   paints n/a | paint total n/a ms | lines painted n/a | frame work p50 n/a p95 n/a ms | cpu n/a s
+scroll-stress-before   paints n/a | paint total n/a ms | lines painted n/a | frame work p50 n/a p95 n/a ms | cpu n/a s
+scroll-stress-after    paints 1285–1288 | paint total 4244–4291 ms | lines painted 4031–4033 | frame work p50 6.89–7.00 p95 9.58–10.04 ms | cpu 7.73–8.05 s
+## wake (6 keys after each 3 s gap)
+before footprint before keys 82.3–82.4 MB | input→flush median per key (ms): 4.05–5.03, 1.51–2.17, 1.96–2.55, 6.09–9.55, 1.84–1.85, 1.55–1.98 | trim n/a ms
+after  footprint before keys 53.7–53.8 MB | input→flush median per key (ms): 9.38–11.17, 5.18–6.28, 2.45–3.19, 4.45–7.04, 1.98–2.06, 2.04–3.69 | trim 16.6–19.8 ms
+## idle
+before footprint first 80.0 last 79.8 MB | cpu 0.22 % | trims 0
+after  footprint first 79.6 last 50.8 MB | cpu 0.22 % | trims 1
+## launch (main() → editable, ms)
+before    n=18 min 351 median 515 max 1240
+prefetch  n=18 min 357 median 393 max 2881
+after     n=18 min 311 median 345 max 1600

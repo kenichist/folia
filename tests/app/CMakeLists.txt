@@ -16,3 +16,8 @@ target_link_libraries(upload_tests PRIVATE folia_app_core Qt6::Test)
 add_test(NAME upload_tests COMMAND upload_tests)
 set_tests_properties(upload_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=${FOLIA_TEST_QPA}")
 target_include_directories(upload_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../import) # DocxFixture.h
+# Startup read-ahead and the idle window's buffers.
+add_executable(launch_tests tst_launch.cpp)
+target_link_libraries(launch_tests PRIVATE folia_app_core Qt6::Test)
+add_test(NAME launch_tests COMMAND launch_tests)
+set_tests_properties(launch_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=${FOLIA_TEST_QPA}")

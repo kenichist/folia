@@ -142,6 +142,12 @@ No separate application journal is used: no requirement needed one.
   per step. The other lines' heights are estimated again once, 150 ms after
   the width stops changing, and only if the text column changed width (a
   pane wider than the column + margins just moves it).
+- **Repaint regions.** An edit whose lines stay as tall as before repaints
+  those lines only. The layout is handed the paint event's region and skips
+  lines no part of it touches (the overlay scroll bar's strip beside the
+  text). A paint pass that corrects an estimated height has drawn its lines
+  in place and asks only for what lies below it. Pure-ASCII code text is laid
+  out without shaping (`EditorContext::codeFont`).
 - Display math renders below its source. Inline `$…$` renders in place,
   except the formula the caret touches, which shows its source (plus a
   floating preview). Source always stays editable, and errors are shown
@@ -233,6 +239,9 @@ See `presets/REFERENCE.md` (the language reference shipped with the presets).
   - Shell ▸ Reset to Default Layout (Mod+Alt+Shift+R) is native and always
     available.
   - Live reload (file watch) is deferred while the editor has an IME preedit.
+- **Startup.** The page to open is read on the reader thread as soon as the
+  store is open, built before the window is shown and made the active page
+  from the window's show event, so the first paint already shows it.
 - **Shortcuts.** Logical names (`Mod` = Cmd on macOS, Ctrl elsewhere) map to
   platform conventions.
   - Editing and recovery keys are reserved.
@@ -263,7 +272,9 @@ See `presets/REFERENCE.md` (the language reference shipped with the presets).
 On macOS memory pressure (dispatch source): clean cached pages are dropped,
 the preview cache is trimmed (to 0 when critical), the layout cap is
 lowered, and the decoded-image cache is trimmed while the media budget drops
-to ½ (warning) or ¼ (critical) for a 60 s cool-down. The caret stops blinking after 5 s idle, so an idle window has no
+to ½ (warning) or ¼ (critical) for a 60 s cool-down. After 10 s without a paint the
+window's spare backing-store buffers are released (macOS, `WindowBufferTrimmer`:
+about 29 MB of an idle window). The caret stops blinking after 5 s idle, so an idle window has no
 repaint loop.
 
 ## 7. Platform layer

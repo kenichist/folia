@@ -20,6 +20,11 @@
 #include <QImage>
 #include <QInputMethodEvent>
 #include <QPainter>
+#include <QTextLayout>
+#include <QScrollBar>
+#include <QPaintEvent>
+#include <QFontDatabase>
+#include <QFontInfo>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -56,6 +61,47 @@ QVector<PageMeta> childrenSync(Store &s, PageId parent, int *total = nullptr)
     });
     QTest::qWaitFor([&] { return done; }, 5000);
     return out;
+}
+
+// Collects the regions of a widget's paint events.
+struct PaintRegions : QObject {
+    QVector<QRegion> regions;
+    bool eventFilter(QObject *, QEvent *e) override
+    {
+        if (e->type() == QEvent::Paint)
+            regions << static_cast<QPaintEvent *>(e)->region();
+        return false;
+    }
+    QRegion all() const
+    {
+        QRegion r;
+        for (const QRegion &x : regions)
+            r += x;
+        return r;
+    }
+};
+
+PageContent proseAndCodePage(PageId id, int repeats)
+{
+    PageContent pc;
+    pc.id = id;
+    pc.found = true;
+    const QStringList kinds = {
+        QStringLiteral("# Heading over the text"),
+        QStringLiteral("Plain words with **bold**, *italic* and `code` in one line that wraps around the column "
+                       "edge at least once, so a paragraph spans several lines."),
+        QStringLiteral("> A quoted line"),
+        QStringLiteral("- A list item with a [link](https://example.com)"),
+        QStringLiteral("Short line."),
+    };
+    BlockId bid = 1;
+    for (int i = 0; i < repeats; ++i) {
+        BlockRecord r;
+        r.id = bid++;
+        r.text = kinds[i % kinds.size()];
+        pc.blocks << r;
+    }
+    return pc;
 }
 
 } // namespace
@@ -638,6 +684,124 @@ private slots:
 #endif
     }
 
+    void markupDelimitersHideAwayFromCaret()
+    {
+        EditorContext ctx;
+        BlockId next = 1;
+        PageSession ses(32, &ctx, [&next] { return next++; });
+        ses.initNew(0, QStringLiteral("Markup"));
+        NoteEditor ed(&ctx);
+        ed.resize(760, 420);
+        ed.show();
+        ed.setSession(&ses);
+        const QString line = QStringLiteral("a **bold** and _it_ and `code` and $x^2$ end");
+        QTextCursor c(ses.document());
+        c.insertText(line + QStringLiteral("\n```py\nx = 1\n```\n$$\nx^2\n$$\n## Head **b**\nlast"));
+        QTextCursor away(ses.document());
+        away.movePosition(QTextCursor::End);
+        ed.setTextCursor(away);
+        ed.viewport()->repaint();
+        QTextDocument *doc = ses.document();
+        const QTextBlock b = doc->firstBlock();
+        VirtualLayout *vl = ses.layout();
+        auto markup = [&]() { return PageSession::dataOf(b)->markup.get(); };
+        auto width = [&](int from, int to) {
+            vl->blockBoundingRect(b); // laid out
+            const QTextLine l = b.layout()->lineForTextPosition(from);
+            return l.cursorToX(to) - l.cursorToX(from);
+        };
+        const int bold = int(line.indexOf(QLatin1String("**")));
+        const int it = int(line.indexOf(QLatin1Char('_')));
+        const int code = int(line.indexOf(QLatin1Char('`')));
+        const int math = int(line.indexOf(QLatin1Char('$')));
+
+        // Away from the caret the delimiters take no room (inline code keeps a
+        // little background); the text itself never changes.
+        QVERIFY(markup());
+        QCOMPARE(int(markup()->spans.size()), 3);
+        QCOMPARE(markup()->revealed, -1);
+        QCOMPARE(b.text(), line);
+        QVERIFY2(qAbs(width(bold, bold + 2)) < 0.5, qPrintable(QString::number(width(bold, bold + 2))));
+        QVERIFY(qAbs(width(bold + 6, bold + 8)) < 0.5);
+        QVERIFY(qAbs(width(it, it + 1)) < 0.5);
+        QVERIFY(qAbs(width(it + 3, it + 4)) < 0.5);
+        QVERIFY(qAbs(width(code, code + 1) - 3) < 0.5);
+        QVERIFY(qAbs(width(math, math + 1)) < 0.5); // not rendered here: source without its `$`s
+
+        // The caret in a span shows that span's delimiters only.
+        QTextCursor in(doc);
+        in.setPosition(b.position() + bold + 4);
+        ed.setTextCursor(in);
+        QCOMPARE(markup()->revealed, 0);
+        QVERIFY(width(bold, bold + 2) > 3);
+        QVERIFY(qAbs(width(it, it + 1)) < 0.5);
+        in.setPosition(b.position() + math + 2);
+        ed.setTextCursor(in);
+        QCOMPARE(markup()->revealed, -1);
+        QVERIFY(qAbs(width(bold, bold + 2)) < 0.5);
+        QVERIFY(width(math, math + 1) > 3);
+        ed.setTextCursor(away);
+        QVERIFY(qAbs(width(math, math + 1)) < 0.5);
+
+        // A click at a hidden delimiter never lands between its characters.
+        {
+            const QRectF br = vl->blockBoundingRect(b);
+            const QTextLine l = b.layout()->lineForTextPosition(bold);
+            const QPointF at(l.cursorToX(bold), br.top() + l.y() + l.height() / 2);
+            const int hit = vl->hitTest(at, Qt::FuzzyHit) - b.position();
+            QVERIFY2(hit == bold || hit == bold + 2, qPrintable(QString::number(hit)));
+        }
+
+        // Fences: the opener keeps its language as a label; a line holding only
+        // ``` or $$ shrinks to a sliver until the caret is on it.
+        const QTextBlock opener = doc->findBlockByNumber(1);
+        const QTextBlock closer = doc->findBlockByNumber(3);
+        const QTextBlock mathOpen = doc->findBlockByNumber(4);
+        QCOMPARE(opener.text(), QStringLiteral("```py"));
+        vl->blockBoundingRect(opener);
+        const QTextLine ol = opener.layout()->lineAt(0);
+        QVERIFY(qAbs(ol.cursorToX(3) - ol.cursorToX(0)) < 0.5);
+        QVERIFY(ol.cursorToX(5) - ol.cursorToX(3) > 5);
+        const qreal lineH = vl->blockBoundingRect(doc->findBlockByNumber(2)).height(); // a code line
+        for (const QTextBlock &fence : {closer, mathOpen}) {
+            const qreal sliver = vl->blockBoundingRect(fence).height();
+            ed.setTextCursor(QTextCursor(fence));
+            const qreal shown = vl->blockBoundingRect(fence).height();
+            QVERIFY2(shown - sliver > lineH / 2, qPrintable(QStringLiteral("%1 vs %2").arg(sliver).arg(shown)));
+            ed.setTextCursor(away);
+            QCOMPARE(vl->blockBoundingRect(fence).height(), sliver);
+        }
+
+        // Heading #s show while the caret is anywhere on the heading line,
+        // independently of the line's inline spans.
+        const QTextBlock head = doc->findBlockByNumber(7);
+        QCOMPARE(head.text(), QStringLiteral("## Head **b**"));
+        auto headWidth = [&](int from, int to) {
+            vl->blockBoundingRect(head);
+            const QTextLine l = head.layout()->lineAt(0);
+            return l.cursorToX(to) - l.cursorToX(from);
+        };
+        QVERIFY(qAbs(headWidth(0, 3)) < 0.5);
+        QVERIFY(qAbs(headWidth(8, 10)) < 0.5);
+        {
+            const QRectF br = vl->blockBoundingRect(head);
+            const QTextLine l = head.layout()->lineAt(0);
+            const QPointF at(l.cursorToX(0), br.top() + l.y() + l.height() / 2);
+            QCOMPARE(vl->hitTest(at, Qt::FuzzyHit) - head.position(), 3); // the heading text, not the #s
+        }
+        QTextCursor inHead(head);
+        inHead.setPosition(head.position() + 5);
+        ed.setTextCursor(inHead);
+        QVERIFY(headWidth(0, 3) > 5);
+        QVERIFY(qAbs(headWidth(8, 10)) < 0.5); // caret not in the bold span
+        inHead.setPosition(head.position() + 10);
+        ed.setTextCursor(inHead);
+        QVERIFY(headWidth(0, 3) > 5);
+        QVERIFY(headWidth(8, 10) > 3);
+        ed.setTextCursor(away);
+        QVERIFY(qAbs(headWidth(0, 3)) < 0.5);
+    }
+
     void layoutIsLazyOnHugeDocument()
     {
         Store s;
@@ -982,6 +1146,253 @@ private slots:
         QCOMPARE(rows.size(), 1); // the subtree of A is trashed, unknown ids are absent
         QCOMPARE(rows[0].id, c);
         QCOMPARE(rows[0].title, QStringLiteral("C"));
+    }
+
+    void typingRepaintsOnlyTheEditedLines()
+    {
+        // An edit that leaves its lines as tall as before asks for those
+        // lines only; one that changes a height asks for everything below.
+        // Either way, painting just the requested region over the previous
+        // frame must give the frame a full repaint gives.
+        BlockId next = 1000;
+        PageSession ses(21, m_ctx, [&next] { return next++; });
+        ses.load(proseAndCodePage(21, 40));
+        NoteEditor ed(m_ctx);
+        ed.resize(700, 420);
+        ed.show();
+        ed.setSession(&ses);
+        ed.setCursorWidth(0); // no caret blinking between the renders
+        QVERIFY(QTest::qWaitForWindowExposed(&ed));
+        QTest::qWait(60);
+        QWidget *vp = ed.viewport();
+        auto full = [&] {
+            QImage img(vp->size(), QImage::Format_ARGB32_Premultiplied);
+            img.fill(Qt::white);
+            vp->render(&img);
+            return img;
+        };
+        PaintRegions paints;
+        vp->installEventFilter(&paints);
+        auto editAndCheck = [&](const std::function<void()> &edit, QRegion *asked) {
+            QImage frame = full();
+            paints.regions.clear();
+            edit();
+            QTest::qWait(60);
+            *asked = paints.all();
+            QVERIFY(!asked->isEmpty());
+            vp->render(&frame, asked->boundingRect().topLeft(), *asked); // the incremental frame
+            const QImage want = full();
+            QRect diff;
+            for (int y = 0; y < want.height(); ++y)
+                for (int x = 0; x < want.width(); ++x)
+                    if (frame.pixel(x, y) != want.pixel(x, y))
+                        diff |= QRect(x, y, 1, 1);
+            QVERIFY2(diff.isEmpty(), qPrintable(QStringLiteral("differs in %1,%2 %3x%4; asked %5 rects, bounds %6,%7 %8x%9")
+                .arg(diff.x()).arg(diff.y()).arg(diff.width()).arg(diff.height()).arg(asked->rectCount())
+                .arg(asked->boundingRect().x()).arg(asked->boundingRect().y()).arg(asked->boundingRect().width()).arg(asked->boundingRect().height())));
+        };
+        const QTextBlock line = ses.document()->findBlockByNumber(4); // "Short line.", near the top
+        QRegion asked;
+        // (The first edit after a load reports the loaded range with it.)
+        editAndCheck([&] {
+            QTextCursor c(line);
+            c.insertText(QStringLiteral("w"));
+        }, &asked);
+        editAndCheck([&] {
+            QTextCursor c(line);
+            c.insertText(QStringLiteral("x"));
+        }, &asked);
+        // What the edit itself asked for is the first paint after it.
+        const QRect text = paints.regions.value(0).boundingRect();
+        QVERIFY2(text.height() < 60, qPrintable(QString::number(text.height())));
+        // The same edit under the old rule reaches the bottom of the viewport.
+        m_ctx->wideRepaints = true;
+        editAndCheck([&] {
+            QTextCursor c(line);
+            c.insertText(QStringLiteral("y"));
+        }, &asked);
+        m_ctx->wideRepaints = false;
+        QVERIFY(asked.boundingRect().bottom() >= vp->height() - 2);
+        // A line that grows: everything below it moves and is asked for.
+        editAndCheck([&] {
+            QTextCursor c(line);
+            c.insertText(QString(QStringLiteral("more words ")).repeated(30));
+        }, &asked);
+        QVERIFY(asked.boundingRect().bottom() >= vp->height() - 2);
+        // A new line.
+        editAndCheck([&] {
+            QTextCursor c(line);
+            c.movePosition(QTextCursor::EndOfBlock);
+            c.insertText(QStringLiteral("\nnew"));
+        }, &asked);
+        QVERIFY(asked.boundingRect().bottom() >= vp->height() - 2);
+        ed.setSession(nullptr);
+    }
+
+    void linesOutsideUpdateRegionAreSkipped()
+    {
+        // The scroll bar's strip beside the text column, alone or with one
+        // line: the lines no part of the region touches are not drawn, and
+        // the pixels are those of drawing every line in the bounding rect.
+        BlockId next = 1000;
+        PageSession ses(22, m_ctx, [&next] { return next++; });
+        ses.load(proseAndCodePage(22, 40));
+        NoteEditor ed(m_ctx);
+        ed.resize(1100, 420); // the 760 px column leaves margins on both sides
+        ed.show();
+        ed.setSession(&ses);
+        ed.clearFocus();
+        QTest::qWait(60);
+        QWidget *vp = ed.viewport();
+        const QRegion strip(vp->width() - 17, 0, 17, vp->height());
+        const QRegion lineAndStrip = strip + QRegion(0, 200, vp->width(), 23);
+        const QColor fill(255, 0, 255);
+        auto render = [&](const QRegion &rgn, qint64 *lines) {
+            QImage img(vp->size() * 2, QImage::Format_ARGB32_Premultiplied);
+            img.setDevicePixelRatio(2);
+            img.fill(fill);
+            const qint64 before = instr::get(instr::EditorLinesPainted);
+            vp->render(&img, QPoint(), rgn, QWidget::RenderFlags());
+            *lines = instr::get(instr::EditorLinesPainted) - before;
+            return img;
+        };
+        for (const QRegion &rgn : {strip, lineAndStrip}) {
+            qint64 wideLines = 0, lines = 0;
+            m_ctx->wideRepaints = true;
+            const QImage wide = render(rgn, &wideLines);
+            m_ctx->wideRepaints = false;
+            const QImage narrow = render(rgn, &lines);
+            QCOMPARE(narrow, wide);
+            QVERIFY2(wideLines > 8, qPrintable(QString::number(wideLines)));
+            QVERIFY2(lines <= 3, qPrintable(QString::number(lines)));
+        }
+        ed.setSession(nullptr);
+    }
+
+    void scrollingOverNewLinesPaintsEachFrameOnce()
+    {
+        // Lines are laid out when first painted, and may come out at another
+        // height than estimated. The pass that lays them out draws them in
+        // place: it must match a second full repaint, and must not ask for one.
+        PageContent pc;
+        pc.id = 23;
+        pc.found = true;
+        BlockRecord code;
+        code.id = 1;
+        code.kind = BlockKind::Code;
+        code.lang = QStringLiteral("cpp");
+        QStringList lines;
+        for (int i = 0; i < 600; ++i)
+            lines << (i % 7 == 3 ? QStringLiteral("    auto s = u\"漢字 🙂 mixed\"; // line %1").arg(i)
+                                 : QStringLiteral("    int value_%1 = compute(%1) + offset; // line %1").arg(i));
+        code.text = lines.join(QLatin1Char('\n'));
+        pc.blocks << code;
+        BlockId next = 1000;
+        PageSession ses(23, m_ctx, [&next] { return next++; });
+        ses.load(pc);
+        NoteEditor ed(m_ctx);
+        ed.resize(700, 420);
+        ed.show();
+        ed.setSession(&ses);
+        ed.clearFocus();
+        QVERIFY(QTest::qWaitForWindowExposed(&ed));
+        QTest::qWait(60);
+        QWidget *vp = ed.viewport();
+        auto full = [&] {
+            QImage img(vp->size(), QImage::Format_ARGB32_Premultiplied);
+            img.fill(Qt::white);
+            vp->render(&img);
+            return img;
+        };
+        // A jump to lines never laid out: the first pass is already right.
+        ed.verticalScrollBar()->setValue(4000);
+        const QImage first = full();
+        QCOMPARE(first, full());
+        // Step by step over new lines: full-width paints, one per step.
+        PaintRegions paints;
+        vp->installEventFilter(&paints);
+        auto fullWidthPaints = [&](bool wide) {
+            m_ctx->wideRepaints = wide;
+            paints.regions.clear();
+            const int steps = 25;
+            for (int i = 0; i < steps; ++i) {
+                ed.verticalScrollBar()->setValue(ed.verticalScrollBar()->value() + 40);
+                QTest::qWait(20);
+            }
+            QTest::qWait(60);
+            m_ctx->wideRepaints = false;
+            int n = 0;
+            for (const QRegion &r : paints.regions)
+                n += r.boundingRect().width() > vp->width() / 2 && r.boundingRect().height() > vp->height() / 2 ? 1 : 0;
+            return n;
+        };
+        const int now = fullWidthPaints(false);
+        QVERIFY2(now <= 27, qPrintable(QString::number(now)));
+        ed.setSession(nullptr);
+    }
+
+    void asciiCodeIsLaidOutUnshaped()
+    {
+        // Plain ASCII in the fixed-pitch code font needs no shaping; other
+        // text and a theme that asks for ligatures keep it. Widths agree.
+        const EditorTheme original = m_ctx->theme();
+        if (!QFontInfo(original.mono).fixedPitch()) { // the offscreen platform's default is proportional
+            EditorTheme fixed = original;
+            for (const char *family : {"Menlo", "DejaVu Sans Mono", "Consolas", "Courier New"})
+                if (QFontDatabase::hasFamily(QString::fromLatin1(family))) {
+                    fixed.mono.setFamily(QString::fromLatin1(family));
+                    break;
+                }
+            if (!QFontInfo(fixed.mono).fixedPitch())
+                QSKIP("no fixed-pitch font here");
+            m_ctx->setTheme(fixed);
+        }
+        QVERIFY(m_ctx->codeFont(true).styleStrategy() & QFont::PreferNoShaping);
+        QVERIFY(!(m_ctx->codeFont(false).styleStrategy() & QFont::PreferNoShaping));
+        PageContent pc;
+        pc.id = 24;
+        pc.found = true;
+        BlockRecord code;
+        code.id = 1;
+        code.kind = BlockKind::Code;
+        code.lang = QStringLiteral("cpp");
+        code.text = QStringLiteral("int main() { return fi + ffl; } // -> != <=\nauto s = \"漢字 🙂\";");
+        BlockRecord para;
+        para.id = 2;
+        para.text = QStringLiteral("Inline `code_here()` in prose.");
+        pc.blocks << code << para;
+        auto widths = [&](bool shape) {
+            m_ctx->shapeCode = shape;
+            BlockId next = 1000;
+            PageSession ses(24, m_ctx, [&next] { return next++; });
+            ses.load(pc);
+            ses.document()->setPageSize(QSizeF(700, 400));
+            QVector<qreal> w;
+            QVector<bool> unshaped;
+            for (QTextBlock b = ses.document()->firstBlock(); b.isValid(); b = b.next()) {
+                ses.layout()->blockBoundingRect(b);
+                QTextLayout *tl = b.layout();
+                w << (tl->lineCount() ? tl->lineAt(0).naturalTextWidth() : 0);
+                bool u = false;
+                for (const QTextLayout::FormatRange &r : tl->formats())
+                    u = u || (r.format.fontStyleStrategy() & QFont::PreferNoShaping);
+                unshaped << u;
+            }
+            m_ctx->shapeCode = false;
+            return qMakePair(w, unshaped);
+        };
+        const auto shaped = widths(true);
+        const auto plain = widths(false);
+        QCOMPARE(plain.first, shaped.first);
+        // ``` / ASCII line / non-ASCII line / ``` / paragraph with a code span
+        QCOMPARE(shaped.second, QVector<bool>({false, false, false, false, false}));
+        QCOMPARE(plain.second, QVector<bool>({true, true, false, true, true}));
+        EditorTheme t = m_ctx->theme();
+        t.monoLigatures = true;
+        const EditorTheme before = m_ctx->theme();
+        m_ctx->setTheme(t);
+        QVERIFY(!(m_ctx->codeFont(true).styleStrategy() & QFont::PreferNoShaping));
+        m_ctx->setTheme(original);
     }
 };
 

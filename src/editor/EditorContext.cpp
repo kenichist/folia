@@ -1,9 +1,28 @@
 #include "editor/EditorContext.h"
 
 #include <QFontDatabase>
+#include <QFontInfo>
 #include <QGuiApplication>
 
 namespace folia {
+
+void EditorContext::deriveFonts()
+{
+    m_monoUnshaped = m_theme.mono;
+    m_monoUnshaped.setStyleStrategy(QFont::StyleStrategy(m_theme.mono.styleStrategy() | QFont::PreferNoShaping));
+    m_monoChecked = false;
+}
+
+const QFont &EditorContext::codeFont(bool ascii) const
+{
+    if (!ascii || shapeCode || m_theme.monoLigatures)
+        return m_theme.mono;
+    if (!m_monoChecked) {
+        m_monoChecked = true;
+        m_monoFixed = QFontInfo(m_monoUnshaped).fixedPitch();
+    }
+    return m_monoFixed ? m_monoUnshaped : m_theme.mono;
+}
 
 EditorTheme::EditorTheme()
 {

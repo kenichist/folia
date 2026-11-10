@@ -190,6 +190,10 @@ without touching this file: its choices are stored in the workspace and
 layered over whichever layout is active, key by key. A layout's other values
 still apply, and "Use Layout's …" in Settings removes the overrides.
 
+`mono` takes `ligatures = true` for a code font with programming ligatures
+(Fira Code, JetBrains Mono). Without it, plain ASCII code is laid out
+character by character, which is faster and all a fixed-pitch font needs.
+
 `mode` also sets the app's color scheme, so native controls, menus and
 dialogs match it: `"light"` and `"dark"` pin it, `"system"` follows the OS.
 Explicit `colors` are kept in either mode; a layout written for light

@@ -25,7 +25,7 @@
 ## Why Folia
 
 - **Local and private.** Your notes live in one SQLite file on your own disk. No account, no cloud, no telemetry.
-- **Light.** Native Qt Widgets, no browser engine. About 80 MB at idle and a ~0.4 s launch on an M1 MacBook Air.
+- **Light.** Native Qt Widgets, no browser engine. About 50 MB at idle and a ~0.35 s launch on an M1 MacBook Air.
 - **Made for technical notes.** LaTeX math renders as you type, and fenced code blocks are highlighted in 19 languages.
 - **Yours to reshape.** The sidebar, toolbar and overlays are defined in a Lua layout file. Edit it, save it, and the window reloads live.
 
@@ -149,7 +149,7 @@ Measured on a MacBook Air M1 (8 GB) with a 50,000-page workspace:
 | | |
 |---|---|
 | Launch to an editable page | 375–404 ms |
-| Memory at idle | ~80 MB (an empty Qt window is 47 MB) |
+| Memory at idle | ~50 MB once the window has been still for 10 s (~80 MB while it repaints; an empty Qt window is 47 MB) |
 | CPU at idle | 0.16–0.27% of one core |
 | Typing | ~5 ms of CPU per keystroke |
 | 500 page switches | memory plateaus at ~111 MB |
