@@ -230,8 +230,12 @@ bool NoteEditor::event(QEvent *e)
         caretActivity();
     if (t == QEvent::FocusIn || t == QEvent::FocusOut)
         scheduleLinkPopups();
-    if (t != QEvent::KeyPress && t != QEvent::InputMethod)
-        return QTextEdit::event(e);
+    if (t != QEvent::KeyPress && t != QEvent::InputMethod) {
+        const bool r = QTextEdit::event(e);
+        if (t == QEvent::FocusIn || t == QEvent::FocusOut)
+            repaintInlineBubble(); // drawn only while focused
+        return r;
+    }
     caretActivity();
     if (!m_pendingInput) {
         m_inputTimer.start();
@@ -521,30 +525,29 @@ void NoteEditor::paintEvent(QPaintEvent *e)
         // QTextEdit clips the painter to e->rect(), the bounding rect of the
         // update region, which the paint system already clips to. The layout
         // may drop that clip for this paint (VirtualLayout::setRedundantClip).
+        // QTextEdit also hands the layout only that bounding rect; with the
+        // region itself the layout skips the lines no part of it touches
+        // (VirtualLayout::setPaintRegion).
         auto *vl = qobject_cast<VirtualLayout *>(document()->documentLayout());
-        if (vl)
+        const QRegion docRegion = e->region().translated(horizontalScrollBar()->value(), verticalScrollBar()->value());
+        if (vl) {
             vl->setRedundantClip(m_dropRedundantClip);
+            vl->setPaintRegion(&docRegion);
+        }
         QTextEdit::paintEvent(e);
-        if (vl)
+        if (vl) {
             vl->setRedundantClip(false);
+            vl->setPaintRegion(nullptr);
+        }
     }
 #ifdef FOLIA_WITH_MATH
-    if (m_inlineStart >= 0 && (m_inlineList || !m_inlineError.isEmpty()) && hasFocus()) {
+    m_bubblePainted = QRect();
+    if (const QRectF box = inlineBubbleBox(); !box.isEmpty()) {
         const EditorTheme &t = m_ctx->theme();
-        QTextCursor c(document());
-        c.setPosition(qMin(m_inlineStart, document()->characterCount() - 1));
-        const QRect cr = cursorRect(c);
         QPainter p(viewport());
         p.setRenderHint(QPainter::Antialiasing, true);
-        QSizeF sz;
-        if (m_inlineList)
-            sz = QSizeF(m_inlineList->width + 20, m_inlineList->height() + 14);
-        else
-            sz = QSizeF(QFontMetricsF(font()).horizontalAdvance(m_inlineError) + 24, 26);
-        qreal y = cr.top() - sz.height() - 6;
-        if (y < 2)
-            y = cr.bottom() + 6;
-        const QRectF box(qMax<qreal>(4, cr.left() - 10), y, sz.width(), sz.height());
+        m_bubblePainted = box.toAlignedRect().adjusted(-2, -2, 2, 2)
+                              .translated(horizontalScrollBar()->value(), verticalScrollBar()->value());
         QColor bg = t.background;
         bg = bg.lightness() > 128 ? bg.darker(103) : bg.lighter(130);
         p.setPen(QPen(t.dim, 0.6));
@@ -569,6 +572,46 @@ void NoteEditor::paintEvent(QPaintEvent *e)
             QTimer::singleShot(0, [t] { instr::record("input_to_flush_us", t.nsecsElapsed() / 1000); });
         }
     }
+}
+
+QRectF NoteEditor::inlineBubbleBox() const
+{
+#ifdef FOLIA_WITH_MATH
+    if (m_inlineStart < 0 || (!m_inlineList && m_inlineError.isEmpty()) || !hasFocus())
+        return QRectF();
+    QTextCursor c(document());
+    c.setPosition(qMin(m_inlineStart, document()->characterCount() - 1));
+    const QRect cr = cursorRect(c);
+    QSizeF sz;
+    if (m_inlineList)
+        sz = QSizeF(m_inlineList->width + 20, m_inlineList->height() + 14);
+    else
+        sz = QSizeF(QFontMetricsF(font()).horizontalAdvance(m_inlineError) + 24, 26);
+    qreal y = cr.top() - sz.height() - 6;
+    if (y < 2)
+        y = cr.bottom() + 6;
+    return QRectF(qMax<qreal>(4, cr.left() - 10), y, sz.width(), sz.height());
+#else
+    return QRectF();
+#endif
+}
+
+void NoteEditor::repaintInlineBubble()
+{
+    if (m_ctx->wideRepaints) {
+        viewport()->update();
+        return;
+    }
+    // The bubble is drawn over the text by paintEvent: repaint where it was
+    // last drawn and where it goes now, not the whole viewport (which, typing
+    // inside a formula, was every visible line on every key).
+    QRegion r;
+    if (!m_bubblePainted.isEmpty())
+        r += m_bubblePainted.translated(-horizontalScrollBar()->value(), -verticalScrollBar()->value());
+    if (const QRectF box = inlineBubbleBox(); !box.isEmpty())
+        r += box.toAlignedRect().adjusted(-2, -2, 2, 2);
+    if (!r.isEmpty())
+        viewport()->update(r);
 }
 
 void NoteEditor::resizeEvent(QResizeEvent *e)
@@ -607,7 +650,7 @@ void NoteEditor::updateInlineMath()
             m_inlineHash = 0;
             m_inlineList.reset();
             m_inlineError.clear();
-            viewport()->update();
+            repaintInlineBubble();
         }
     };
     if (!m_session || !m_ctx->previews) {
@@ -679,9 +722,9 @@ void NoteEditor::updateInlineMath()
             return; // stale: the user has moved on
         self->m_inlineList = r.ok ? r.list : nullptr;
         self->m_inlineError = r.ok ? QString() : r.error;
-        self->viewport()->update();
+        self->repaintInlineBubble();
     });
-    viewport()->update();
+    repaintInlineBubble();
 #endif
 }
 

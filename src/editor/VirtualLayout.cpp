@@ -302,7 +302,7 @@ MediaService::Request VirtualLayout::pdfThumbRequest(const QString &hash, const 
     return MediaService::pdfRequest(hash, as ? as->pathFor(hash) : QString(), MediaKey::PdfThumb, 0, first, w, h);
 }
 
-QFont VirtualLayout::roleFont(const QTextBlock &block, LineRole role) const
+QFont VirtualLayout::roleFont(const QTextBlock &block, LineRole role, bool ascii) const
 {
     const EditorTheme &t = m_ctx->theme();
     switch (role) {
@@ -313,7 +313,7 @@ QFont VirtualLayout::roleFont(const QTextBlock &block, LineRole role) const
     case LineRole::MathLine:
     case LineRole::MathClose:
     case LineRole::MathSingle:
-        return t.mono;
+        return m_ctx->codeFont(ascii); // the same metrics either way
     case LineRole::Para: {
         const int h = headingLevel(block.text());
         if (h) {
@@ -340,15 +340,20 @@ float VirtualLayout::estimateHeight(const QTextBlock &block) const
     const qreal lw = qMax<qreal>(40, columnWidth() - 2 * indentFor(role));
     const qreal chars = qMax(0, block.length() - 1);
     const qreal lines = qMax<qreal>(1, std::ceil(chars * fm.averageCharWidth() / lw));
+    // The arithmetic of layoutBlock(): a laid-out line is a whole number of
+    // pixels high (QTextLine::height() rounds up) and so is the block. A
+    // line of one font that does not wrap is then estimated exactly, and
+    // laying it out later moves nothing.
+    const qreal lineH = std::ceil(fm.lineSpacing());
     // A fence line is a sliver unless the caret is on it (and then it is laid out).
     qreal h = topPadFor(block, role)
-        + (collapsibleFence(role) ? kFenceSliver : lines * fm.lineSpacing() * m_ctx->theme().lineSpacing)
+        + (collapsibleFence(role) ? kFenceSliver : lines * lineH * m_ctx->theme().lineSpacing)
         + bottomPadFor(role);
     if (role == LineRole::MathClose || role == LineRole::MathSingle) {
         BlockData *d = dataOf(block);
         h += (d && d->previewHeight > 0) ? d->previewHeight : 2 * fm.lineSpacing();
     }
-    return float(h + extraBelow(block));
+    return float(std::ceil(h + extraBelow(block)));
 }
 
 void VirtualLayout::setHeight(int number, float h) const
@@ -583,7 +588,9 @@ void VirtualLayout::documentChanged(int from, int charsRemoved, int charsAdded)
     // inserted blocks start without a QTextLayout), so if none were, the
     // estimate path below need not touch — and allocate — any layout.
     bool anyWasLaidOut = false;
+    double oldSpan = 0; // height of the lines being replaced
     for (int i = first; i <= lastOld; ++i) {
+        oldSpan += double(m_h[size_t(i)]);
         m_sumH -= m_h[size_t(i)];
         if (m_st[size_t(i)] & StLaidOut) {
             --m_laidOut;
@@ -618,6 +625,19 @@ void VirtualLayout::documentChanged(int from, int charsRemoved, int charsAdded)
                 b.layout()->clearLayout();
         }
     }
+    double newSpan = 0;
+    for (int i = first; i <= lastNew; ++i)
+        newSpan += double(m_h[size_t(i)]);
+    if (layoutNow && newCount == oldCount && newSpan == oldSpan && !m_ctx->wideRepaints) {
+        // The same lines at the same total height (typing within a line):
+        // nothing below them moved and the document is as tall as before, so
+        // only these lines are repainted and the scroll bars are left alone.
+        // Lines whose role or highlighting changed further down arrive in
+        // this same range (PageSession::propagateRoles) or invalidate
+        // themselves (applyFormats).
+        emit update(QRectF(0, topOf(first), 1e9, newSpan));
+        return;
+    }
     emit documentSizeChanged(documentSize());
     emit update(QRectF(0, topOf(first), 1e9, 1e9));
     Q_UNUSED(charsRemoved);
@@ -644,7 +664,7 @@ bool VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
         r.format = marked(f);
         fmts.push_back(r);
     };
-    const QFont roleF = roleFont(block, role);
+    const QFont roleF = roleFont(block, role, EditorContext::isAscii(text));
     QTextCharFormat base;
     base.setFont(roleF, QTextCharFormat::FontPropertiesAll);
     base.setForeground(t.text);
@@ -692,7 +712,7 @@ bool VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
         n = qMin(n, len - s);
         std::optional<QFontMetricsF> &fm = mono ? monoFm : markFm;
         if (!fm)
-            fm.emplace(mono ? t.mono : markF);
+            fm.emplace(mono ? m_ctx->codeFont(true) : markF); // backticks: ASCII
         QTextCharFormat f;
         f.setForeground(QBrush(Qt::transparent));
         f.setFontLetterSpacingType(QFont::AbsoluteSpacing);
@@ -930,7 +950,8 @@ bool VirtualLayout::applyFormats(const QTextBlock &block, LineRole role, QTextLa
                     e = text.indexOf(fence, e + run + 1);
                 if (e > i + run - 1 && e >= 0) {
                     QTextCharFormat f;
-                    f.setFont(t.mono, QTextCharFormat::FontPropertiesAll);
+                    f.setFont(m_ctx->codeFont(EditorContext::isAscii(QStringView(text).mid(i, e - i + run))),
+                              QTextCharFormat::FontPropertiesAll);
                     f.setBackground(t.inlineCodeBackground);
                     add(i, e - i + run, f);
                     delimit(i, e + run, run, run, true, kCodePad);
@@ -1511,6 +1532,17 @@ void VirtualLayout::draw(QPainter *painter, const PaintContext &ctx)
     int i = first;
     int last = first;
     QTextCharFormat selFmt;
+    // Lines outside the update region are not drawn. The clip is the
+    // region's bounding rect: a region of the edited line plus the scroll
+    // bar's strip, or the strip alone, spans the viewport's height while
+    // holding one line of text or none. Everything a line draws stays within
+    // the text column (plus the quote bar on its left and the selected line
+    // break on its right), except a display formula's preview or error text,
+    // which may be wider: those lines are always drawn.
+    const QRegion *region = m_ctx->wideRepaints ? nullptr : m_paintRegion;
+    const int bandLeft = qMax(0, int(std::floor(columnLeft())) - 16);
+    const int bandRight = qMin(int(std::ceil(m_width)), int(std::ceil(columnLeft() + columnWidth())) + 16);
+    bool skipped = false;
     for (; block.isValid(); block = block.next(), ++i) {
         if (!(m_st[size_t(i)] & StLaidOut) || block.layout()->lineCount() == 0)
             layoutBlock(block, i);
@@ -1525,6 +1557,15 @@ void VirtualLayout::draw(QPainter *painter, const PaintContext &ctx)
         if (r.bottom() < clip.top())
             continue;
         const LineRole role = roleOf(block);
+        if (region && role != LineRole::MathClose && role != LineRole::MathSingle) {
+            const int y0 = int(std::floor(top));
+            const int y1 = int(std::ceil(r.bottom()));
+            if (!region->intersects(QRect(bandLeft, y0, bandRight - bandLeft, qMax(1, y1 - y0)))) {
+                skipped = true;
+                continue;
+            }
+        }
+        instr::add(instr::EditorLinesPainted);
         paintBlockDecorations(painter, block, role, r, ctx);
 
         QTextLayout *tl = block.layout();
@@ -1674,7 +1715,23 @@ void VirtualLayout::draw(QPainter *painter, const PaintContext &ctx)
     m_inPaint = false;
     if (m_heightChangedInPaint) {
         emit documentSizeChanged(documentSize());
-        emit update(QRectF(0, clip.top(), 1e9, 1e9));
+        // A line laid out in this pass came out at another height than its
+        // estimate, so the lines after it moved. Each top above was computed
+        // after the lines before it were laid out: what this pass drew is
+        // already in place. When the update region is one rect across the
+        // text column and no line in it was skipped, only what lies below
+        // that rect still shows the old positions (scrolling over lines not
+        // laid out yet used to paint every frame twice).
+        bool drewAll = false;
+        if (region && !skipped && region->rectCount() == 1) {
+            const QRect rr = region->boundingRect();
+            drewAll = rr.left() <= 0 && rr.right() + 1 >= int(std::ceil(m_width)) && rr.top() <= std::floor(clip.top())
+                && rr.bottom() + 1 >= std::ceil(clip.bottom());
+        }
+        if (!drewAll)
+            emit update(QRectF(0, clip.top(), 1e9, 1e9));
+        else if (clip.bottom() < m_viewBottom)
+            emit update(QRectF(0, clip.bottom(), 1e9, 1e9));
     }
     if (m_laidOut > m_cap)
         evictFarBlocks(first, last);

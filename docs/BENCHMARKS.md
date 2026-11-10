@@ -145,7 +145,13 @@ Use a fresh copy of the fixture per run for scenarios that write. Scenarios
 `settings` (`reps=10`, `window=0|1`, `apply=0|1`, `close_settle_ms`; see below),
 `images` (`photos=24`, `idle_seconds=20`, `media_dir`, `step=40`; see §6),
 `pdf` (§6b), `split` (`pdf_dir`, `idle_seconds=10`, `drag_steps=120`,
-`step_px=6`, `note_lines=100`, `demo_hold_ms`; see §6c).
+`step_px=6`, `note_lines=100`, `demo_hold_ms`; see §6c), `wake` (`gap_ms=3000`,
+`rounds=8`; §6d). `typing` also takes `caret=top` (the edited line near the top
+of the viewport) and `formula=1` (the caret inside an inline formula).
+A/B switches of §6d, for every scenario: `wide_repaints=1`, `code_shaping=1`,
+`buffer_trim_ms=N` (0: never), `start_prefetch=0`, `font_warmup=0`; and
+`overlay=0.04` keeps the bench window painted while you work in a full-screen
+Space (nearly transparent, click-through, on every Space).
 Every scenario takes `painter_clip=1`: paint the editor under QTextEdit's own
 painter clip, as before 2026-11-08 (§6b; recorded as `editor_painter_clip`).
 Bench JSON schema:
@@ -979,6 +985,129 @@ for 150 ms, though the mouse kept moving.
 | Footprint: one tab → two tabs → closed | 70.6 → 78.3 → 74.8 MB (5.6 MB of tiles while open) |
 | Idle CPU / wakeups: one tab, two tabs, closed | 0.10 / 0.13 / 0.08 % of a core; 4.6 / 4.5 / 4.2 per s |
 | Typing 200 keys beside the open PDF | 0 viewer paints, 0 PDF renders; input to paint p50 0.68 ms |
+
+## 6d. Repaint regions, idle window buffers, launch
+
+Raw files and provenance: `bench/results/repaint-idle-launch-2026-11-10/`
+(`python3 -I bench/scripts/repaint_compare.py <folder>` prints the summary).
+M1 MacBook Air 8 GB, macOS 26.6.2, Release, on battery, window 1180×759 pt at
+2×, the seed-42 fixture. The machine was busy (load average 4–12), so runs
+were interleaved and each range below is two runs; counts are exact.
+
+**What was found, by logging each editor paint's region and time:**
+
+- `VirtualLayout::documentChanged` asked for everything from the edited line
+  to the end of the document on every keystroke. The typing scenario kept the
+  caret on the viewport's last line, where that is one line.
+- The overlay scroll bar repaints a 17 pt strip beside the text whenever the
+  document's height or the scroll position changes, and while it fades.
+  `QTextEdit` passes the layout the update region's bounding rect, so each of
+  those paints drew every visible line (3–13 ms) to change no text pixel.
+- A line is laid out when first painted, and a laid-out line is a whole number
+  of pixels high while its estimate was not. Nearly every new line "changed
+  height", and each change asked for the viewport again: scrolling the code
+  page painted 998 times for 500 frames.
+- Every key inside an inline formula repainted the whole viewport for its
+  preview bubble.
+
+**What changed:** an edit that leaves its lines as tall as before repaints
+those lines only (and leaves the scroll bars alone); the layout gets the
+paint event's region and skips the lines no part of it touches; height
+estimates use the layout's own rounding, so a one-font line that does not wrap
+is exact; a pass that corrects a height has already drawn its lines in place
+and asks only for what lies below its rect; the formula bubble repaints its
+old and new rect. `wide_repaints=1` restores the old regions (not the old
+estimates).
+
+| Typing, 400 keys | Before (`wide_repaints=1`) | Now |
+|---|---:|---:|
+| Caret near the top: editor paint p50 / p95 | 3.64–3.83 / 5.27–5.35 ms | 0.25–0.39 / 0.58–0.82 ms |
+| … input → end of paint p50 / p95 | 5.25–5.46 / 7.87–8.21 ms | 1.30–1.84 / 2.59–3.87 ms |
+| … input → after the flush p50 | 5.95–6.21 ms | 1.82–2.53 ms |
+| … CPU per edit, all threads | 6.69–6.71 ms | 3.33–4.42 ms |
+| … lines drawn per edit | 14.4–14.6 | 1.4 |
+| Caret on the last line: editor paint p50 / p95 | 0.27–0.37 / 4.06–4.29 ms | 0.35–0.41 / 0.75–0.85 ms |
+| … input → end of paint p95 | 6.66–6.80 ms | 3.94–4.21 ms |
+| … lines drawn per edit | 6.5 | 1.3 |
+| Inside a formula: editor paint p50 / p95 | 2.56–2.87 / 4.07–5.81 ms | 1.58–1.59 / 3.29–3.31 ms |
+| … lines drawn per edit | 17.3–17.5 | 2.4 |
+
+(The formula case redraws a six-line paragraph per key; that is the line itself.)
+
+| Scrolling, 40 px per frame | Parent commit 98090ec | Now |
+|---|---:|---:|
+| Code page (30,687 lines), 500 frames: editor paints over 1 ms | 998 | 497–500 |
+| … editor paint in total | 3,577–4,381 ms | 1,471–1,919 ms |
+| … with `code_shaping=1` | | 1,800–1,840 ms |
+| Stress note, 600 frames: editor paints over 1 ms | 722–728 | 601–603 |
+| … editor paint in total | 4,966–5,635 ms | 4,248–4,293 ms |
+
+`scroll_frame_work_ms` now sums every editor paint a scroll step causes (it
+took the last one, which is now often the skipped strip).
+
+**Unshaped ASCII code.** Qt copies a font's layout tables into the heap for
+HarfBuzz, per font variant (`_hb_qt_reference_table`: 3.7 MB on a Latin page,
+five variants of the system font at 672 KB). ASCII in a fixed-pitch font has
+nothing to shape, so code lines, math source and inline code that are pure
+ASCII use the code font with `QFont::PreferNoShaping`; anything else keeps
+shaping, as does a proportional code font or a theme with
+`mono = { ligatures = true }`. Same advances (a test compares them), less
+layout work (the table above), and the code font's tables are not loaded for
+ASCII code (−2.2 MB on the code page in the prototype run).
+
+**Idle window buffers.** Qt's macOS backing store keeps a swap chain of
+full-window IOSurfaces, 13.7 MB each here: three after any burst of paints
+(four at times, 55 MB), never released. `WindowBufferTrimmer` gives the
+window a new backing store after 10 s without a paint and repaints once, which
+leaves the one buffer on screen. `QWidget::setBackingStore` is private in
+Qt 6 (still exported); it is reached through an explicit template
+instantiation, so a Qt without it fails to compile.
+
+| | No trim (`buffer_trim_ms=0`) | Trim |
+|---|---:|---:|
+| Idle footprint, ordinary page (`idle`, 25 s) | 79.8 MB | 50.8 MB |
+| Footprint before the keys (`wake`, trim after 1.5 s) | 82.3–82.4 MB | 53.7–53.8 MB |
+| The trim itself (one full repaint) | | 16.6–19.8 ms |
+| Input → after the flush, 1st key after the gap | 4.05–5.03 ms | 9.38–11.17 ms |
+| … 2nd key | 1.51–2.17 ms | 5.18–6.28 ms |
+| … 3rd, 5th, 6th key | 1.55–2.55 ms | 1.98–3.69 ms |
+| Idle CPU | 0.22 % | 0.22 % |
+
+The first two keys after a trim each allocate a buffer and copy the unpainted
+area into it. The window's pixels are the same before and after a trim
+(captured with `CGWindowListCreateImage` around three trims in the prototype:
+two pairs byte-identical, the third differing only in the title bar and
+corners, which AppKit draws). `QSurfaceFormat::SingleBuffer` also leaves one buffer, but
+paints into the buffer on screen; it was not used.
+
+**Launch.** `main()` → first editable paint, `MallocLargeCache=0` preset,
+18 interleaved runs each (sorted; the upper third of each set are load spikes):
+
+| | min | 6th of 18 | median |
+|---|---:|---:|---:|
+| Before (`start_prefetch=0 font_warmup=0`) | 351 ms | 421 ms | 515 ms |
+| Start page read ahead (`font_warmup=0`) | 357 ms | 386 ms | 393 ms |
+| … and fonts listed on a worker (now) | 311 ms | 333 ms | 345 ms |
+
+- The start page was requested once the event loop ran, so the window painted
+  once without it and again with it. It is now read on the reader thread
+  right after the store opens, built before `show()`, and made the active
+  page from the window's show event (its geometry is known, nothing is
+  painted yet).
+- The first text widget made Qt list every font family (about 45 ms in
+  CoreText). `QFontDatabase` is thread-safe: a worker lists them while the
+  main thread opens the store and creates the native window (the menu bar,
+  now created first).
+- `Store::open` asked `MAX(id), COUNT(*)` of the pages (an index scan: 2 ms
+  warm, 14 ms cold at 50,000 pages) to learn whether any exists; it now asks
+  `MAX(id)` (35 µs).
+- `Info.plist` carries `LSEnvironment { MallocLargeCache = 0 }`, so a launch
+  from Finder, the Dock or `open` needs no re-exec (exec → `main()` 53.0 ms
+  with it, 27.8 ms without, medians of 8 direct launches each way).
+
+Profiling notes: `sample` attached during launch blocks dyld on every image
+load (`notifyDebuggerLoad`), which made two `dlopen`s look like 200 ms; the
+timeline above came from in-process marks.
 
 ## 7. Caveats
 

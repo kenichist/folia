@@ -1,0 +1,281 @@
+{
+    "buffer_trim_ms": 1500,
+    "counters": {
+        "attachment_gc_deleted": 0,
+        "attachment_imports": 0,
+        "block_height_estimates": 251,
+        "blocks_laid_out": 151,
+        "bytes_copied_for_save": 12540,
+        "doc_cache_bytes": 427996,
+        "doc_cache_entries": 2,
+        "editor_lines_painted": 336,
+        "highlight_lines": 14,
+        "highlight_state_steps": 0,
+        "image_cache_hits": 0,
+        "image_decodes": 0,
+        "lua_errors": 0,
+        "lua_invocations": 5,
+        "lua_renders": 3,
+        "media_budget_bytes": 134217728,
+        "media_budget_waits": 0,
+        "media_cache_bytes": 0,
+        "media_cpu_us_discarded": 0,
+        "media_jobs_discarded": 0,
+        "media_jobs_dropped_queued": 0,
+        "media_reserved_bytes": 0,
+        "media_too_large": 0,
+        "paint_events": 70,
+        "pdf_cache_hits": 0,
+        "pdf_renders": 0,
+        "pdf_resize_settles": 0,
+        "pdf_tiles": 0,
+        "preview_cache_bytes": 87984,
+        "preview_cache_hits": 11,
+        "preview_cancelled": 0,
+        "preview_outstanding": 0,
+        "preview_renders": 58,
+        "preview_requests": 54,
+        "preview_stale_drops": 0,
+        "save_snapshot_full_walks": 7,
+        "save_snapshots": 7,
+        "widgets_created": 20,
+        "widgets_reused": 40,
+        "window_buffer_trims": 7
+    },
+    "editor_code_shaping": false,
+    "editor_painter_clip": false,
+    "editor_wide_repaints": false,
+    "env": {
+        "arch": "arm64",
+        "args": {
+            "buffer_trim_ms": "1500",
+            "gap_ms": "3000",
+            "manifest": "/Users/kenichitanzil/Desktop/note-taking-app/.claude/worktrees/repaint-idle-launch/bench/results/repaint-idle-launch-2026-11-10/fixture-manifest.json",
+            "overlay": "0.04",
+            "rounds": "8"
+        },
+        "device_pixel_ratio": 2,
+        "fixture_hash": "fnv1a64:f5ecfb8eecd9058b",
+        "fixture_seed": 42,
+        "folia": "0.2.0",
+        "input_path": "synthetic Qt events via QApplication::sendEvent (bypasses the OS HID/IME path)",
+        "kernel": "25.6.0",
+        "malloc_large_cache": "0",
+        "math_renderer": true,
+        "os": "macOS 26.6.2",
+        "os_file_cache": "not purged (warm after first touch); purging needs root",
+        "power_mode": "normal-power-mode",
+        "preset": "Default",
+        "qt": "6.12.0",
+        "thermal_state": "nominal",
+        "time": "2026-11-10T11:30:59",
+        "window_size": "1180x757"
+    },
+    "exec_to_main_ms": 33.917,
+    "font_warmup": true,
+    "metrics": {
+        "wake_footprint_before_keys_bytes": {
+            "samples": [
+                52579456,
+                53660800,
+                82431104,
+                53644416,
+                53644416,
+                53693568,
+                53693568,
+                53644416
+            ],
+            "unit": "bytes"
+        },
+        "wake_key1_input_to_flush_us": {
+            "samples": [
+                20871,
+                11152,
+                17383,
+                8337,
+                13468,
+                11197,
+                3504,
+                9782
+            ],
+            "unit": "us"
+        },
+        "wake_key1_input_to_paint_us": {
+            "samples": [
+                18658,
+                3901,
+                15980,
+                3279,
+                6175,
+                4906,
+                1225,
+                2632
+            ],
+            "unit": "us"
+        },
+        "wake_key2_input_to_flush_us": {
+            "samples": [
+                3433,
+                9382,
+                1831,
+                5976,
+                9425,
+                6680,
+                2763,
+                4389
+            ],
+            "unit": "us"
+        },
+        "wake_key2_input_to_paint_us": {
+            "samples": [
+                1281,
+                2381,
+                1491,
+                2206,
+                4373,
+                2661,
+                1070,
+                1964
+            ],
+            "unit": "us"
+        },
+        "wake_key3_input_to_flush_us": {
+            "samples": [
+                3104,
+                6017,
+                2852,
+                5588,
+                7347,
+                2144,
+                3266,
+                2484
+            ],
+            "unit": "us"
+        },
+        "wake_key3_input_to_paint_us": {
+            "samples": [
+                1310,
+                2608,
+                2146,
+                1799,
+                2218,
+                1908,
+                1047,
+                2231
+            ],
+            "unit": "us"
+        },
+        "wake_key4_input_to_flush_us": {
+            "samples": [
+                5257,
+                16260,
+                14364,
+                2184,
+                2407,
+                8043,
+                1230,
+                3640
+            ],
+            "unit": "us"
+        },
+        "wake_key4_input_to_paint_us": {
+            "samples": [
+                1832,
+                15975,
+                3388,
+                2019,
+                2201,
+                3242,
+                1136,
+                1158
+            ],
+            "unit": "us"
+        },
+        "wake_key5_input_to_flush_us": {
+            "samples": [
+                1691,
+                4338,
+                2644,
+                1650,
+                1680,
+                2270,
+                879,
+                2631
+            ],
+            "unit": "us"
+        },
+        "wake_key5_input_to_paint_us": {
+            "samples": [
+                1612,
+                4183,
+                2509,
+                1578,
+                1595,
+                2178,
+                833,
+                2445
+            ],
+            "unit": "us"
+        },
+        "wake_key6_input_to_flush_us": {
+            "samples": [
+                1330,
+                6609,
+                2966,
+                4806,
+                9195,
+                2900,
+                4292,
+                3085
+            ],
+            "unit": "us"
+        },
+        "wake_key6_input_to_paint_us": {
+            "samples": [
+                1264,
+                1240,
+                2666,
+                1499,
+                3935,
+                2759,
+                1263,
+                2894
+            ],
+            "unit": "us"
+        },
+        "window_buffer_trim_us": {
+            "samples": [
+                16565,
+                12221,
+                15665,
+                16937,
+                27302,
+                9829,
+                23532
+            ],
+            "unit": "us"
+        }
+    },
+    "notes": [
+    ],
+    "process": {
+        "doc_cache_bytes_est": 428032,
+        "doc_cache_entries": 2,
+        "footprint_bytes": 82431168,
+        "footprint_counter": "task_vm_info.phys_footprint",
+        "idle_wakeups": 11,
+        "interrupt_wakeups": 525,
+        "laid_out_blocks": 48,
+        "lua_bytes": 71953,
+        "peak_footprint_bytes": 102206656,
+        "preview_cache_bytes": 87984,
+        "resident_bytes": 117735424,
+        "system_s": 0.3125015,
+        "threads": 10,
+        "user_s": 0.8068122916666667
+    },
+    "scenario": "wake",
+    "start_prefetch": true,
+    "window_buffer_trims": 7,
+    "window_exposed_and_active_ratio": 0
+}

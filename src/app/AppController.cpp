@@ -3,6 +3,7 @@
 #include "app/Platform.h"
 #include "app/Preferences.h"
 #include "app/SettingsPage.h"
+#include "app/WindowBufferTrimmer.h"
 #include "core/Instrument.h"
 #include "core/LucideIcons.h"
 #include "editor/EditorContext.h"
@@ -200,6 +201,14 @@ bool AppController::start(QString *error)
     so.faultInjectable = m_opt.faultVfs;
     if (!m_store->open(so, error))
         return false;
+    // The page to open: read on the reader thread from now, while the window
+    // and the layout are built on this one.
+    const PageId wanted = m_opt.startPage > 0 ? m_opt.startPage
+        : m_opt.restoreLastPage && prefs::flag(m_store->setting(prefs::kRestoreLastPage))
+            ? m_store->setting(QStringLiteral("app.last_page")).toLongLong() : 0;
+    const bool prefetch = m_opt.prefetchStartPage && !m_store->wasEmptyAtOpen();
+    if (prefetch)
+        m_store->prefetchStartPage(wanted);
 
     m_ectx = new EditorContext(this);
 #ifdef FOLIA_WITH_MATH
@@ -278,7 +287,7 @@ bool AppController::start(QString *error)
     registerCommands();
     installUserPresets();
 
-    if (m_opt.seedIfEmpty && m_store->pageCount() == 0)
+    if (m_opt.seedIfEmpty && m_store->wasEmptyAtOpen())
         seedWorkspace();
 
     // Shell: explicit file > safe mode builtin > active preset.
@@ -315,10 +324,21 @@ bool AppController::start(QString *error)
         m_shell->setWatchFile(false);
     }
 
-    // Open the last page (or the first root page).
-    const PageId last = m_opt.startPage > 0 ? m_opt.startPage
-        : m_opt.restoreLastPage && prefs::flag(m_store->setting(prefs::kRestoreLastPage))
-            ? m_store->setting(QStringLiteral("app.last_page")).toLongLong() : 0;
+    // Open the last page (or the first root page). Read by now, it is built
+    // here and shown with the window's first paint: otherwise the window
+    // paints once without a page and again when the page arrives.
+    PageContent startPage;
+    if (prefetch && m_store->takeStartPage(&startPage, 500)) {
+        m_startSession = createSession(startPage.id);
+        m_startSession->load(startPage);
+        m_cache.insert(startPage.id, m_startSession);
+        if (m_window->isVisible())
+            showStartPage();
+        else // from the window's show event; or, never shown, on the next turn
+            QTimer::singleShot(0, this, &AppController::showStartPage);
+        return true;
+    }
+    const PageId last = wanted;
     if (last > 0) {
         m_store->pageMeta(last, this, [this](PageMeta m, bool found) {
             if (found)
@@ -338,6 +358,27 @@ bool AppController::start(QString *error)
     return true;
 }
 
+void AppController::showStartPage()
+{
+    PageSession *s = m_startSession;
+    m_startSession = nullptr;
+    if (!s || m_active || m_pendingOpen)
+        return; // shown already, or another page was asked for meanwhile
+    m_openClock.start();
+    m_openTarget = s->pageId();
+    m_awaitPaint = true;
+    activate(s, m_openClock.nsecsElapsed(), false, true);
+}
+
+bool AppController::eventFilter(QObject *watched, QEvent *event)
+{
+    // The window's children have their geometry when its show event arrives,
+    // so the page's scroll position can be restored; nothing is painted yet.
+    if (watched == m_window && event->type() == QEvent::Show && m_startSession)
+        showStartPage();
+    return QObject::eventFilter(watched, event);
+}
+
 void AppController::buildWindow()
 {
     auto *w = new MainWindow;
@@ -345,6 +386,13 @@ void AppController::buildWindow()
     w->setWindowTitle(QStringLiteral("Folia"));
     w->resize(1180, 780);
     w->canClose = [this] { return shutdown(true); };
+    w->installEventFilter(this);
+    m_bufferTrimmer = new WindowBufferTrimmer(w, this);
+    m_bufferTrimmer->setIdleMs(m_opt.idleBufferTrimMs);
+    // The menu bar first: it creates the native window (about 45 ms), which
+    // needs no font, while the system fonts are still being listed on a
+    // worker (main.cpp). The first text widget below then finds them ready.
+    QMenuBar *mb = w->menuBar();
     m_stack = new QStackedWidget(w);
     w->setCentralWidget(m_stack);
     m_shellContainer = new QWidget(m_stack);
@@ -400,7 +448,6 @@ void AppController::buildWindow()
     // Native menus: always available, independent of the Lua layout.
     // Shortcuts are owned by the Lua layout (so users can rebind them); the
     // menu only keeps editing keys and the recovery keys reserved by the host.
-    QMenuBar *mb = w->menuBar();
     auto act = [this](QMenu *menu, const QString &text, const QString &cmd, const QKeySequence &ks = {},
                       const QVariantMap &args = {}) {
         QAction *a = menu->addAction(text);

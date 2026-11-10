@@ -54,6 +54,7 @@ private:
     void scenarioStress();
     void scenarioPresentation();
     void scenarioIdle();
+    void scenarioWake();
     void scenarioNavigate();
     void scenarioIntegration();
     void scenarioRecovery();

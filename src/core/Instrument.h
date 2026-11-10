@@ -51,6 +51,8 @@ enum Counter : int {
     AttachmentImports,
     AttachmentGcDeleted,
     PdfResizeSettles,       // live resizes (divider, window) drawn scaled, rendered once settled
+    EditorLinesPainted,     // lines the editor layout drew (lines outside the update region are skipped)
+    WindowBufferTrims,      // idle window: spare backing-store buffers released
     CounterCount
 };
 

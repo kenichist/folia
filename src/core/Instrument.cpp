@@ -24,6 +24,7 @@ const char *counterName(Counter c)
         "media_jobs_dropped_queued",
         "media_jobs_discarded", "media_cpu_us_discarded", "media_budget_waits", "media_too_large",
         "attachment_imports", "attachment_gc_deleted", "pdf_resize_settles",
+        "editor_lines_painted", "window_buffer_trims",
     };
     return (c >= 0 && c < CounterCount) ? names[c] : "?";
 }
