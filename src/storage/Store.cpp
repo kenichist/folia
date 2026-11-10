@@ -1155,6 +1155,32 @@ void Store::pageMeta(PageId id, QObject *ctx, std::function<void(PageMeta, bool)
     });
 }
 
+void Store::pagesMeta(const QVector<PageId> &ids, QObject *ctx, std::function<void(QVector<PageMeta>)> done)
+{
+    QPointer<QObject> guard(ctx);
+    m_reader->post([this, ids, guard, done](sqlite3 *db) {
+        QVector<PageMeta> rows;
+        // Bound in chunks, far below SQLite's limit on host parameters.
+        constexpr int kChunk = 500;
+        for (int at = 0; at < ids.size(); at += kChunk) {
+            const int n = qMin(kChunk, int(ids.size()) - at);
+            QByteArray q = "SELECT " META_COLS " FROM pages p WHERE p.trashed=0 AND p.id IN (";
+            for (int i = 0; i < n; ++i)
+                q += i ? ",?" : "?";
+            q += ')';
+            sql::Stmt s(db, q.constData());
+            for (int i = 0; i < n; ++i)
+                s.bind(i + 1, qint64(ids[at + i]));
+            while (s.step() == SQLITE_ROW)
+                rows.push_back(readMeta(s));
+        }
+        QMetaObject::invokeMethod(this, [guard, done, rows = std::move(rows)]() mutable {
+            if (guard)
+                done(std::move(rows));
+        }, Qt::QueuedConnection);
+    });
+}
+
 void Store::ancestors(PageId id, QObject *ctx, std::function<void(QVector<PageMeta>)> done)
 {
     QPointer<QObject> guard(ctx);

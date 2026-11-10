@@ -35,9 +35,17 @@ skipped, so `cond and ui.text{...} or nil` works.
 | `ui.button{}` | push button | `text` and/or `icon` (a Lucide name, see Icons), `command = "page.new"` or `on_click = function(ctx) end` |
 | `ui.input{}` | single-line text field | `placeholder`, `value`, `list = "<list id>"`, `on_change(ctx, text)`, `on_submit(ctx, text)`, `on_cancel(ctx)` |
 | `ui.list{}` | virtualized page list | `source`, `row`, `activate = "page.open"` or `on_activate(ctx, item)`, `orientation = "horizontal"`, `click_activates`, `select_first`, `follow_current` |
-| `ui.editor{}` | the page title + body editor (one instance, re-parented, never recreated); while a PDF is open it shares this slot with the PDF tab, side by side | `style` |
+| `ui.editor{}` | the page title + body editor (one instance, re-parented, never recreated); while a PDF is open it shares this slot with the PDF pane, side by side | `style` |
+| `ui.tabs{}` | the note tabs, like a browser's: click to switch, × or middle-click to close, drag to reorder, "+" for a new page in a new tab, right-click for Close Others / Close to the Right. One native widget (at most one per layout). A layout without one gets it directly above `ui.editor{}`; `ui.tabs{ visible = false }` keeps a layout without a strip | `auto_hide` (shown only with 2+ tabs), `tab_min_width` (72), `tab_max_width` (220); `style.bg` (`"sidebar"`), `style.active_bg` (`"background"`), `style.fg`, `style.dim`, `style.hover_bg`, `style.border`, `style.height` (36) |
 | `ui.spacer{}` | flexible space | |
 | `ui.divider{}` | 1 px line | `vertical = true` |
+
+Tabs: each tab shows one page and has its own back/forward history. Only the
+shown tab's page is loaded; the others cost their title. In lists, Mod-click,
+middle-click or Mod+Enter on a row opens it in a new tab in the background
+(add Shift to show it). A list with `activate = "page.open"` does this
+natively; `on_activate(ctx, item)` gets `item.new_tab = true` and
+`item.background` and decides itself.
 
 Common fields: `id` (stable identity: nodes with the same id keep their native
 widget across renders), `visible`, `autofocus`, `focusable`, `tooltip`,
@@ -64,7 +72,7 @@ ui.button{ icon = "trash-2", label = "Delete page", tooltip = "Delete page",
 Available: `check`, `chevron-down`, `chevron-left`, `chevron-right`, `copy`,
 `external-link`, `file-plus`, `file-text`, `globe`, `link`, `panel-left-close`,
 `panel-left-open`, `pencil`, `plus`, `rotate-ccw`, `settings`, `trash-2`,
-`unlink`, `x`. An unknown name
+`unlink`, `upload`, `x`. An unknown name
 is a layout error (the message lists the available names).
 
 An input with `list = "results"` forwards ↑/↓/PgUp/PgDn/Enter to that list
@@ -145,11 +153,18 @@ same shortcut are reported; the first one wins.
 `page.new_sibling`, `page.move{id, parent, index?}`, `page.move_up{id?}`,
 `page.move_down{id?}`, `page.indent{id?}`, `page.outdent{id?}`,
 `page.delete{id?, confirm?}` (moves to trash; `confirm = true` asks first),
-`page.reveal{id?}`, `nav.back`, `nav.forward`, `nav.parent`, `title.focus`,
+`page.reveal{id?}`, `nav.back`, `nav.forward` (the current tab's own
+history), `nav.parent`, `title.focus`,
 `editor.focus`, `editor.undo`, `editor.redo`, `code.copy_block`, `link.edit`
 (the Text + Link form for the selection or the link at the caret),
-`pdf.close` (the PDF tab), `pane.swap` (the PDF tab to the other side of the
-note), `pane.focus_other` (between the note and the PDF tab),
+`pdf.close` (the PDF pane), `pane.swap` (the PDF pane to the other side of the
+note), `pane.focus_other` (between the note and the PDF pane),
+`tab.new` (a new page in a new tab), `tab.open{id, background?}`,
+`tab.close{index?}`, `tab.select{index}` (1-based; `-1` is the last tab),
+`tab.next`, `tab.prev`, `tab.reopen` (the last closed tab), `file.upload`
+(the Upload Files dialog: PDFs go into the current note, Word, Markdown and
+text files become new pages in tabs; layouts cannot name a file to read). Tab commands with
+nothing to do, such as closing the only tab, succeed quietly.
 `shell.reload`, `shell.reset`,
 `shell.use{name}`, `shell.edit`, `shell.open_folder`, `app.settings` (shows
 Settings in the main window).

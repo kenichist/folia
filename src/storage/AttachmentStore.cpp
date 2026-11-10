@@ -17,6 +17,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QRandomGenerator>
+#include <QThread>
 
 #include <mutex>
 
@@ -204,17 +205,20 @@ void AttachmentStore::runImport(const Source &src, ImportResult *res)
     }
     QCryptographicHash hash(QCryptographicHash::Sha256);
     bool ok = true;
-    if (!src.path.isEmpty()) {
-        QFile in(src.path);
-        if (!in.open(QIODevice::ReadOnly)) {
-            res->error = in.errorString();
+    if (!src.path.isEmpty() || src.device) {
+        QFile file(src.path);
+        QIODevice *in = src.device;
+        if (!in && file.open(QIODevice::ReadOnly))
+            in = &file;
+        if (!in) {
+            res->error = file.errorString();
             ok = false;
         } else {
             QByteArray buf(int(kChunk), Qt::Uninitialized);
             for (;;) {
-                const qint64 n = in.read(buf.data(), kChunk);
+                const qint64 n = in->read(buf.data(), kChunk);
                 if (n < 0) {
-                    res->error = in.errorString();
+                    res->error = in->errorString();
                     ok = false;
                     break;
                 }
@@ -345,6 +349,34 @@ void AttachmentStore::import(const Source &src, QObject *ctx, std::function<void
     });
 }
 
+void AttachmentStore::runJob(std::function<void()> work, QObject *ctx, std::function<void()> done)
+{
+    ++m_inFlight;
+    QPointer<QObject> guard(ctx);
+    QPointer<AttachmentStore> self(this);
+    m_pool.start([self, work, guard, done] {
+        work();
+        QMetaObject::invokeMethod(self.data(), [self, guard, done] {
+            if (!self)
+                return;
+            --self->m_inFlight;
+            if (guard && done)
+                done();
+        }, Qt::QueuedConnection);
+    });
+}
+
+AttachmentStore::ImportResult AttachmentStore::importNow(const Source &src)
+{
+    ImportResult res;
+    runImport(src, &res);
+    if (!res.ok && !res.info.hash.isEmpty()) {
+        unpin(res.info.hash); // nothing will reference it
+        res.info.hash.clear();
+    }
+    return res;
+}
+
 void AttachmentStore::waitForImports()
 {
     m_pool.waitForDone();
@@ -387,6 +419,10 @@ bool AttachmentStore::isPinned(const QString &hash) const
 // ------------------------------------------------------------------ gc ----
 void AttachmentStore::scheduleGc()
 {
+    if (QThread::currentThread() != thread()) { // an unpin on the import worker
+        QMetaObject::invokeMethod(this, &AttachmentStore::scheduleGc, Qt::QueuedConnection);
+        return;
+    }
     m_gcTimer.start(m_opt.gcDelayMs); // restarted: one sweep per quiet period
 }
 

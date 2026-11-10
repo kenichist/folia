@@ -1,0 +1,187 @@
+# MallocDebugReport=stderr MallocReportConfig=1 /usr/bin/true, macOS 26.6.2 (25G83), M1 8 GB, 2026-11-09
+# MallocNanoZone unset first in every case (env -u MallocNanoZone), as a Finder/Dock launch has it.
+
+## MallocLargeCache=1
+malloc: Internal Security Policy: 0
+malloc: Malloc Config Outputs:
+	Process Identity: 0
+	Enable Xzone Malloc: 1
+	Enable Nano On Xzone: 0
+	Xzone Enablement Reason: default
+malloc: XZM Config:
+	Data Only: 0
+	Allocation Fronts: 2
+	Guard Pages: 0 (Tiny: 0, 0/256; Small: 0, 0/256)
+	Guard Objects: (Large: 0 [0+0/0; max 0, quarantine 0, reinit 0])
+	Scribble: 0
+	Tiny/Small Batch Max: 10
+	Defer Tiny: 1
+	Defer Small: 1
+	Defer Large: 1
+	Huge Cache Size: 64
+	Huge Cache Max Entry Bytes: 4294967295
+	Reclaim Buffer Count: 1016/4195320 (DISABLED)
+	Small Freelist: 1
+	Data Range: 0x0/0
+	Pointer Range 1: 0x0/8573157376
+	Pointer Range 2: 0x0/8606711808
+	Early Allocator: enabled
+	Segment Deallocate: 0
+	MTE (enabled/data/max size): 0/0/0
+	Initial Slot Config: CLUSTER/CPU (Chunk, Size Thresholds: 1, 128)
+	Initial List Config: SINGLE/CPU
+	List Upgrade Thresholds: 32/512, 128/512
+	Slot Upgrade Thresholds: 64/1024, 256/1024
+	Tiny Thrash Threshold: 1 ms
+	Small Thrash Threshold: 1 ms, 16384 bytes
+	Data Thrash Threshold: 0 ms
+	Thread Caching: enabled (16384 allocs, 256 contentions, 1000 ms)
+	Pointer Bucket Count: 4
+
+## MallocLargeCache=0
+malloc: Internal Security Policy: 0
+malloc: Malloc Config Outputs:
+	Process Identity: 0
+	Enable Xzone Malloc: 1
+	Enable Nano On Xzone: 0
+	Xzone Enablement Reason: default
+malloc: XZM Config:
+	Data Only: 0
+	Allocation Fronts: 2
+	Guard Pages: 0 (Tiny: 0, 0/256; Small: 0, 0/256)
+	Guard Objects: (Large: 0 [0+0/0; max 0, quarantine 0, reinit 0])
+	Scribble: 0
+	Tiny/Small Batch Max: 10
+	Defer Tiny: 0
+	Defer Small: 0
+	Defer Large: 0
+	Huge Cache Size: 0
+	Huge Cache Max Entry Bytes: 4294967295
+	Reclaim Buffer Count: 1016/4195320 (DISABLED)
+	Small Freelist: 1
+	Data Range: 0x0/0
+	Pointer Range 1: 0x0/8573157376
+	Pointer Range 2: 0x0/8606711808
+	Early Allocator: enabled
+	Segment Deallocate: 0
+	MTE (enabled/data/max size): 0/0/0
+	Initial Slot Config: CLUSTER/CPU (Chunk, Size Thresholds: 1, 128)
+	Initial List Config: SINGLE/CPU
+	List Upgrade Thresholds: 32/512, 128/512
+	Slot Upgrade Thresholds: 64/1024, 256/1024
+	Tiny Thrash Threshold: 1 ms
+	Small Thrash Threshold: 1 ms, 16384 bytes
+	Data Thrash Threshold: 0 ms
+	Thread Caching: enabled (16384 allocs, 256 contentions, 1000 ms)
+	Pointer Bucket Count: 4
+
+## MallocLargeCache=0 MallocNanoZone=0
+malloc: Internal Security Policy: 0
+malloc: Malloc Config Outputs:
+	Process Identity: 0
+	Enable Xzone Malloc: 1
+	Enable Nano On Xzone: 0
+	Xzone Enablement Reason: default
+malloc: XZM Config:
+	Data Only: 0
+	Allocation Fronts: 2
+	Guard Pages: 0 (Tiny: 0, 0/256; Small: 0, 0/256)
+	Guard Objects: (Large: 0 [0+0/0; max 0, quarantine 0, reinit 0])
+	Scribble: 0
+	Tiny/Small Batch Max: 10
+	Defer Tiny: 0
+	Defer Small: 0
+	Defer Large: 0
+	Huge Cache Size: 0
+	Huge Cache Max Entry Bytes: 4294967295
+	Reclaim Buffer Count: 1016/4195320 (DISABLED)
+	Small Freelist: 1
+	Data Range: 0x0/0
+	Pointer Range 1: 0x0/8573157376
+	Pointer Range 2: 0x0/8606711808
+	Early Allocator: enabled
+	Segment Deallocate: 0
+	MTE (enabled/data/max size): 0/0/0
+	Initial Slot Config: CLUSTER/CPU (Chunk, Size Thresholds: 1, 128)
+	Initial List Config: SINGLE/CPU
+	List Upgrade Thresholds: 32/512, 128/512
+	Slot Upgrade Thresholds: 64/1024, 256/1024
+	Tiny Thrash Threshold: 1 ms
+	Small Thrash Threshold: 0 ms, 16384 bytes
+	Data Thrash Threshold: 0 ms
+	Thread Caching: disabled (16384 allocs, 256 contentions, 1000 ms)
+	Pointer Bucket Count: 4
+
+## MallocLargeCache=0 MallocAggressiveMadvise=1
+malloc: Internal Security Policy: 0
+malloc: Malloc Config Outputs:
+	Process Identity: 0
+	Enable Xzone Malloc: 1
+	Enable Nano On Xzone: 0
+	Xzone Enablement Reason: default
+malloc: XZM Config:
+	Data Only: 0
+	Allocation Fronts: 2
+	Guard Pages: 0 (Tiny: 0, 0/256; Small: 0, 0/256)
+	Guard Objects: (Large: 0 [0+0/0; max 0, quarantine 0, reinit 0])
+	Scribble: 0
+	Tiny/Small Batch Max: 10
+	Defer Tiny: 0
+	Defer Small: 0
+	Defer Large: 0
+	Huge Cache Size: 0
+	Huge Cache Max Entry Bytes: 4294967295
+	Reclaim Buffer Count: 1016/4195320 (DISABLED)
+	Small Freelist: 1
+	Data Range: 0x0/0
+	Pointer Range 1: 0x0/8573157376
+	Pointer Range 2: 0x0/8606711808
+	Early Allocator: enabled
+	Segment Deallocate: 0
+	MTE (enabled/data/max size): 0/0/0
+	Initial Slot Config: CLUSTER/CPU (Chunk, Size Thresholds: 1, 128)
+	Initial List Config: SINGLE/CPU
+	List Upgrade Thresholds: 32/512, 128/512
+	Slot Upgrade Thresholds: 64/1024, 256/1024
+	Tiny Thrash Threshold: 1 ms
+	Small Thrash Threshold: 1 ms, 16384 bytes
+	Data Thrash Threshold: 0 ms
+	Thread Caching: enabled (16384 allocs, 256 contentions, 1000 ms)
+	Pointer Bucket Count: 4
+
+## MallocLargeCache=0 MallocSpaceEfficient=1
+malloc: Internal Security Policy: 0
+malloc: Malloc Config Outputs:
+	Process Identity: 0
+	Enable Xzone Malloc: 1
+	Enable Nano On Xzone: 0
+	Xzone Enablement Reason: default
+malloc: XZM Config:
+	Data Only: 0
+	Allocation Fronts: 2
+	Guard Pages: 0 (Tiny: 0, 0/256; Small: 0, 0/256)
+	Guard Objects: (Large: 0 [0+0/0; max 0, quarantine 0, reinit 0])
+	Scribble: 0
+	Tiny/Small Batch Max: 0
+	Defer Tiny: 0
+	Defer Small: 0
+	Defer Large: 0
+	Huge Cache Size: 0
+	Huge Cache Max Entry Bytes: 4294967295
+	Reclaim Buffer Count: 1016/4195320 (DISABLED)
+	Small Freelist: 0
+	Data Range: 0x0/0
+	Pointer Range 1: 0x0/8573157376
+	Pointer Range 2: 0x0/8606711808
+	Early Allocator: enabled
+	Segment Deallocate: 1
+	MTE (enabled/data/max size): 0/0/0
+	Initial Slot Config: SINGLE/CPU (Chunk, Size Thresholds: 1, 128)
+	Initial List Config: SINGLE/SINGLE
+	List Upgrade Thresholds: 32/512, 128/512
+	Slot Upgrade Thresholds: 64/1024, 256/1024
+	Tiny Thrash Threshold: 1 ms
+	Small Thrash Threshold: 0 ms, 16384 bytes
+	Data Thrash Threshold: 0 ms
+	Thread Caching: disabled (16384 allocs, 256 contentions, 1000 ms)
+	Pointer Bucket Count: 4

@@ -88,6 +88,22 @@ return {
     ["Mod+L"]       = "title.focus",
     ["Mod+Shift+C"] = "code.copy_block",
     ["Mod+Shift+K"] = "link.edit",                -- Mod+K is the page picker here
+    ["Mod+Shift+O"]    = "file.upload",               -- Mod+O is the outline here
+    -- Tabs (one page each; background tabs load only when shown).
+    ["Mod+T"]          = "tab.new",
+    ["Mod+W"]          = "tab.close",
+    ["Mod+Shift+T"]    = "tab.reopen",
+    ["Ctrl+Tab"]       = "tab.next",
+    ["Ctrl+Shift+Tab"] = "tab.prev",
+    ["Mod+1"] = { command = "tab.select", args = { index = 1 } },
+    ["Mod+2"] = { command = "tab.select", args = { index = 2 } },
+    ["Mod+3"] = { command = "tab.select", args = { index = 3 } },
+    ["Mod+4"] = { command = "tab.select", args = { index = 4 } },
+    ["Mod+5"] = { command = "tab.select", args = { index = 5 } },
+    ["Mod+6"] = { command = "tab.select", args = { index = 6 } },
+    ["Mod+7"] = { command = "tab.select", args = { index = 7 } },
+    ["Mod+8"] = { command = "tab.select", args = { index = 8 } },
+    ["Mod+9"] = { command = "tab.select", args = { index = -1 } },   -- the last tab
   },
 
   focus_order = { "title", "editor" },
@@ -98,6 +114,7 @@ return {
       ui.column{
         id = "page",
         style = { bg = "background" },
+        ui.tabs{ auto_hide = true },  -- appears once a second tab is open (Mod+T)
         ui.row{
           id = "topline",
           style = { padding = 8, height = 30 },

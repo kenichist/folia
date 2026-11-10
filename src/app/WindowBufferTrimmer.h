@@ -12,7 +12,7 @@
 // screen shows the same pixels from the single buffer of the new one. The
 // next paints grow the chain again as they need to (the first two cost about
 // 4 ms more each: a new buffer, and a copy of the unpainted area into it).
-// Measurements: docs/BENCHMARKS.md §6d.
+// Measurements: docs/BENCHMARKS.md §6g.
 #pragma once
 
 #include <QElapsedTimer>

@@ -7,6 +7,7 @@
 #include "editor/Links.h"
 #include "editor/PageSession.h"
 #include "editor/VirtualLayout.h"
+#include "import/DocumentKinds.h"
 #ifdef FOLIA_WITH_MATH
 #include "math/MathRenderer.h"
 #endif
@@ -181,6 +182,7 @@ void NoteEditor::detachSession()
         blank = new QTextDocument(qApp);
     setDocument(blank);
     setReadOnly(true);
+    viewport()->update(); // nothing of the last page may stay on screen
 }
 
 void NoteEditor::setSession(PageSession *s)
@@ -221,6 +223,10 @@ void NoteEditor::setSession(PageSession *s)
     if (y == 0 && (s->viewPosition() > 0))
         ensureCursorVisible();
     updateLayoutViewport();
+    // A laid-out document asks Qt to repaint only its own extent: a short
+    // page would leave the last page's pixels below it (a PDF card, say)
+    // until the next frame. Repaint the whole viewport with the title.
+    viewport()->update();
 }
 
 bool NoteEditor::event(QEvent *e)
@@ -763,7 +769,18 @@ QMimeData *NoteEditor::createMimeDataFromSelection() const
 
 bool NoteEditor::canInsertFromMimeData(const QMimeData *source) const
 {
-    return source->hasText() || (m_ctx->attachments && !imageSources(source).isEmpty());
+    return source->hasText() || (m_ctx->attachments && !imageSources(source).isEmpty())
+        || !documentPaths(source).isEmpty();
+}
+
+QStringList NoteEditor::documentPaths(const QMimeData *m)
+{
+    QStringList out;
+    if (m && m->hasUrls())
+        for (const QUrl &u : m->urls())
+            if (u.isLocalFile() && import::isDocumentFile(u.toLocalFile()))
+                out << u.toLocalFile();
+    return out;
 }
 
 QList<AttachmentStore::Source> NoteEditor::imageSources(const QMimeData *m)
@@ -799,7 +816,8 @@ QList<AttachmentStore::Source> NoteEditor::imageSources(const QMimeData *m)
     return out;
 }
 
-bool NoteEditor::importImages(const QList<AttachmentStore::Source> &sources)
+bool NoteEditor::importImages(const QList<AttachmentStore::Source> &sources,
+                              std::function<void(const AttachmentStore::ImportResult &)> stored)
 {
     AttachmentStore *as = m_ctx->attachments;
     if (!m_session || !as || sources.isEmpty() || isReadOnly())
@@ -815,7 +833,7 @@ bool NoteEditor::importImages(const QList<AttachmentStore::Source> &sources)
     for (const AttachmentStore::Source &src : sources) {
         // Delivered on the session's thread; dropped if the session is gone
         // (a session with imports in flight is never evicted).
-        as->import(src, s, [guard, batch](AttachmentStore::ImportResult r) {
+        as->import(src, s, [guard, batch, stored](AttachmentStore::ImportResult r) {
             if (!guard)
                 return;
             if (!r.ok)
@@ -823,6 +841,10 @@ bool NoteEditor::importImages(const QList<AttachmentStore::Source> &sources)
             const QString label = !r.alt.isEmpty() ? r.alt
                 : r.info.isPdf() ? QStringLiteral("Document.pdf") : QStringLiteral("image");
             guard->finishImport(batch, r.ok, r.info, label);
+            if (r.ok && stored) {
+                r.alt = label;
+                stored(r);
+            }
         });
     }
     return true;
@@ -857,6 +879,11 @@ bool NoteEditor::choosePdfs()
 
 void NoteEditor::insertFromMimeData(const QMimeData *source)
 {
+    if (const QStringList docs = documentPaths(source); !docs.isEmpty()) {
+        emit documentsDropped(docs); // each becomes a page of its own
+        if (imageSources(source).isEmpty())
+            return;
+    }
     if (m_ctx->attachments) {
         const QList<AttachmentStore::Source> imgs = imageSources(source);
         if (!imgs.isEmpty()) {

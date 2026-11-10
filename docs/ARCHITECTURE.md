@@ -173,13 +173,13 @@ See `presets/REFERENCE.md` (the language reference shipped with the presets).
 
 - The layout is a versioned Lua table with a `view(state, ctx)` function that
   returns a node tree: row, column, overlay, text, button, input, list,
-  editor, spacer, divider.
+  editor, tabs, spacer, divider.
 - Nodes are reconciled by stable key (explicit `id`, or a path), so widgets
   survive re-renders.
 - There is exactly one `EditorPane`. It is re-parented, never recreated.
 - **Split view.** The layout's editor slot holds a `PaneSplitter`, not the
-  editor itself: the note, plus at most one other tab (the PDF viewer) on
-  its left or right, with a draggable 1 px divider. With one tab the
+  editor itself: the note, plus at most one other pane (the PDF viewer) on
+  its left or right, with a draggable 1 px divider. With one pane the
   splitter has no handle and draws nothing. The editor is never re-parented
   by it (a swap moves the PDF), panes never collapse below 260 px, the
   divider's position is written once per drag (`split.ratio`, `split.side`
@@ -187,9 +187,35 @@ See `presets/REFERENCE.md` (the language reference shipped with the presets).
   one pass. Each pane keeps its own resize cheap (Apple's live-resize rule:
   draw cheaply while it moves, at full quality once it stops): the PDF view
   draws its cached pixels scaled and renders once the width has been still
-  for 150 ms; the note re-lays out only what is drawn (§4). The PDF tab
+  for 150 ms; the note re-lays out only what is drawn (§4). The PDF pane
   claims Esc and Mod+W through `ShortcutOverride` while it has focus, so a
-  layout's own window-wide binding of those keys keeps working elsewhere.
+  layout's own window-wide binding of those keys (Mod+W closes the note tab)
+  keeps working elsewhere. The PDF pane is window-wide: switching note tabs
+  leaves it open.
+- **Tabs.** A tab is a page id with its own back/forward history
+  (`TabList`, `app/Tabs.h`); there is no widget or document per tab. Only
+  the shown tab's page is loaded: showing another tab opens its page through
+  the document cache, like any navigation (background tabs load only when
+  shown, as Obsidian's deferred views do). Caret and scroll come with the
+  page's stored selection. So a switch costs what opening a page costs (one
+  Lua render, for the page change), and adding, closing or reordering
+  background tabs costs no render and no page load. Closing a tab frees its
+  page from the cache when no other tab shows it and nothing is left to
+  save: at once, or as soon as the next tab's page is shown if it was still
+  loading. Only an empty workspace has a tab with no page; a page opened in
+  the foreground (an upload, "+") goes into that tab instead of a new one,
+  and closing a tab beside it leaves the editor with no page. The list is saved in one setting (`tabs.state`) through the
+  coalesced preferences write (300 ms), and restored with one query
+  (`Store::pagesMeta`) that also drops tabs whose pages were trashed;
+  `app.last_page` picks the active tab. `ui.tabs{}` places the one
+  `TabStrip`: a single custom-painted widget (no child widget per tab, no
+  style sheet, no timers), never deleted. A layout without `ui.tabs{}`
+  (an edited copy from before tabs, say) gets it anyway: `ShellHost::apply`
+  wraps the editor node in a column with the strip above it, unless the
+  layout says `ui.tabs{ visible = false }`. Hover repaints the tabs involved; elided titles are cached per tab;
+  an unchanged render or tab list does not repaint it. Tab titles are kept
+  by the app for the pages tabs show, since the shared title cache is
+  cleared when it fills.
 - Lists render native, paged data sources (tree, search, recent, children,
   ancestors) from a declarative row template. There are no per-row or
   per-frame Lua callbacks.
@@ -231,7 +257,7 @@ See `presets/REFERENCE.md` (the language reference shipped with the presets).
 | writer | all SQLite writes |
 | reader | queries; superseded title searches are skipped |
 | math worker | `QThreadPool` with 1 thread; exits after 2 s idle |
-| attachment import | `QThreadPool` with 1 thread (copy + hash + fsync + header read); exits after 30 s idle |
+| attachment import | `QThreadPool` with 1 thread (copy + hash + fsync + header read; uploaded documents are read and converted here too, docs/ATTACHMENTS.md §8); exits after 30 s idle |
 | media lanes | `QThreadPool` with 2 threads: at most one image decode and one PDF render (so CoreGraphics calls on a document are serialized); exits after 30 s idle |
 
 | Cache | Cap |

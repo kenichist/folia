@@ -39,6 +39,10 @@ private:
     void typeText(const QString &text, int count, bool ime);
     void add(const QString &metric, double v, const QString &unit = QStringLiteral("us"), const QString &proxy = {});
     void addInstrSamples();
+    // `footprint -p` of this process (level >= 1) and `heap -s` (level >= 2;
+    // plus `malloc_history -allBySize` under MallocStackLogging), written next
+    // to the output file as <out>.<tool>-<label>.txt. No-op without --bench-out.
+    void vmSnapshot(const QString &label, int level) const;
     QJsonObject envJson() const;
     QJsonObject processJson() const;
     PageId manifestPage(const QString &key) const;
@@ -62,6 +66,8 @@ private:
     void scenarioImages(); // BenchImages.cpp
     void scenarioPdf();    // BenchPdf.cpp
     void scenarioSplit();  // BenchSplit.cpp
+    void scenarioTabs();   // BenchTabs.cpp
+    void scenarioImport(); // BenchImport.cpp
     void finish();
 
     AppController *m_app;

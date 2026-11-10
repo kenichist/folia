@@ -80,7 +80,7 @@ public:
     MediaService *media = nullptr;          // decoded bitmaps (budgeted cache + scheduler)
     std::function<QString(PageId)> titleOf;
     bool highlightEnabled = true;
-    // Benchmarks only (A/B, docs/BENCHMARKS.md §6d).
+    // Benchmarks only (A/B, docs/BENCHMARKS.md §6g).
     // Repaint as before 2026-11-10: everything below an edited line, the
     // whole viewport for the formula bubble and after a height correction,
     // and every line in the update region's bounding rect.

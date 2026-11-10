@@ -3,6 +3,7 @@
 // document cache, autosave scheduling and shutdown flushing.
 #pragma once
 
+#include "app/Tabs.h"
 #include "core/Types.h"
 #include "editor/PageSession.h"
 
@@ -19,6 +20,7 @@ namespace folia {
 
 class AttachmentStore;
 class CommandRegistry;
+class DocumentImporter;
 class MediaService;
 class DataContext;
 class EditorContext;
@@ -28,6 +30,7 @@ class PreviewService;
 class PaneSplitter;
 class PdfViewerPage;
 class SettingsPage;
+class TabStrip;
 class ShellHost;
 class Store;
 class WindowBufferTrimmer;
@@ -84,8 +87,36 @@ public:
     PageSession *activeSession() const { return m_active; }
     PageId currentPage() const;
 
+    // Shows `id` in the current tab (its previous page goes on that tab's
+    // back history).
     void openPage(PageId id, bool focusEditor = true);
     PageId newPage(PageId parent, int index, const QString &title, bool focusTitle);
+    // Note tabs (docs/ARCHITECTURE.md §5, "Tabs"): each tab is a page id
+    // with its own back/forward history. Only the shown tab's page is
+    // loaded; showing another tab opens its page through the document
+    // cache. Indices are 0-based here (the tab.* commands take 1-based ones).
+    const TabList &tabs() const { return m_tabs; }
+    void activateTab(int index);
+    // A new tab showing `id` after the current one; shown unless `background`.
+    // When the current tab is empty (an empty workspace has one), a shown
+    // page goes into it instead, as Chrome replaces its New Tab page.
+    int openInNewTab(PageId id, bool background);
+    // "+": a new Untitled page in a new tab (or in the current tab when it
+    // is empty), its title ready to type.
+    PageId newTab();
+    // Closes a tab (never the last one). A page no other tab shows, with
+    // nothing left to save, leaves the document cache at once.
+    bool closeTab(int index);
+    bool reopenClosedTab();
+    void moveTab(int from, int to);
+    // Upload (File ▸ Upload Files…, the top bar button, drops): PDFs go
+    // into the current note (the first opens beside it); Markdown and text
+    // files become new top-level pages, opened in tabs once saved
+    // (docs/ATTACHMENTS.md §8). Unsupported files are reported, not read.
+    void uploadFiles(const QStringList &paths);
+    void chooseUploadFiles(); // the native file dialog (window-modal, no nested loop)
+    static bool canUpload(const QString &path);
+    DocumentImporter *documentImporter() const { return m_docImport; }
     void flushSaves();
     QString userShellDir() const;
     QString presetPath(const QString &name) const;
@@ -116,6 +147,8 @@ public:
     // The split: which side the PDF is on and its share of the width are
     // workspace settings (split.side, split.ratio), written once per change.
     PaneSplitter *splitter() const { return m_split; }
+    // The tab strip placed where the layout says ui.tabs{}.
+    TabStrip *tabStrip() const { return m_tabStrip; }
     void swapPanes();
     void focusOtherPane();
     // Appearance overrides layered over the layout theme: applied now,
@@ -136,6 +169,8 @@ public:
     void setAutosaveEnabled(bool on) { m_autosave = on; if (!on) { m_idleTimer.stop(); m_deadlineTimer.stop(); } }
 
 signals:
+    // The tab list changed: tabs added, closed, moved, or the active one.
+    void tabsChanged();
     void pageActivated(folia::PageId id, qint64 micros, bool cached);
     void pagePainted(folia::PageId id, qint64 microsSinceRequest);
     void allSaved();
@@ -164,6 +199,22 @@ private:
     void confirmDelete(PageId id);
     void afterMove(PageId id, PageId oldParent, PageId newParent);
     QSet<PageId> heldPages() const;
+    void tabsEdited();
+    void restoreTabs(bool prefetched);
+    // Shows the first root page in the current tab; `replace`: without
+    // putting the tab's page on its back history.
+    void openFirstPage(bool replace);
+    // Closes tabs showing trashed pages; moves the current tab to `fallback`
+    // (or the first page) if its own page is gone.
+    void pruneTabs(PageId fallback);
+    void evictIfUnused(PageId id);
+    // The current tab has no page (an empty workspace): the editor shows
+    // none, so the page it showed can leave the cache.
+    void showNoPage();
+    // Pushes the tab list and titles to the strip (it ignores no-op updates).
+    void syncTabStrip();
+    QString tabTitle(PageId id);
+    void reportUploadErrors();
     PageId argId(const QVariantMap &args) const;
 
     Options m_opt;
@@ -179,13 +230,21 @@ private:
     QMainWindow *m_window = nullptr;
     QWidget *m_shellContainer = nullptr;
     QStackedWidget *m_stack = nullptr; // the layout, or the Settings page
-    PaneSplitter *m_split = nullptr;   // the editor slot: the note, and the PDF tab beside it
+    PaneSplitter *m_split = nullptr;   // the editor slot: the note, and the PDF pane beside it
+    TabStrip *m_tabStrip = nullptr;
+    DocumentImporter *m_docImport = nullptr;
+    bool m_uploadForeground = false; // the next imported page opens in a shown tab
+    QStringList m_uploadErrors;      // reported together once the batch is done
+    // Titles of the pages tabs show, kept here because the shared title
+    // cache is cleared wholesale when it fills up.
+    QHash<PageId, QString> m_tabTitles;
     QPointer<SettingsPage> m_settings;
     QPointer<PdfViewerPage> m_pdf;
     QTimer m_prefsTimer;         // coalesces settings writes
     WindowBufferTrimmer *m_bufferTrimmer = nullptr;
     PageSession *m_startSession = nullptr; // built before the window is shown
     bool m_themeDirty = false;
+    bool m_tabsDirty = false;
 
     QHash<PageId, PageSession *> m_cache;
     QList<PageId> m_lru; // front = most recent
@@ -197,7 +256,12 @@ private:
     // revision the age of its oldest edit (for the max-dirty-interval probe).
     QHash<PageId, QElapsedTimer> m_dirtySince;
     QHash<PageId, QList<QPair<Revision, QElapsedTimer>>> m_inflight;
-    QList<PageId> m_back, m_forward;
+    TabList m_tabs;
+    quint32 m_bgOpenerUid = 0; // tab that background tabs were last opened from
+    int m_bgOpened = 0;        // how many, so the next one goes after them
+    // A closed tab's page that was still shown while the next tab's page
+    // loaded: evicted once that page is shown (see closeTab).
+    PageId m_evictWhenShown = 0;
     bool m_navigatingHistory = false;
     QElapsedTimer m_openClock;
     PageId m_openTarget = 0;

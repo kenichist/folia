@@ -137,7 +137,9 @@ private slots:
         }
         auto app = start(dir.path());
         app->window()->show();
-        QVERIFY(app->activeSession());
+        // The read-ahead holds the first root page, but which page a tab
+        // falls back to is decided once the saved tabs have been checked.
+        QTRY_VERIFY(app->activeSession());
         QCOMPARE(app->currentPage(), first);
         QVERIFY(app->shutdown(false));
     }

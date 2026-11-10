@@ -1,0 +1,2 @@
+start 12:21:02 mode=space pressure=2 load={ 2.52 2.79 2.92 } batt=65%
+end 12:22:46 rc=0 pressure=2 load={ 1.75 2.43 2.76 }

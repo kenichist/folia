@@ -11,3 +11,6 @@ target_link_libraries(folia_baseline PRIVATE folia_app_core)
 # Decode-cost probe for the image benchmarks (docs/BENCHMARKS.md).
 add_executable(folia_mediaprobe mediaprobe.cpp)
 target_link_libraries(folia_mediaprobe PRIVATE folia_app_core)
+# Conversion-cost probe for uploaded documents (docs/BENCHMARKS.md §6e).
+add_executable(folia_docprobe docprobe.cpp)
+target_link_libraries(folia_docprobe PRIVATE folia_app_core)

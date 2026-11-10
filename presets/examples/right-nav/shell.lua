@@ -11,6 +11,7 @@ local actions = {
   { label = "Back",      command = "nav.back" },
   { label = "Parent",    command = "nav.parent" },
   { label = "Delete",    command = "page.delete", args = { confirm = true } },
+  { label = "Upload…",   command = "file.upload" },
 }
 
 ui.component("ActionStrip", function(p)
@@ -51,6 +52,22 @@ return {
     ["Mod+["] = "nav.back",
     ["Mod+Shift+Up"] = "nav.parent",
     ["Mod+K"] = "link.edit",
+    ["Mod+O"]          = "file.upload",
+    -- Tabs (one page each; background tabs load only when shown).
+    ["Mod+T"]          = "tab.new",
+    ["Mod+W"]          = "tab.close",
+    ["Mod+Shift+T"]    = "tab.reopen",
+    ["Ctrl+Tab"]       = "tab.next",
+    ["Ctrl+Shift+Tab"] = "tab.prev",
+    ["Mod+1"] = { command = "tab.select", args = { index = 1 } },
+    ["Mod+2"] = { command = "tab.select", args = { index = 2 } },
+    ["Mod+3"] = { command = "tab.select", args = { index = 3 } },
+    ["Mod+4"] = { command = "tab.select", args = { index = 4 } },
+    ["Mod+5"] = { command = "tab.select", args = { index = 5 } },
+    ["Mod+6"] = { command = "tab.select", args = { index = 6 } },
+    ["Mod+7"] = { command = "tab.select", args = { index = 7 } },
+    ["Mod+8"] = { command = "tab.select", args = { index = 8 } },
+    ["Mod+9"] = { command = "tab.select", args = { index = -1 } },   -- the last tab
   },
 
   view = function(state, ctx)
@@ -59,6 +76,7 @@ return {
       ui.column{
         id = "main",
         style = { grow = 1, bg = "background" },
+        ui.tabs{},
         ui.ActionStrip{ open = state.actions },
         ui.editor{},
       },

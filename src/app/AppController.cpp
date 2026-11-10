@@ -1,6 +1,8 @@
 #include "app/AppController.h"
 
+#include "app/DocumentImport.h"
 #include "app/Platform.h"
+#include "import/DocumentKinds.h"
 #include "app/Preferences.h"
 #include "app/SettingsPage.h"
 #include "app/WindowBufferTrimmer.h"
@@ -20,10 +22,15 @@
 #include "shell/CommandRegistry.h"
 #include "shell/DataContext.h"
 #include "shell/ShellHost.h"
+#include "shell/TabStrip.h"
 #include "storage/Store.h"
 
 #include <QAction>
 #include <QApplication>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QFileDialog>
+#include <QMimeData>
 #include <QCryptographicHash>
 #include <QCloseEvent>
 #include <QDesktopServices>
@@ -48,8 +55,39 @@ namespace {
 class MainWindow : public QMainWindow {
 public:
     std::function<bool()> canClose;
+    // Files dropped anywhere that does not take them itself (the sidebar,
+    // the top bar, the tab strip): uploaded like File ▸ Upload Files….
+    std::function<bool(const QString &path)> canUpload;
+    std::function<void(const QStringList &paths)> upload;
 
 protected:
+    QStringList uploadable(const QMimeData *m) const
+    {
+        QStringList out;
+        if (m && m->hasUrls() && canUpload)
+            for (const QUrl &u : m->urls())
+                if (u.isLocalFile() && canUpload(u.toLocalFile())) // by suffix: no file I/O while dragging
+                    out << u.toLocalFile();
+        return out;
+    }
+    void dragEnterEvent(QDragEnterEvent *e) override
+    {
+        if (!uploadable(e->mimeData()).isEmpty())
+            e->acceptProposedAction();
+    }
+    void dragMoveEvent(QDragMoveEvent *e) override
+    {
+        if (!uploadable(e->mimeData()).isEmpty())
+            e->acceptProposedAction();
+    }
+    void dropEvent(QDropEvent *e) override
+    {
+        const QStringList files = uploadable(e->mimeData());
+        if (files.isEmpty() || !upload)
+            return;
+        e->acceptProposedAction();
+        upload(files);
+    }
     void closeEvent(QCloseEvent *e) override
     {
         if (canClose && !canClose()) {
@@ -152,6 +190,11 @@ void AppController::installUserPresets()
         "cc40ebbecffb15a668f30e1195f855ca4eb1972f3d19eca859446d8b983539f8",
         // Settings as a separate window: REFERENCE.md
         "89d527fa65c6bf6b10d4102a51b0d53b08d16222c9e2b4112f9438cf8c7c2fce",
+        // Folia 0.2.0: default, keyboard, right-nav, REFERENCE.md
+        "f0ed47d02a24cc7bb9230dd8a17c87b49f34dacb83ac55052316f8f7a0f9f229",
+        "f69ceef1e654fb98e3d2cb73de2b39e150e51d189fcffdff3a4e641e9c455bf4",
+        "596f4b01a811ddbb1694686317feaef12f61dcdca47bb8981da4033d81b231a1",
+        "8f89b612dd54571ffbfafe8136ff84eb37c98e5240acad171ea4a00eb52d770d",
     };
     auto digest = [](const QString &path) {
         QFile f(path);
@@ -238,6 +281,20 @@ bool AppController::start(QString *error)
         m_ectx->media = m_media;
     }
     m_data = new DataContext(m_store, this);
+    m_docImport = new DocumentImporter(m_store, m_attachments, this);
+    connect(m_docImport, &DocumentImporter::created, this, [this](PageId id, const QString &title) {
+        m_data->noteTitle(id, title);
+        // The first page of an upload is shown; the rest wait in background tabs.
+        const bool background = !m_uploadForeground;
+        m_uploadForeground = false;
+        if (settingsOpen() && !background)
+            closeSettings();
+        openInNewTab(id, background);
+    });
+    connect(m_docImport, &DocumentImporter::failed, this, [this](const QString &file, const QString &error) {
+        m_uploadErrors << tr("%1: %2").arg(file, error);
+    });
+    connect(m_docImport, &DocumentImporter::idle, this, &AppController::reportUploadErrors);
     m_ectx->titleOf = [this](PageId id) {
         if (auto it = m_cache.find(id); it != m_cache.end())
             return (*it)->title();
@@ -324,11 +381,47 @@ bool AppController::start(QString *error)
         m_shell->setWatchFile(false);
     }
 
-    // Open the last page (or the first root page). Read by now, it is built
-    // here and shown with the window's first paint: otherwise the window
-    // paints once without a page and again when the page arrives.
+    restoreTabs(prefetch);
+    return true;
+}
+
+// Reopens the saved tabs (or the start page, or the first root page). One
+// read query checks them all and fetches their titles; only the shown tab's
+// page is loaded.
+void AppController::restoreTabs(bool prefetched)
+{
+    QVector<PageId> pages;
+    int active = 0;
+    if (m_opt.startPage > 0) {
+        pages = {m_opt.startPage};
+    } else if (m_opt.restoreLastPage && prefs::flag(m_store->setting(prefs::kRestoreLastPage))) {
+        TabList::parse(m_store->setting(QStringLiteral("tabs.state")), &pages, &active);
+        // The last page shown picks the active tab (it is written on every
+        // page open, so it is also right after a crash or an older version).
+        const PageId last = m_store->setting(QStringLiteral("app.last_page")).toLongLong();
+        if (last > 0) {
+            if (const int i = int(pages.indexOf(last)); i >= 0)
+                active = i;
+            else if (pages.isEmpty())
+                pages = {last};
+            else
+                pages[active] = last;
+        }
+    }
+    // The page read ahead during startup (Store::prefetchStartPage) is the
+    // one the active tab shows, unless that page is gone: then the read-ahead
+    // holds the first root page, which the checks below may not choose.
     PageContent startPage;
-    if (prefetch && m_store->takeStartPage(&startPage, 500)) {
+    const bool have = prefetched && m_store->takeStartPage(&startPage, 500);
+    if (have && (pages.isEmpty() || startPage.id == pages.value(active))) {
+        // Shown with the window's first paint: built here, made the active
+        // page from the window's show event. Otherwise the window paints once
+        // without a page and again when the page arrives.
+        if (pages.isEmpty())
+            pages = {startPage.id};
+        m_tabs.reset(pages, active);
+        tabsEdited();
+        m_data->noteTitle(startPage.id, startPage.title);
         m_startSession = createSession(startPage.id);
         m_startSession->load(startPage);
         m_cache.insert(startPage.id, m_startSession);
@@ -336,38 +429,57 @@ bool AppController::start(QString *error)
             showStartPage();
         else // from the window's show event; or, never shown, on the next turn
             QTimer::singleShot(0, this, &AppController::showStartPage);
-        return true;
+        // The other tabs: titles for the strip, and those whose page is gone.
+        if (pages.size() > 1) {
+            m_store->pagesMeta(pages, this, [this](QVector<PageMeta> rows) {
+                for (const PageMeta &m : std::as_const(rows))
+                    m_data->noteTitle(m.id, m.title);
+                emit tabsChanged();
+            });
+            pruneTabs(0);
+        }
+        return;
     }
-    const PageId last = wanted;
-    if (last > 0) {
-        m_store->pageMeta(last, this, [this](PageMeta m, bool found) {
-            if (found)
-                openPage(m.id);
-            else
-                m_store->fetchChildren(0, 0, 1, this, [this](QVector<PageMeta> rows, int) {
-                    if (!rows.isEmpty())
-                        openPage(rows.first().id);
-                });
-        });
-    } else {
-        m_store->fetchChildren(0, 0, 1, this, [this](QVector<PageMeta> rows, int) {
-            if (!rows.isEmpty())
-                openPage(rows.first().id);
-        });
+    if (pages.isEmpty()) {
+        openFirstPage(false);
+        return;
     }
-    return true;
+    m_store->pagesMeta(pages, this, [this, pages, active](QVector<PageMeta> rows) {
+        QHash<PageId, QString> alive;
+        for (const PageMeta &m : std::as_const(rows))
+            alive.insert(m.id, m.title);
+        QVector<PageId> kept;
+        int keptActive = 0;
+        for (int i = 0; i < pages.size(); ++i) {
+            if (!alive.contains(pages[i]))
+                continue;
+            if (i <= active)
+                keptActive = int(kept.size());
+            kept << pages[i];
+        }
+        if (kept.isEmpty()) {
+            openFirstPage(false);
+            return;
+        }
+        for (auto it = alive.cbegin(); it != alive.cend(); ++it)
+            m_data->noteTitle(it.key(), it.value());
+        m_tabs.reset(kept, keptActive);
+        tabsEdited();
+        m_navigatingHistory = true;
+        openPage(m_tabs.current().page);
+        m_navigatingHistory = false;
+    });
 }
 
 void AppController::showStartPage()
 {
     PageSession *s = m_startSession;
     m_startSession = nullptr;
-    if (!s || m_active || m_pendingOpen)
+    if (!s || m_active || m_pendingOpen || m_tabs.current().page != s->pageId())
         return; // shown already, or another page was asked for meanwhile
-    m_openClock.start();
-    m_openTarget = s->pageId();
-    m_awaitPaint = true;
-    activate(s, m_openClock.nsecsElapsed(), false, true);
+    m_navigatingHistory = true; // restoring a tab is not a navigation inside it
+    openPage(s->pageId());
+    m_navigatingHistory = false;
 }
 
 bool AppController::eventFilter(QObject *watched, QEvent *event)
@@ -379,6 +491,17 @@ bool AppController::eventFilter(QObject *watched, QEvent *event)
     return QObject::eventFilter(watched, event);
 }
 
+void AppController::openFirstPage(bool replace)
+{
+    m_store->fetchChildren(0, 0, 1, this, [this, replace](QVector<PageMeta> rows, int) {
+        if (rows.isEmpty())
+            return;
+        m_navigatingHistory = replace;
+        openPage(rows.first().id);
+        m_navigatingHistory = false;
+    });
+}
+
 void AppController::buildWindow()
 {
     auto *w = new MainWindow;
@@ -386,6 +509,9 @@ void AppController::buildWindow()
     w->setWindowTitle(QStringLiteral("Folia"));
     w->resize(1180, 780);
     w->canClose = [this] { return shutdown(true); };
+    w->canUpload = &AppController::canUpload;
+    w->upload = [this](const QStringList &paths) { uploadFiles(paths); };
+    w->setAcceptDrops(true);
     w->installEventFilter(this);
     m_bufferTrimmer = new WindowBufferTrimmer(w, this);
     m_bufferTrimmer->setIdleMs(m_opt.idleBufferTrimMs);
@@ -410,6 +536,35 @@ void AppController::buildWindow()
         m_store->setSetting(QStringLiteral("split.ratio"), QString::number(r, 'f', 3));
     });
 
+    // The tab strip: one painted widget wherever the layout puts ui.tabs{}.
+    m_tabStrip = new TabStrip(m_shellContainer);
+    connect(m_tabStrip, &TabStrip::activated, this, &AppController::activateTab);
+    connect(m_tabStrip, &TabStrip::closeRequested, this, &AppController::closeTab);
+    connect(m_tabStrip, &TabStrip::moved, this, &AppController::moveTab);
+    connect(m_tabStrip, &TabStrip::newRequested, this, &AppController::newTab);
+    connect(m_tabStrip, &TabStrip::closeOthersRequested, this, [this](int keep) {
+        activateTab(keep);
+        for (int k = m_tabs.count() - 1; k >= 0; --k)
+            if (k != m_tabs.activeIndex())
+                closeTab(k); // background tabs: no page work
+    });
+    connect(m_tabStrip, &TabStrip::closeRightRequested, this, [this](int last) {
+        if (m_tabs.activeIndex() > last)
+            activateTab(last);
+        for (int k = m_tabs.count() - 1; k > last; --k)
+            closeTab(k);
+    });
+    connect(this, &AppController::tabsChanged, this, &AppController::syncTabStrip);
+    connect(m_data, &DataContext::titleChanged, this, [this](PageId id, const QString &title) {
+        auto it = m_tabTitles.find(id);
+        if (it == m_tabTitles.end())
+            return;
+        *it = title;
+        for (int i = 0; i < m_tabs.count(); ++i)
+            if (m_tabs.at(i).page == id)
+                m_tabStrip->setTitle(m_tabs.at(i).uid, title);
+    });
+
     ShellHost::Deps deps;
     deps.editor = m_pane;
     deps.editorCtx = m_ectx;
@@ -418,11 +573,13 @@ void AppController::buildWindow()
     deps.window = w;
     deps.container = m_shellContainer;
     deps.editorSlot = m_split;
+    deps.tabs = m_tabStrip;
     m_shell = new ShellHost(deps, this);
     connect(m_shell, &ShellHost::resetRequested, this, &AppController::resetShell);
     connect(m_pane->editor(), &NoteEditor::openPageRequested, this, [this](PageId id) { openPage(id); });
     connect(m_pane->editor(), &NoteEditor::openPdfRequested, this,
             [this](const QString &hash, const QString &name) { showPdf(hash, name); });
+    connect(m_pane->editor(), &NoteEditor::documentsDropped, this, &AppController::uploadFiles);
     connect(m_pane->editor(), &NoteEditor::openUrlRequested, this, [](const QString &href) {
         QUrl u(href, QUrl::TolerantMode);
         if (u.scheme().isEmpty())
@@ -461,6 +618,12 @@ void AppController::buildWindow()
         return a;
     };
     QMenu *file = mb->addMenu(tr("&File"));
+    act(file, tr("New Tab"), QStringLiteral("tab.new"));
+    act(file, tr("Close Tab"), QStringLiteral("tab.close"));
+    act(file, tr("Reopen Closed Tab"), QStringLiteral("tab.reopen"));
+    file->addSeparator();
+    act(file, tr("Upload Files…"), QStringLiteral("file.upload"));
+    file->addSeparator();
     act(file, tr("New Page"), QStringLiteral("page.new"));
     act(file, tr("New Child Page"), QStringLiteral("page.new_child"));
     act(file, tr("New Sibling Page"), QStringLiteral("page.new_sibling"));
@@ -490,6 +653,10 @@ void AppController::buildWindow()
     act(go, tr("Back"), QStringLiteral("nav.back"));
     act(go, tr("Forward"), QStringLiteral("nav.forward"));
     act(go, tr("Parent Page"), QStringLiteral("nav.parent"));
+    go->addSeparator();
+    act(go, tr("Next Tab"), QStringLiteral("tab.next"));
+    act(go, tr("Previous Tab"), QStringLiteral("tab.prev"));
+    go->addSeparator();
     act(go, tr("Focus Title"), QStringLiteral("title.focus"));
     act(go, tr("Focus Editor"), QStringLiteral("editor.focus"));
     QMenu *view = mb->addMenu(tr("&View"));
@@ -700,10 +867,16 @@ QVariantMap AppController::themeOverrides() const
 void AppController::flushPreferences()
 {
     m_prefsTimer.stop();
-    if (!m_themeDirty || m_shutDown)
+    if (m_shutDown)
         return;
-    m_themeDirty = false;
-    m_store->setSetting(prefs::kThemeOverrides, prefs::serializeThemeOverrides(m_shell->themeOverrides()));
+    if (m_themeDirty) {
+        m_themeDirty = false;
+        m_store->setSetting(prefs::kThemeOverrides, prefs::serializeThemeOverrides(m_shell->themeOverrides()));
+    }
+    if (m_tabsDirty) {
+        m_tabsDirty = false;
+        m_store->setSetting(QStringLiteral("tabs.state"), m_tabs.serialize());
+    }
 }
 
 bool AppController::liveReload() const
@@ -798,7 +971,16 @@ void AppController::openPage(PageId id, bool focusEditor)
     // A PDF tab stays open beside the note: reading and note taking go on.
     if (m_active && settingsOpen())
         closeSettings();
+    // The current tab shows `id` from now on, like a browser's address bar
+    // while the page loads; the page it leaves goes on its back history.
+    if (m_tabs.current().page != id) {
+        if (!m_navigatingHistory)
+            m_tabs.pushHistory(m_tabs.current().page);
+        m_tabs.current().page = id;
+        tabsEdited();
+    }
     if (m_active && m_active->pageId() == id) {
+        m_pendingOpen = 0; // a slower load started before this must not land
         if (focusEditor)
             m_pane->focusBody();
         return;
@@ -807,16 +989,11 @@ void AppController::openPage(PageId id, bool focusEditor)
     m_openTarget = id;
     m_awaitPaint = true;
     const qint64 started = m_openClock.nsecsElapsed();
-    if (m_active && !m_navigatingHistory) {
-        m_back.push_back(m_active->pageId());
-        if (m_back.size() > 200)
-            m_back.removeFirst();
-        m_forward.clear();
-    }
     if (m_active)
         m_pane->editor()->storeViewState();
     flushSaves(); // the page being left is snapshotted now, not after the timer
     if (PageSession *s = m_cache.value(id)) {
+        m_pendingOpen = 0;
         activate(s, started, true, focusEditor);
         return;
     }
@@ -825,8 +1002,10 @@ void AppController::openPage(PageId id, bool focusEditor)
         if (m_pendingOpen != id)
             return; // superseded by a newer navigation
         m_pendingOpen = 0;
-        if (!pc.found)
+        if (!pc.found) {
+            pruneTabs(0); // a tab pointed at a page that is gone
             return;
+        }
         PageSession *s = m_cache.value(id);
         if (!s) {
             s = createSession(id);
@@ -860,6 +1039,8 @@ void AppController::activate(PageSession *s, qint64 startedNs, bool cached, bool
     });
     updateStatus();
     evictCache();
+    if (m_evictWhenShown)
+        evictIfUnused(std::exchange(m_evictWhenShown, 0));
 }
 
 PageId AppController::newPage(PageId parent, int index, const QString &title, bool focusTitle)
@@ -885,10 +1066,11 @@ PageId AppController::newPage(PageId parent, int index, const QString &title, bo
     PageSession *s = createSession(id);
     s->initNew(parent, title);
     m_cache.insert(id, s);
-    if (m_active && !m_navigatingHistory) {
-        m_back.push_back(m_active->pageId());
-        m_forward.clear();
-    }
+    m_pendingOpen = 0; // a load still in flight must not replace the new page
+    if (!m_navigatingHistory)
+        m_tabs.pushHistory(m_tabs.current().page);
+    m_tabs.current().page = id;
+    tabsEdited();
     m_openClock.start();
     m_openTarget = id;
     m_awaitPaint = true;
@@ -898,6 +1080,301 @@ PageId AppController::newPage(PageId parent, int index, const QString &title, bo
     instr::record("page_new_to_editable_title_us", t.nsecsElapsed() / 1000);
     scheduleSave(s);
     return id;
+}
+
+// ---------------------------------------------------------------- tabs ----
+QString AppController::tabTitle(PageId id)
+{
+    if (PageSession *s = m_cache.value(id))
+        return m_tabTitles[id] = s->title();
+    if (auto it = m_tabTitles.find(id); it != m_tabTitles.end())
+        return *it;
+    const QString t = m_data->titleOf(id);
+    m_tabTitles.insert(id, t);
+    if (t.isEmpty()) {
+        // Not in the shared cache (or really untitled): one lookup.
+        m_store->pageMeta(id, this, [this](PageMeta m, bool found) {
+            if (found && m_tabTitles.contains(m.id))
+                m_data->noteTitle(m.id, m.title); // reaches the strip through titleChanged
+        });
+    }
+    return t;
+}
+
+void AppController::syncTabStrip()
+{
+    if (!m_tabStrip)
+        return;
+    QVector<TabStrip::Item> items;
+    items.reserve(m_tabs.count());
+    QSet<PageId> shown;
+    for (int i = 0; i < m_tabs.count(); ++i) {
+        const NoteTab &t = m_tabs.at(i);
+        shown.insert(t.page);
+        items.push_back({t.uid, t.page > 0 ? tabTitle(t.page) : QString()});
+    }
+    for (auto it = m_tabTitles.begin(); it != m_tabTitles.end();)
+        it = shown.contains(it.key()) ? std::next(it) : m_tabTitles.erase(it);
+    m_tabStrip->setTabs(items, m_tabs.activeIndex());
+}
+
+void AppController::tabsEdited()
+{
+    m_tabsDirty = true;
+    m_prefsTimer.start(); // one settings write for a burst of tab changes
+    emit tabsChanged();
+}
+
+void AppController::activateTab(int index)
+{
+    if (index < 0 || index >= m_tabs.count())
+        return;
+    if (settingsOpen())
+        closeSettings();
+    if (index != m_tabs.activeIndex()) {
+        m_tabs.setActive(index);
+        m_bgOpenerUid = 0;
+        tabsEdited();
+    }
+    const PageId page = m_tabs.current().page;
+    if (page > 0) {
+        m_navigatingHistory = true; // a tab switch is not a navigation inside the tab
+        openPage(page);
+        m_navigatingHistory = false;
+    }
+}
+
+int AppController::openInNewTab(PageId id, bool background)
+{
+    if (id <= 0)
+        return -1;
+    if (!background && m_tabs.current().page <= 0) {
+        openPage(id); // the empty tab shows it (an empty page is no history)
+        return m_tabs.activeIndex();
+    }
+    // Background tabs opened one after another from the same tab line up in
+    // the order they were opened, right of it (as in Chrome).
+    const quint32 opener = m_tabs.current().uid;
+    if (opener != m_bgOpenerUid) {
+        m_bgOpenerUid = opener;
+        m_bgOpened = 0;
+    }
+    const int at = m_tabs.insert(m_tabs.activeIndex() + 1 + m_bgOpened, id);
+    if (at < 0) {
+        m_data->notifyStatus(tr("At most %1 tabs can be open").arg(TabList::kMaxTabs));
+        return -1;
+    }
+    if (background) {
+        ++m_bgOpened;
+        tabsEdited();
+    } else {
+        activateTab(at);
+    }
+    return at;
+}
+
+PageId AppController::newTab()
+{
+    if (m_tabs.current().page <= 0)
+        return newPage(0, -1, QString(), true); // the empty tab takes it
+    // "+" and Mod+T add the tab at the end, as in Chrome.
+    const int at = m_tabs.insert(-1, 0);
+    if (at < 0) {
+        m_data->notifyStatus(tr("At most %1 tabs can be open").arg(TabList::kMaxTabs));
+        return 0;
+    }
+    m_tabs.setActive(at);
+    m_bgOpenerUid = 0;
+    tabsEdited();
+    return newPage(0, -1, QString(), true);
+}
+
+bool AppController::closeTab(int index)
+{
+    if (index < 0 || index >= m_tabs.count() || m_tabs.count() <= 1)
+        return false;
+    const PageId page = m_tabs.at(index).page;
+    const bool wasActive = index == m_tabs.activeIndex();
+    m_tabs.close(index);
+    m_bgOpenerUid = 0;
+    tabsEdited();
+    if (wasActive) {
+        if (m_tabs.current().page > 0) {
+            m_navigatingHistory = true;
+            openPage(m_tabs.current().page);
+            m_navigatingHistory = false;
+        } else {
+            showNoPage();
+        }
+    }
+    // While the next tab's page loads, the closed one is still shown (and
+    // so kept): it goes once the other page is up, in activate().
+    if (m_active && m_active->pageId() == page)
+        m_evictWhenShown = page;
+    else
+        evictIfUnused(page);
+    return true;
+}
+
+void AppController::showNoPage()
+{
+    m_pendingOpen = 0;
+    if (!m_active)
+        return;
+    m_pane->editor()->storeViewState();
+    flushSaves();
+    m_active = nullptr;
+    m_pane->setSession(nullptr);
+    m_data->setCurrent(0, {});
+    updateWindowTitle();
+    updateStatus();
+}
+
+bool AppController::reopenClosedTab()
+{
+    const int at = m_tabs.reopenClosed();
+    if (at < 0)
+        return false;
+    m_bgOpenerUid = 0;
+    tabsEdited();
+    m_navigatingHistory = true;
+    openPage(m_tabs.current().page);
+    m_navigatingHistory = false;
+    return true;
+}
+
+void AppController::moveTab(int from, int to)
+{
+    if (from == to || from < 0 || to < 0 || from >= m_tabs.count() || to >= m_tabs.count())
+        return;
+    m_tabs.move(from, to);
+    m_bgOpenerUid = 0;
+    tabsEdited();
+}
+
+// A closed tab's page leaves the document cache right away when no other
+// tab shows it and nothing of it is left to save: closing a large page frees
+// its memory, instead of keeping it until the cache's LRU gets to it.
+void AppController::evictIfUnused(PageId id)
+{
+    PageSession *s = m_cache.value(id);
+    if (!s || s == m_active || m_tabs.showsPage(id) || s->isUncommitted() || s->hasUnsnapshotted()
+        || s->hasPendingImports())
+        return;
+    m_cache.remove(id);
+    m_lru.removeAll(id);
+    s->deleteLater();
+    instr::set(instr::DocCacheBytes, docCacheBytes());
+    instr::set(instr::DocCacheEntries, m_cache.size());
+}
+
+void AppController::pruneTabs(PageId fallback)
+{
+    const QVector<PageId> refs = m_tabs.referencedPages();
+    if (refs.isEmpty())
+        return;
+    m_store->pagesMeta(refs, this, [this, refs, fallback](QVector<PageMeta> rows) {
+        QSet<PageId> alive;
+        for (const PageMeta &m : std::as_const(rows))
+            alive.insert(m.id);
+        QSet<PageId> gone;
+        for (PageId p : refs)
+            if (!alive.contains(p))
+                gone.insert(p);
+        if (gone.isEmpty())
+            return;
+        // Pages a tab started referencing after the query was posted are not
+        // in `refs`, so they are never dropped by mistake.
+        m_tabs.dropPages(gone);
+        tabsEdited();
+        if (gone.contains(m_tabs.current().page)) {
+            if (fallback > 0 && !gone.contains(fallback)) {
+                m_navigatingHistory = true; // the page that went is not history
+                openPage(fallback);
+                m_navigatingHistory = false;
+            } else {
+                openFirstPage(true);
+            }
+        }
+    });
+}
+
+// -------------------------------------------------------------- upload ----
+bool AppController::canUpload(const QString &path)
+{
+    return import::isDocumentFile(path)
+        || QFileInfo(path).suffix().compare(QLatin1String("pdf"), Qt::CaseInsensitive) == 0;
+}
+
+void AppController::chooseUploadFiles()
+{
+    auto *dlg = new QFileDialog(m_window, tr("Upload Files"),
+                                m_store->setting(QStringLiteral("upload.dir"),
+                                                 QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)),
+                                tr("Documents (*.pdf *.docx *.md *.markdown *.txt);;PDF (*.pdf);;Word (*.docx);;"
+                                   "Markdown and text (*.md *.markdown *.txt)"));
+    dlg->setFileMode(QFileDialog::ExistingFiles);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &QFileDialog::filesSelected, this, [this, dlg](const QStringList &files) {
+        m_store->setSetting(QStringLiteral("upload.dir"), dlg->directory().absolutePath());
+        uploadFiles(files);
+    });
+    dlg->open(); // a sheet on macOS; the panel itself runs in a system process
+}
+
+void AppController::uploadFiles(const QStringList &paths)
+{
+    QList<AttachmentStore::Source> pdfs;
+    QStringList docs;
+    for (const QString &p : paths) {
+        const QFileInfo fi(p);
+        if (import::isDocumentFile(p)) {
+            docs << p;
+        } else if (fi.suffix().compare(QLatin1String("pdf"), Qt::CaseInsensitive) == 0) {
+            AttachmentStore::Source s;
+            s.path = p;
+            s.name = fi.fileName();
+            pdfs << s;
+        } else {
+            m_uploadErrors << tr("%1: not a PDF, Word, Markdown or text file").arg(fi.fileName());
+        }
+    }
+    if (settingsOpen())
+        closeSettings();
+    if (!pdfs.isEmpty()) {
+        // Into the current note at the caret, as Edit ▸ Insert PDF… does; the
+        // first one opens beside it once it is stored.
+        if (!m_active)
+            newPage(0, -1, QString(), false);
+        auto shown = std::make_shared<bool>(false);
+        m_pane->editor()->importImages(pdfs, [this, shown](const AttachmentStore::ImportResult &r) {
+            if (*shown || !r.info.isPdf())
+                return;
+            *shown = true;
+            showPdf(r.info.hash, r.alt);
+        });
+    }
+    if (!docs.isEmpty())
+        m_uploadForeground = true;
+    for (const QString &d : std::as_const(docs))
+        m_docImport->import(d);
+    if (docs.isEmpty())
+        reportUploadErrors(); // unsupported files, now; otherwise with the batch
+}
+
+void AppController::reportUploadErrors()
+{
+    if (m_uploadErrors.isEmpty() || m_docImport->pending() > 0)
+        return;
+    auto *box = new QMessageBox(QMessageBox::Warning, tr("Upload Files"),
+                                m_uploadErrors.size() == 1 ? tr("This file could not be imported.")
+                                                           : tr("These files could not be imported."),
+                                QMessageBox::Ok, m_window);
+    box->setInformativeText(m_uploadErrors.join(QLatin1Char('\n')));
+    box->setWindowModality(Qt::WindowModal);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->open(); // no nested event loop
+    m_uploadErrors.clear();
 }
 
 // ------------------------------------------------------------ autosave ----
@@ -958,8 +1435,10 @@ bool AppController::shutdown(bool interactive)
     if (m_shutDown)
         return true;
     flushPreferences();
-    if (m_attachments && m_attachments->importsInFlight() > 0)
+    if (m_attachments && m_attachments->importsInFlight() > 0) {
+        m_attachments->cancelJobs();     // a document import stops at its next step
         m_attachments->waitForImports(); // their references go into this flush
+    }
     flushSaves();
     bool ok = m_store->flush(4000);
     while (!ok && interactive) {
@@ -1201,21 +1680,15 @@ void AppController::registerCommands()
                     return okResult();
                 }
                 flushSaves();
-                const bool wasActive = currentPage() == id;
-                m_store->trashPage(id, heldPages(), this, [this, id, wasActive](bool ok, PageId parent) {
+                m_store->trashPage(id, heldPages(), this, [this, id](bool ok, PageId parent) {
                     if (!ok)
                         return;
                     if (PageSession *ps = m_cache.value(parent))
                         ps->removePageLinks(id);
-                    if (wasActive) {
-                        if (parent)
-                            openPage(parent);
-                        else
-                            m_store->fetchChildren(0, 0, 1, this, [this](QVector<PageMeta> rows, int) {
-                                if (!rows.isEmpty())
-                                    openPage(rows.first().id);
-                            });
-                    }
+                    // The page and its whole subtree are trashed: tabs showing
+                    // any of them close, and the current one (if it showed
+                    // one) moves to the parent.
+                    pruneTabs(parent);
                 });
                 return okResult();
             }, {}});
@@ -1228,6 +1701,12 @@ void AppController::registerCommands()
             }, {}});
     c->add({QStringLiteral("pdf.insert"), tr("Insert PDF"), {}, {}, [this](const QVariantMap &) {
                 return m_pane->editor()->choosePdfs() ? okResult() : fail(tr("no PDF chosen"));
+            }, {}});
+    c->add({QStringLiteral("file.upload"), tr("Upload Files"), {}, {}, [this](const QVariantMap &) {
+                // Deferred: a dialog must not open inside a Lua handler. No
+                // path argument: layouts never name files to read.
+                QTimer::singleShot(0, this, &AppController::chooseUploadFiles);
+                return okResult();
             }, {}});
     c->add({QStringLiteral("pdf.close"), tr("Close PDF"), {}, {}, [this](const QVariantMap &) {
                 if (!m_pdf)
@@ -1253,26 +1732,70 @@ void AppController::registerCommands()
                 emit m_data->revealRequested(argId(a));
                 return okResult();
             }, {}});
+    // Back and forward move through the current tab's own history.
     c->add({QStringLiteral("nav.back"), tr("Back"), {}, {}, [this](const QVariantMap &) {
-                if (m_back.isEmpty())
+                const PageId id = m_tabs.back();
+                if (!id)
                     return fail(tr("nothing to go back to"));
-                const PageId id = m_back.takeLast();
-                if (m_active)
-                    m_forward.push_back(m_active->pageId());
                 m_navigatingHistory = true;
                 openPage(id);
                 m_navigatingHistory = false;
                 return okResult();
             }, {}});
     c->add({QStringLiteral("nav.forward"), tr("Forward"), {}, {}, [this](const QVariantMap &) {
-                if (m_forward.isEmpty())
+                const PageId id = m_tabs.forward();
+                if (!id)
                     return fail(tr("nothing to go forward to"));
-                const PageId id = m_forward.takeLast();
-                if (m_active)
-                    m_back.push_back(m_active->pageId());
                 m_navigatingHistory = true;
                 openPage(id);
                 m_navigatingHistory = false;
+                return okResult();
+            }, {}});
+    // Tabs. Indices are 1-based, as in Lua; -1 is the last tab. Commands with
+    // nothing to do (closing the last tab, Mod+9 with one tab) succeed
+    // quietly, so a key binding never raises an error banner for them.
+    auto tabIndex = [this](const QVariantMap &a) {
+        if (!a.contains(QStringLiteral("index")))
+            return m_tabs.activeIndex();
+        const int i = a.value(QStringLiteral("index")).toInt();
+        return i < 0 ? m_tabs.count() + i : i - 1;
+    };
+    c->add({QStringLiteral("tab.new"), tr("New Tab"), {}, {}, [this](const QVariantMap &) {
+                newTab();
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("tab.open"), tr("Open in New Tab"), {}, {arg("id", T::LongLong, true), arg("background", T::Bool)},
+            [this](const QVariantMap &a) {
+                const PageId id = a.value(QStringLiteral("id")).toLongLong();
+                if (id <= 0)
+                    return fail(tr("no page"));
+                if (settingsOpen())
+                    closeSettings();
+                openInNewTab(id, a.value(QStringLiteral("background")).toBool());
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("tab.close"), tr("Close Tab"), {}, {arg("index", T::LongLong)}, [this, tabIndex](const QVariantMap &a) {
+                if (settingsOpen())
+                    closeSettings();
+                closeTab(tabIndex(a));
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("tab.select"), tr("Show Tab"), {}, {arg("index", T::LongLong, true)}, [this, tabIndex](const QVariantMap &a) {
+                activateTab(tabIndex(a));
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("tab.next"), tr("Next Tab"), {}, {}, [this](const QVariantMap &) {
+                activateTab((m_tabs.activeIndex() + 1) % m_tabs.count());
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("tab.prev"), tr("Previous Tab"), {}, {}, [this](const QVariantMap &) {
+                activateTab((m_tabs.activeIndex() + m_tabs.count() - 1) % m_tabs.count());
+                return okResult();
+            }, {}});
+    c->add({QStringLiteral("tab.reopen"), tr("Reopen Closed Tab"), {}, {}, [this](const QVariantMap &) {
+                if (settingsOpen())
+                    closeSettings();
+                reopenClosedTab();
                 return okResult();
             }, {}});
     c->add({QStringLiteral("nav.parent"), tr("Open Parent Page"), {}, {}, [this](const QVariantMap &) {

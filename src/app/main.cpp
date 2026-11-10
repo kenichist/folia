@@ -112,7 +112,7 @@ int main(int argc, char **argv)
         fontWarmup.thread = std::thread([] { QFontDatabase::families(); });
 #endif
     if (benchMode) {
-        // A/B switches (docs/BENCHMARKS.md §6d).
+        // A/B switches (docs/BENCHMARKS.md §6g).
         o.prefetchStartPage = benchArgMap.value(QStringLiteral("start_prefetch"), 1).toInt() != 0;
         if (benchArgMap.contains(QStringLiteral("buffer_trim_ms")))
             o.idleBufferTrimMs = benchArgMap.value(QStringLiteral("buffer_trim_ms")).toInt();

@@ -58,6 +58,9 @@ Every release includes `SHA256SUMS.txt` to verify the downloads.
 ### 📄 Pages
 Nested pages with breadcrumbs, child-page links, collapse and expand, move, reorder and indent, title jump (Mod+P) and back/forward. Hover a page in the sidebar to add a page inside it or delete it.
 
+### 🗂️ Tabs
+Keep several notes open in tabs, like a browser: **+** or Mod+T for a new page in a new tab, Mod-click or middle-click a page in the sidebar to open it in the background, Mod+W to close, Mod+Shift+T to reopen, Ctrl+Tab and Mod+1…9 to switch, drag to reorder. Each tab has its own back/forward history, and your tabs come back when Folia starts. Tabs you aren't looking at aren't loaded, so they cost almost nothing. A layout you edited before tabs existed shows them too, above the note.
+
 ### ✍️ Editing
 Native text editing with IME support, undo/redo and full keyboard navigation. Autosave commits within one second, and **Saved** appears only once your change is on disk.
 
@@ -67,8 +70,11 @@ Bare URLs are clickable. Select text and press Mod+K, or paste an address onto a
 ### 🖼️ Images
 Paste or drop an image into a page, or use **Edit ▸ Insert Image…**. Images are decoded only while near the screen, within a fixed memory budget.
 
+### ⬆️ Upload files
+Click the upload button in the top bar, press Mod+O or choose **File ▸ Upload Files…**, or drop files on the window. A **PDF** goes into the note you're on and opens beside it. A **Word** (.docx), **Markdown** or **text** file becomes a new page in its own tab, with its headings, lists, tables, bold and italic, links, code, math and images; it's converted once, so it costs nothing after that.
+
 ### 📑 PDFs beside your notes
-Paste or drop a PDF into a page, then click its card: it opens as a second tab next to the note, so you can read and write side by side. Drag the divider to resize (double-click for equal widths), swap sides with the ⇄ button or **View ▸ Swap Panes**, and close it with × or Esc. Side and width are remembered. The note stays open as you move between pages. The Windows and Linux builds don't display PDFs yet.
+Paste or drop a PDF into a page, then click its card: it opens in a pane next to the note, so you can read and write side by side. Drag the divider to resize (double-click for equal widths), swap sides with the ⇄ button or **View ▸ Swap Panes**, and close it with × or Esc. Side and width are remembered. The PDF stays open as you move between pages and tabs. The Windows and Linux builds don't display PDFs yet.
 
 </td>
 <td width="50%" valign="top">
@@ -172,6 +178,17 @@ were not re-run.
 | Peak footprint | 118.9–119.1 MB over a typing run (launch, open, 1000 edits); 214 MB in the 10 MiB stress-note test (open, jump to end and back, select all, copy) | `task_vm_info.ledger_phys_footprint_peak` | 2026-11-04 |
 | Launch → editable ordinary page | 375–404 ms (4 warm launches); 1406 ms for the first launch after a rebuild. Footprint 2 s later: 80.0–80.5 MB | kernel process start (`p_starttime`) to end of the first editor paint; `phys_footprint` | 2026-11-05 |
 | 500 page switches in 5 batches of 100 | footprint after each batch: 107.2 → 110.0 → 110.5 → 110.6 → 110.7 MB, a plateau; document cache 3.7 MB of its 48 MiB cap. Thermal state fair | `phys_footprint` after settling | 2026-11-04 |
+
+Tabs (`--bench tabs`, 2026-11-09): opening 29 pages in background tabs
+loads none of them and costs 13–26 µs each on the main thread; idle with 30
+tabs matches idle with one (73.4 MB, 0.06–0.08% of a core, 4.2–4.3
+wakeups/s). A switch costs one shell render and, for a page outside the
+16-page cache, 2.3–5.1 ms (median) to load it. Uploads (`--bench import`):
+the main thread spends about 1 ms per file; converting an 8 MiB Markdown
+file takes 0.21 s and a 40,000-paragraph Word file 0.52–0.56 s on the import
+worker, and a Word file is streamed, peaking at +19 MB where reading it
+whole would take +277 MB. See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)
+§6d–6e.
 
 Settings (`--bench settings`): nothing while closed; first open about 80 ms,
 reopening 36 ms; +3.5 MB while open and +6.6 MB kept after the first open,

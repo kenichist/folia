@@ -23,7 +23,9 @@
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QInputMethodEvent>
 #include <QJsonDocument>
 #include <QKeyEvent>
@@ -32,6 +34,8 @@
 #include <QMainWindow>
 #include <QMimeData>
 #include <QPixmap>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QScrollBar>
 #include <QSysInfo>
 #include <QTabWidget>
@@ -268,6 +272,34 @@ void BenchDriver::typeText(const QString &text, int count, bool ime)
     }
 }
 
+void BenchDriver::vmSnapshot(const QString &label, int level) const
+{
+    if (level <= 0 || m_out.isEmpty())
+        return;
+    const QFileInfo fi(m_out);
+    auto run = [&](const QString &tool, const QStringList &args, const QString &kind) {
+        QProcess pr;
+        pr.start(tool, args);
+        if (!pr.waitForFinished(120000))
+            return;
+        QFile f(fi.dir().filePath(fi.completeBaseName() + QLatin1Char('.') + kind + QLatin1Char('-') + label +
+                                  QStringLiteral(".txt")));
+        if (f.open(QIODevice::WriteOnly))
+            f.write(pr.readAllStandardOutput());
+    };
+    const QString pid = QString::number(QCoreApplication::applicationPid());
+    run(QStringLiteral("/usr/bin/footprint"), {QStringLiteral("-p"), pid}, QStringLiteral("footprint"));
+    if (level >= 2) {
+        run(QStringLiteral("/usr/bin/heap"), {QStringLiteral("-s"), QStringLiteral("-z"), QStringLiteral("-H"), pid},
+            QStringLiteral("heap"));
+        run(QStringLiteral("/usr/bin/heap"),
+            {QStringLiteral("-s"), QStringLiteral("--noContent"), QStringLiteral("--addresses=all[256k-]"), pid},
+            QStringLiteral("heaplarge"));
+        if (qEnvironmentVariableIsSet("MallocStackLogging"))
+            run(QStringLiteral("/usr/bin/malloc_history"), {pid, QStringLiteral("-allBySize")}, QStringLiteral("mallochistory"));
+    }
+}
+
 QJsonObject BenchDriver::envJson() const
 {
     QJsonObject e;
@@ -282,6 +314,14 @@ QJsonObject BenchDriver::envJson() const
     e.insert(QStringLiteral("malloc_large_cache"), qEnvironmentVariableIsSet("MallocLargeCache")
                                                        ? qEnvironmentVariable("MallocLargeCache")
                                                        : QStringLiteral("unset"));
+    // Every allocator variable the run was launched with (docs/BENCHMARKS.md §6f).
+    QJsonObject mallocEnv;
+    const QStringList vars = QProcessEnvironment::systemEnvironment().keys();
+    for (const QString &k : vars) {
+        if (k.startsWith(QLatin1String("Malloc")))
+            mallocEnv.insert(k, qEnvironmentVariable(k.toLocal8Bit().constData()));
+    }
+    e.insert(QStringLiteral("malloc_env"), mallocEnv);
     e.insert(QStringLiteral("time"), QDateTime::currentDateTime().toString(Qt::ISODate));
     e.insert(QStringLiteral("window_size"), QStringLiteral("%1x%2").arg(m_app->window()->width()).arg(m_app->window()->height()));
     e.insert(QStringLiteral("device_pixel_ratio"), m_app->window()->devicePixelRatioF());
@@ -365,6 +405,8 @@ void BenchDriver::run()
     else if (s == QLatin1String("images")) scenarioImages();
     else if (s == QLatin1String("pdf")) scenarioPdf();
     else if (s == QLatin1String("split")) scenarioSplit();
+    else if (s == QLatin1String("tabs")) scenarioTabs();
+    else if (s == QLatin1String("import")) scenarioImport();
     else if (s == QLatin1String("recovery")) { scenarioRecovery(); return; }
     else m_notes.append(QStringLiteral("unknown scenario"));
     finish();
@@ -993,6 +1035,9 @@ void BenchDriver::scenarioIdle()
     m_extra.insert(QStringLiteral("idle_mean_cpu_percent"),
                    ((prev.userSeconds + prev.systemSeconds) - (first.userSeconds + first.systemSeconds)) / wall * 100);
     m_extra.insert(QStringLiteral("idle_seconds"), wall);
+    // vm_snapshots=1: `footprint -p` after the window (MALLOC_* against the
+    // window's IOSurfaces; §6f). Off by default.
+    vmSnapshot(QStringLiteral("end"), m_args.value(QStringLiteral("vm_snapshots"), 0).toInt());
 }
 
 void BenchDriver::scenarioNavigate()

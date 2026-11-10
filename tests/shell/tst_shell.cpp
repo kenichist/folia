@@ -19,6 +19,7 @@
 #include "shell/DataContext.h"
 #include "shell/ListSources.h"
 #include "shell/ShellHost.h"
+#include "shell/TabStrip.h"
 #include "storage/Store.h"
 
 #include <QApplication>
@@ -113,12 +114,13 @@ struct Harness {
     std::unique_ptr<QWidget> window;
     QWidget *container = nullptr;
     EditorPane *pane = nullptr;
+    TabStrip *strip = nullptr; // only with Harness(true)
     std::unique_ptr<ShellHost> host;
     QStringList dispatched;
     QVariantMap lastArgs;
     int pings = 0;
 
-    Harness()
+    explicit Harness(bool withTabStrip = false)
     {
         Store::Options so;
         so.path = dir.filePath(QStringLiteral("workspace.db"));
@@ -165,8 +167,12 @@ struct Harness {
         for (const char *n : {"page.new_child", "nav.back", "nav.forward", "nav.parent", "title.focus",
                               "code.copy_block", "page.move_up", "page.move_down", "page.indent", "page.outdent",
                               "palette.open", "outline.toggle", "page.trash", "shell.reload", "link.edit",
-                              "app.settings"})
+                              "app.settings", "tab.new", "tab.reopen", "tab.next", "tab.prev", "file.upload"})
             noop(QString::fromLatin1(n));
+        noop(QStringLiteral("tab.close"), {ArgSpec{QStringLiteral("index"), QMetaType::LongLong}});
+        noop(QStringLiteral("tab.select"), {ArgSpec{QStringLiteral("index"), QMetaType::LongLong, true}});
+        noop(QStringLiteral("tab.open"), {ArgSpec{QStringLiteral("id"), QMetaType::LongLong, true},
+                                          ArgSpec{QStringLiteral("background"), QMetaType::Bool}});
         noop(QStringLiteral("page.open"), {ArgSpec{QStringLiteral("id"), QMetaType::LongLong, true}});
         noop(QStringLiteral("page.new"), {ArgSpec{QStringLiteral("parent"), QMetaType::LongLong},
                                           ArgSpec{QStringLiteral("title"), QMetaType::QString}});
@@ -179,6 +185,10 @@ struct Harness {
         d.data = data.get();
         d.window = window.get();
         d.container = container;
+        if (withTabStrip) {
+            strip = new TabStrip(container);
+            d.tabs = strip;
+        }
         host = std::make_unique<ShellHost>(d);
         window->show();
         QTest::qWait(1);
@@ -1265,6 +1275,208 @@ private slots:
                         "source = data.tree{}, row = { actions = { { icon = 'nope', command = 'page.delete' } } } }, "
                         "ui.editor{} } end }", &err));
         QVERIFY2(err.contains(QStringLiteral("known icon")), qPrintable(err));
+    }
+
+    // --------------------------------------------------------------- tabs --
+    void tabsNodeIsOneParkedWidget()
+    {
+        Harness h(true);
+        QPointer<TabStrip> strip = h.strip;
+        QString err;
+        const char *withTabs = "return { version = 1, view = function() return ui.column{ id = 'main', "
+                               "ui.tabs{}, ui.editor{} } end }";
+        QVERIFY2(h.load(withTabs, &err), qPrintable(err));
+        QVERIFY(strip);
+        QCOMPARE(h.host->widgetById(QStringLiteral("main")), strip->parentWidget());
+        QVERIFY(strip->isVisible());
+        // Re-renders and reloads keep the same widget.
+        QVERIFY(h.host->renderNow(&err));
+        QVERIFY2(h.load(withTabs, &err), qPrintable(err));
+        QTest::qWait(1);
+        QVERIFY(strip);
+        QCOMPARE(h.host->widgetById(QStringLiteral("main")), strip->parentWidget());
+        // A layout without one still shows it: directly above the editor, in
+        // a column that takes the editor's place (and its width).
+        const char *withoutTabs = "return { version = 1, view = function() return ui.row{ id = 'main', "
+                                  "ui.text{ text = 'side' }, ui.editor{ style = { width = 400 } } } end }";
+        QVERIFY2(h.load(withoutTabs, &err), qPrintable(err));
+        QTest::qWait(1);
+        QVERIFY(strip && strip->isVisible());
+        QPointer<QWidget> column = strip->parentWidget();
+        QVERIFY(column && column != h.host->widgetById(QStringLiteral("main")));
+        QCOMPARE(column->parentWidget(), h.host->widgetById(QStringLiteral("main")));
+        QCOMPARE(h.pane->parentWidget(), column.data());
+        QTRY_COMPARE(column->width(), 400);
+        QTRY_VERIFY(strip->geometry().bottom() < h.pane->geometry().top());
+        QVERIFY(h.host->warnings().isEmpty());
+        // Re-renders keep the same column and strip.
+        for (int i = 0; i < 3; ++i)
+            QVERIFY(h.host->renderNow(&err));
+        QTest::qWait(1);
+        QCOMPARE(strip->parentWidget(), column.data());
+        QCOMPARE(h.pane->parentWidget(), column.data());
+        // The editor's visibility carries over to the strip.
+        QVERIFY2(h.load("return { version = 1, view = function() return ui.column{ ui.text{ text = 'x' }, "
+                        "ui.editor{ visible = false } } end }", &err), qPrintable(err));
+        QTest::qWait(1);
+        QVERIFY(strip && !strip->isVisible());
+        QVERIFY2(h.load(withTabs, &err), qPrintable(err));
+        QVERIFY(strip && strip->isVisible());
+        QCOMPARE(h.host->widgetById(QStringLiteral("main")), strip->parentWidget());
+        // visible = false (a layout that wants no strip), and auto_hide with a
+        // single tab.
+        QVERIFY2(h.load("return { version = 1, view = function() return ui.column{ ui.tabs{ visible = false }, "
+                        "ui.editor{} } end }", &err), qPrintable(err));
+        QVERIFY(!strip->isVisible());
+        QVERIFY2(h.load("return { version = 1, view = function() return ui.column{ ui.tabs{ auto_hide = true }, "
+                        "ui.editor{} } end }", &err), qPrintable(err));
+        strip->setTabs({{1, QStringLiteral("One")}}, 0);
+        QVERIFY(!strip->isVisible());
+        strip->setTabs({{1, QStringLiteral("One")}, {2, QStringLiteral("Two")}}, 0);
+        QVERIFY(strip->isVisible());
+        // At most one; the id is reserved.
+        QVERIFY(!h.load("return { version = 1, view = function() return ui.column{ ui.tabs{}, ui.tabs{}, "
+                        "ui.editor{} } end }", &err));
+        QVERIFY2(err.contains(QStringLiteral("ui.tabs")), qPrintable(err));
+        QVERIFY(!h.load("return { version = 1, view = function() return ui.column{ ui.text{ id = 'tabs' }, "
+                        "ui.editor{} } end }", &err));
+        QVERIFY2(err.contains(QStringLiteral("reserved")), qPrintable(err));
+        QVERIFY(strip);
+    }
+
+    void tabsNodeWithoutAStrip()
+    {
+        Harness h; // a host with no strip: ui.tabs{} is an empty slot
+        QString err;
+        QVERIFY2(h.load("return { version = 1, view = function() return ui.column{ ui.tabs{}, ui.editor{} } end }",
+                        &err), qPrintable(err));
+        QVERIFY(h.host->warnings().isEmpty());
+        // No strip, no fallback: the editor stays where the layout put it.
+        QVERIFY2(h.load("return { version = 1, view = function() return ui.column{ id = 'main', ui.editor{} } end }",
+                        &err), qPrintable(err));
+        QCOMPARE(h.pane->parentWidget(), h.host->widgetById(QStringLiteral("main")));
+    }
+
+    void unchangedRenderLeavesTheStripAlone()
+    {
+        Harness h(true);
+        QString err;
+        const QString path = QStringLiteral(FOLIA_PRESET_SOURCE_DIR) + QStringLiteral("/default/shell.lua");
+        QVERIFY2(h.host->loadFile(path, &err), qPrintable(err));
+        h.strip->setTabs({{1, QStringLiteral("One")}, {2, QStringLiteral("Two")}}, 0);
+        QTest::qWait(50);
+        const int paints = h.strip->paintCount();
+        const TabStrip::Appearance look = h.strip->appearance();
+        for (int i = 0; i < 5; ++i)
+            QVERIFY(h.host->renderNow(&err));
+        h.strip->setTabs({{1, QStringLiteral("One")}, {2, QStringLiteral("Two")}}, 0); // the same list
+        QTest::qWait(50);
+        QCOMPARE(h.strip->paintCount(), paints);
+        QVERIFY(h.strip->appearance() == look);
+        // The layout's colors reach it (the default: sidebar strip, background tab).
+        QCOMPARE(look.bg, QColor(h.host->namedColor(QStringLiteral("sidebar"))));
+        QCOMPARE(look.activeBg, QColor(h.host->namedColor(QStringLiteral("background"))));
+    }
+
+    void tabStripClicks()
+    {
+        TabStrip strip;
+        strip.resize(600, 36);
+        strip.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&strip));
+        strip.setTabs({{11, QStringLiteral("Alpha")}, {12, QStringLiteral("Beta")}, {13, QStringLiteral("Gamma")}}, 0);
+        QSignalSpy activated(&strip, &TabStrip::activated);
+        QSignalSpy closed(&strip, &TabStrip::closeRequested);
+        QSignalSpy moved(&strip, &TabStrip::moved);
+        QSignalSpy added(&strip, &TabStrip::newRequested);
+        // A press on a tab activates it.
+        QTest::mouseClick(&strip, Qt::LeftButton, {}, strip.tabRect(2).center());
+        QCOMPARE(activated.count(), 1);
+        QCOMPARE(activated.last().at(0).toInt(), 2);
+        // × on the active tab; middle-click on another.
+        QTest::mouseClick(&strip, Qt::LeftButton, {}, strip.closeRect(0).center());
+        QCOMPARE(closed.count(), 1);
+        QCOMPARE(closed.last().at(0).toInt(), 0);
+        QTest::mouseClick(&strip, Qt::MiddleButton, {}, strip.tabRect(1).center());
+        QCOMPARE(closed.count(), 2);
+        QCOMPARE(closed.last().at(0).toInt(), 1);
+        QCOMPARE(activated.count(), 1); // neither activated anything
+        // "+".
+        QTest::mouseClick(&strip, Qt::LeftButton, {}, strip.newTabRect().center());
+        QCOMPARE(added.count(), 1);
+        // Dragging the first tab past the second moves it.
+        const QPoint from = strip.tabRect(0).center();
+        QTest::mousePress(&strip, Qt::LeftButton, {}, from);
+        QMouseEvent move(QEvent::MouseMove, QPointF(strip.tabRect(1).center() + QPoint(20, 0)),
+                         strip.mapToGlobal(strip.tabRect(1).center() + QPoint(20, 0)), Qt::NoButton, Qt::LeftButton,
+                         Qt::NoModifier);
+        QApplication::sendEvent(&strip, &move);
+        QCOMPARE(moved.count(), 1);
+        QCOMPARE(moved.last().at(0).toInt(), 0);
+        QCOMPARE(moved.last().at(1).toInt(), 1);
+        QTest::mouseRelease(&strip, Qt::LeftButton, {}, strip.tabRect(1).center());
+    }
+
+    void tabStripOverflowKeepsTheActiveTabVisible()
+    {
+        TabStrip strip;
+        strip.resize(400, 36);
+        strip.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&strip));
+        QVector<TabStrip::Item> items;
+        for (quint32 i = 1; i <= 40; ++i)
+            items.push_back({i, QStringLiteral("Page %1").arg(i)});
+        strip.setTabs(items, 39);
+        const QRect last = strip.tabRect(39);
+        QVERIFY(last.left() >= 0);
+        QVERIFY2(last.right() < strip.width() - 30, qPrintable(QStringLiteral("%1").arg(last.right()))); // left of "+"
+        QCOMPARE(last.width(), strip.appearance().minTabWidth);
+        QVERIFY(strip.newTabRect().right() < strip.width());
+        strip.setTabs(items, 0);
+        QVERIFY(strip.tabRect(0).left() >= 0);
+        // A rename repaints only that tab, and setTitle with the same title nothing.
+        QTest::qWait(20);
+        const int paints = strip.paintCount();
+        strip.setTitle(1, QStringLiteral("Page 1"));
+        QTest::qWait(20);
+        QCOMPARE(strip.paintCount(), paints);
+        strip.setTitle(1, QStringLiteral("Renamed"));
+        QTRY_VERIFY(strip.paintCount() > paints);
+        QCOMPARE(strip.titleAt(0), QStringLiteral("Renamed"));
+    }
+
+    void listModClickOpensInANewTab()
+    {
+        Harness h;
+        h.store.createPage(0, -1, QStringLiteral("Alpha"));
+        h.store.createPage(0, -1, QStringLiteral("Beta"));
+        QVERIFY(h.store.flush());
+        QString err;
+        const QString path = QStringLiteral(FOLIA_PRESET_SOURCE_DIR) + QStringLiteral("/default/shell.lua");
+        QVERIFY2(h.host->loadFile(path, &err), qPrintable(err));
+        auto *list = qobject_cast<QListView *>(h.host->widgetById(QStringLiteral("outline")));
+        QVERIFY(list);
+        QTRY_VERIFY(list->model() && list->model()->rowCount() >= 2);
+        const QModelIndex second = list->model()->index(1, 0);
+        const qint64 id = second.data(PageListModel::IdRole).toLongLong();
+        const QPoint at(list->visualRect(second).left() + 60, list->visualRect(second).center().y());
+        h.dispatched.clear();
+        QTest::mouseClick(list->viewport(), Qt::LeftButton, Qt::ControlModifier, at);
+        QCOMPARE(h.dispatched, QStringList{QStringLiteral("tab.open")});
+        QCOMPARE(h.lastArgs.value(QStringLiteral("id")).toLongLong(), id);
+        QVERIFY(h.lastArgs.value(QStringLiteral("background")).toBool());
+        QVERIFY(!list->currentIndex().isValid() || list->currentIndex().row() != 1); // not selected
+        h.dispatched.clear();
+        QTest::mouseClick(list->viewport(), Qt::LeftButton, Qt::ControlModifier | Qt::ShiftModifier, at);
+        QCOMPARE(h.dispatched, QStringList{QStringLiteral("tab.open")});
+        QVERIFY(!h.lastArgs.value(QStringLiteral("background")).toBool()); // Shift: shown at once
+        h.dispatched.clear();
+        QTest::mouseClick(list->viewport(), Qt::MiddleButton, {}, at);
+        QCOMPARE(h.dispatched, QStringList{QStringLiteral("tab.open")});
+        // A plain click still opens the page in the current tab.
+        h.dispatched.clear();
+        QTest::mouseClick(list->viewport(), Qt::LeftButton, {}, at);
+        QCOMPARE(h.dispatched, QStringList{QStringLiteral("page.open")});
     }
 
     // -------------------------------------------------------------- theme --

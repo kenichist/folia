@@ -69,6 +69,9 @@ public:
 
     // --- more queries (reader thread)
     void pageMeta(PageId id, QObject *ctx, std::function<void(PageMeta, bool)> done);
+    // Metadata of those of `ids` that exist and are not trashed (in no
+    // particular order): one query for a whole tab list.
+    void pagesMeta(const QVector<PageId> &ids, QObject *ctx, std::function<void(QVector<PageMeta>)> done);
     void ancestors(PageId id, QObject *ctx, std::function<void(QVector<PageMeta>)> done);
     // Case-insensitive substring match; prefix matches rank first. Superseded
     // searches (an older generation still queued) are skipped.
