@@ -86,6 +86,25 @@ struct InlineMathState {
     quint32 gen = 0;      // VirtualLayout arrival generation at layout time
 };
 
+// Markup delimiters of a laid-out line (`**`, `_`, backticks, `$`, and the
+// ``` / $$ fences). Allocated only for lines that have any, rebuilt on each
+// layout and freed when the layout is evicted. Delimiters are hidden except
+// in the span the caret touches, which shows its source.
+struct MarkupState {
+    struct Span {
+        int start = 0; // block-relative position of the opening delimiter
+        int end = 0;   // one past the closing delimiter
+        int open = 0;  // length of the opening delimiter
+        int close = 0; // length of the closing delimiter
+    };
+    std::vector<Span> spans;
+    int revealed = -1; // span showing its delimiters because of the caret
+    // A line marker (heading #s and their space) shows while the caret is
+    // anywhere on the line, independently of the spans.
+    int prefix = 0;
+    bool prefixShown = false;
+};
+
 class BlockData : public QTextBlockUserData {
 public:
     BlockData(BlockId id, BlockTracker *tracker);
@@ -109,6 +128,8 @@ public:
 
     // Inline formulas (paragraph lines with $…$ only).
     std::unique_ptr<InlineMathState> inlineMath;
+    // Markup delimiters (lines with any only).
+    std::unique_ptr<MarkupState> markup;
 
     // Image and PDF lines: the cache key last drawn (a key, never a bitmap
     // copy; cleared when the layout is evicted, the cache entry stays).

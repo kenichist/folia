@@ -129,6 +129,11 @@ private:
     QElapsedTimer m_inputTimer;
 
     // Inline math bubble
+    // Its box in viewport coordinates (empty: nothing to show), and a repaint
+    // of just where it was last drawn and where it goes now.
+    QRectF inlineBubbleBox() const;
+    void repaintInlineBubble();
+    QRect m_bubblePainted; // document coordinates; empty: not drawn
     int m_inlineStart = -1;
     int m_inlineEnd = -1;
     quint64 m_inlineHash = 0;

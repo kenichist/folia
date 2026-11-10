@@ -109,6 +109,21 @@ void setAppNapAllowed(bool allowed)
     }
 }
 
+void showOverAllSpaces(quintptr winId, double opacity)
+{
+    NSView *view = (__bridge NSView *)reinterpret_cast<void *>(winId);
+    NSWindow *w = view.window;
+    if (!w)
+        return;
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    w.collectionBehavior = w.collectionBehavior | NSWindowCollectionBehaviorCanJoinAllSpaces
+        | NSWindowCollectionBehaviorFullScreenAuxiliary | NSWindowCollectionBehaviorStationary;
+    w.level = NSScreenSaverWindowLevel;
+    w.alphaValue = opacity;
+    w.ignoresMouseEvents = YES;
+    [w orderFrontRegardless];
+}
+
 void onMemoryPressure(std::function<void(bool)> cb)
 {
     static dispatch_source_t source = nullptr;

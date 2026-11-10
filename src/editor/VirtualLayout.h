@@ -51,7 +51,10 @@ public:
     void relayoutAll();
     void relayoutBlock(const QTextBlock &block);
     // Document position of the caret. Inline $…$ formulas are drawn rendered
-    // in place except the one the caret touches, which shows its source.
+    // in place except the one the caret touches, which shows its source; the
+    // same goes for markup delimiters (**, _, `, $, ``` and $$ fences), which
+    // are hidden except in the span or fence line the caret touches, and
+    // heading #s, which show while the caret is on their line.
     void setCaret(int position);
     // Viewport (document coordinates) used to decide what to keep laid out.
     void setViewport(qreal top, qreal bottom);
@@ -90,6 +93,11 @@ public:
     // spans (41 KB for a two-rect region) are allocated again by the first
     // clipped glyph. Without a painter clip that rebuild is skipped.
     void setRedundantClip(bool redundant) { m_redundantClip = redundant; }
+    // The update region of the paint event being handled, in document
+    // coordinates (NoteEditor sets it around its viewport paint, null
+    // otherwise). QTextEdit hands draw() only the region's bounding rect;
+    // with the region, draw() skips the lines no part of it touches.
+    void setPaintRegion(const QRegion *region) { m_paintRegion = region; }
 protected:
     void documentChanged(int from, int charsRemoved, int charsAdded) override;
     void resizeInlineObject(QTextInlineObject item, int posInDocument, const QTextFormat &format) override;
@@ -116,7 +124,9 @@ private:
     qreal topOf(int number) const;
     void setHeight(int number, float h) const;
     void evictFarBlocks(int firstVisible, int lastVisible);
-    void applyFormats(const QTextBlock &block, LineRole role, QTextLayout *layout) const;
+    // Returns true for a fence line (``` / $$ alone) whose markers are hidden:
+    // it is laid out as a sliver instead of a full line.
+    bool applyFormats(const QTextBlock &block, LineRole role, QTextLayout *layout) const;
     void requestPreview(const QTextBlock &block, BlockData *data, LineRole role) const;
     std::shared_ptr<const MathDisplayList> inlineFormula(const QString &source, qreal pointSize, bool *pending) const;
     void inlineFormulaArrived(quint64 key);
@@ -130,7 +140,9 @@ private:
     void paintImagePlaceholder(QPainter *p, const QRectF &rect, const QString &label) const;
     qreal extraBelow(const QTextBlock &block) const; // import placeholder
     void mediaArrived(const MediaKey &key);
-    QFont roleFont(const QTextBlock &block, LineRole role) const;
+    // `ascii`: the line's text is plain ASCII (code and math-source lines
+    // then use the unshaped code font, EditorContext::codeFont).
+    QFont roleFont(const QTextBlock &block, LineRole role, bool ascii = true) const;
     qreal indentFor(LineRole role) const;
     qreal topPadFor(const QTextBlock &block, LineRole role) const;
     qreal bottomPadFor(LineRole role) const;
@@ -148,6 +160,7 @@ private:
     mutable bool m_inPaint = false;
     mutable bool m_heightChangedInPaint = false;
     bool m_redundantClip = false;
+    const QRegion *m_paintRegion = nullptr; // the paint event's region while NoteEditor paints
     // Inline formulas: caret position, renders in flight (deduplicated) and
     // a generation bumped per arrival so waiting lines re-probe once.
     int m_caret = -1;

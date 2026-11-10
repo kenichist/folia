@@ -107,9 +107,22 @@ public:
     QString setting(const QString &key, const QString &def = {}) const;
     void setSetting(const QString &key, const QString &value);
 
+    // Startup: read the page the app will open (`id`, or the first root page
+    // when `id` is 0, missing or trashed) on the reader thread right away,
+    // while the window is being built. takeStartPage() then waits for it on
+    // the main thread (at most `timeoutMs`) and returns false when there is
+    // no page or it is not ready; the attachment metadata is announced first,
+    // as openPage() does.
+    void prefetchStartPage(PageId id);
+    bool takeStartPage(PageContent *page, int timeoutMs);
+
     Stats stats() const;
     bool hasFailingJob() const { return m_failing.load(); }
-    qint64 pageCount() const { return m_pageCountAtOpen; }
+    // No page existed when the workspace was opened (a first run).
+    bool wasEmptyAtOpen() const { return m_emptyAtOpen; }
+    // Pages in the workspace, trashed ones included. Scans an index and
+    // blocks on the reader thread: for tools, not for startup.
+    qint64 pageCount();
 
 signals:
     void committed(folia::PageId page, folia::Revision rev, qint64 micros);
@@ -137,7 +150,9 @@ private:
     std::atomic<bool> m_failing{false};
     std::atomic<quint64> m_searchGen{0};
     QHash<QString, QString> m_settings;
-    qint64 m_pageCountAtOpen = 0;
+    bool m_emptyAtOpen = true;
+    struct StartFetch;
+    std::shared_ptr<StartFetch> m_startFetch;
     QLockFile *m_lock = nullptr;
 };
 
